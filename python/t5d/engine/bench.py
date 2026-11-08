@@ -9,7 +9,10 @@ Two figures, each with its conditions printed alongside:
 * **Network forward, per batch**: ``NetworkEvaluator`` over a batch of B positions of a
   size class - ``collate``, one dense forward of the model, the split into per-position
   policy logits and value logits - and the share of it spent in ``collate``; the median over
-  repeats after one warm-up batch.
+  repeats after one warm-up batch. With ``--piece-centric`` (register A5, a prototype) the
+  network reads piece-centric tokens: the evaluator converts each position at the network's
+  edge (``state.to_piece_centric``), and the conversion's own time is reported beside
+  ``collate``'s (the tokens column is then A5's).
 
 Positions are seeded random pseudo-legal play from the Standard start through the binding
 (``play.py``; travel moves drawn with probability ``--travel-prob``), taken when the game
@@ -32,7 +35,7 @@ import time
 import numpy as np
 import torch
 
-from ..net import NetConfig, build_model, collate
+from ..net import NetConfig, build_model, collate, to_piece_centric
 from .capi import load_library
 from .convert import to_position
 from .evaluator import NetworkEvaluator
@@ -106,28 +109,32 @@ def forward(games: dict[int, list], batches: list[int], repeat: int, cfg: NetCon
         for b in batches:
             batch = [positions[i % len(positions)] for i in range(b)]
             evaluator(batch)  # warm-up
-            times, collate_t = [], []
+            times, collate_t, convert_t = [], [], []
             for _ in range(repeat):
                 t0 = time.perf_counter()
-                collate([p.state for p in batch])
+                states = [to_piece_centric(p.state) for p in batch] if cfg.piece_centric else [p.state for p in batch]
+                tc = time.perf_counter()
+                collate(states)
                 t1 = time.perf_counter()
                 evaluator(batch)
                 t2 = time.perf_counter()
-                collate_t.append(t1 - t0)
+                convert_t.append(tc - t0)
+                collate_t.append(t1 - tc)
                 times.append(t2 - t1)
-            tokens = sum(p.state.n_tokens for p in batch)
+            tokens = sum(s.n_tokens for s in states)
             med = statistics.median(times)
-            rows.append(
-                {
-                    "boards": n,
-                    "batch": b,
-                    "tokens": tokens,
-                    "batch s": med,
-                    "per position s": med / b,
-                    "collate ms": 1e3 * statistics.median(collate_t),
-                    "moves scored": sum(p.move_count for p in batch),
-                }
-            )
+            row = {
+                "boards": n,
+                "batch": b,
+                "tokens": tokens,
+                "batch s": med,
+                "per position s": med / b,
+                "collate ms": 1e3 * statistics.median(collate_t),
+            }
+            if cfg.piece_centric:  # A5: the conversion at the network's edge, inside the evaluator's time
+                row["A5 convert ms"] = 1e3 * statistics.median(convert_t)
+            row["moves scored"] = sum(p.move_count for p in batch)
+            rows.append(row)
     return rows
 
 
@@ -155,7 +162,8 @@ def conditions(cfg: NetConfig | None) -> str:
     if cfg is not None:
         parts.append(
             f"network: d={cfg.d_model} L={cfg.n_layers} heads={cfg.n_heads}, trunk {cfg.trunk_dtype}, scope {cfg.attn_scope}, "
-            f"attn {cfg.attn_impl}, random weights, no grad, CPU"
+            f"attn {cfg.attn_impl}, tokens {'piece-centric (A5)' if cfg.piece_centric else 'one per square (A1)'}, "
+            "random weights, no grad, CPU"
         )
     parts.append("load: not controlled - other processes may be running; figures are indicative")
     return "\n".join(parts)
@@ -173,9 +181,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--layers", type=int, default=None, help="trunk depth (default: F1's 16)")
     ap.add_argument("--dtype", choices=["bf16", "fp32"], default=None, help="trunk dtype (default: F1's bf16)")
     ap.add_argument("--skip-forward", action="store_true")
+    ap.add_argument("--piece-centric", action="store_true", help="register A5's piece-centric tokens (a prototype)")
     args = ap.parse_args(argv)
 
     overrides = {}
+    if args.piece_centric:
+        overrides["piece_centric"] = True
     if args.layers is not None:
         overrides["n_layers"] = args.layers
     if args.dtype is not None:

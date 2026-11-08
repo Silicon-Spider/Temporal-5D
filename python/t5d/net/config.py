@@ -26,9 +26,18 @@ The build rules (spec section 15.1) decide what else appears here:
   Shaw term on top of B15 (B17, prototype; ``shaw_key_term``, ``shaw.py``), and the larger
   capacity arm L24-ff12 (F2, provisional) as the named preset ``"L24-ff12"``.
 * **Items of later stages** have their flag here so the config names every switch, but
-  enabling one raises ``NotImplementedError`` until its stage lands: piece-centric
-  tokenisation (A5) and the history window (C5/C7, provisional; its code waits on the |E|
-  verdict, M7).
+  enabling one raises ``NotImplementedError`` until its stage lands: the history window
+  (C5/C7, provisional; its code waits on the |E| verdict, M7).
+* **A5's piece-centric tokens** (prototype, reversed from refused at CHECKPOINT 6; section
+  14.4; ``state.to_piece_centric``) are behind their flag, off: ``piece_centric`` reads each
+  position as its pieces and the candidate moves' destination squares - A1's tokens minus the
+  empty squares no candidate move lands on - a pure input change (no parameter, the same draws).
+  Built for the dense scope only (C1): the block-causal scope and the cached path are refused
+  (a destination token on a frozen board breaks C17's "all of a board's tokens are created
+  together"; BUILD_LOG issue 252), and so is D4's opponent-reply prototype (``opp_reply``: a
+  quiet reply's destination has no token; issue 251). Its readings - captures point at the
+  captured piece's token, a destination token is an empty-square token, cell order within a
+  board, destinations from the candidate moves - are placeholders (issues 244-247).
 * **G2's 8-bit trunk** (provisional, decided by 6w; section 10.2) is behind its flag, off:
   ``trunk_quant="fp8_e4m3"`` fake-quantises the trunk's matrix multiplications - the six
   projections of every block (weights per output channel, inputs per token) and, with
@@ -846,8 +855,17 @@ class NetConfig:
     #: rest of its batch (C19-C21). PLACEHOLDER (issue 238).
     trunk_quant_weight_scale: str = "channel"
 
+    # --- A5: piece-centric tokens (prototype; default off; section 14.4; state.to_piece_centric) ---
+    #: Register A5: "tokens for pieces + generator-supplied destination squares". On, the
+    #: network reads piece-centric positions (``PositionState.token_cells``) and refuses
+    #: square-centric ones (and the reverse when off); the engine's evaluator converts at the
+    #: network's edge (``engine.evaluator.NetworkEvaluator``). No parameter changes: the network
+    #: is A1's, bit for bit, on a different token set. Dense scope only - the block-causal scope
+    #: (and with it the cached path) and the opponent-reply prototype are refused (BUILD_LOG issues
+    #: 251, 252).
+    piece_centric: bool = False
+
     # --- later stages: named here, built there (enabling raises NotImplementedError) ---
-    piece_centric: bool = False  # A5 (prototype, committed-class): not built in N1-N3
     history_window: bool = False  # C5/C7 (provisional): parked until the |E| verdict (M7)
 
     # -- construction --
@@ -1033,10 +1051,19 @@ class NetConfig:
         ):
             if getattr(self, name) not in options:
                 raise ValueError(f"{name} must be one of {options}")
-        for name, stage in (
-            ("piece_centric", "a later stage (A5)"),
-            ("history_window", "a later stage, after the |E| verdict (C5, C7, M7)"),
-        ):
+        if self.piece_centric and self.attn_scope == "block_causal":
+            raise NotImplementedError(
+                "piece_centric (A5) is built for the dense scope only: under the block-causal scope a destination token on a "
+                "frozen board appears and vanishes from node to node, which C17's within-board bidirectionality and the "
+                "cached path's frozen K/V do not allow (BUILD_LOG issue 252)"
+            )
+        if self.piece_centric and self.opp_reply:
+            raise NotImplementedError(
+                "piece_centric (A5) with D4's opponent-reply prototype: a quiet reply's destination has no token, and "
+                "adding the opponent's destinations would change the input between training and inference (BUILD_LOG "
+                "issue 251)"
+            )
+        for name, stage in (("history_window", "a later stage, after the |E| verdict (C5, C7, M7)"),):
             if getattr(self, name):
                 raise NotImplementedError(f"{name} is built in stage {stage}, not in N1-N3")
 

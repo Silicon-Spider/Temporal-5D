@@ -412,16 +412,19 @@ def test_moves_left_from_log_inverts_the_target_transform():
 
 
 def test_later_stage_flags_raise():
-    # B9-B12 are built from stage N2 on (tests/net/test_structure.py) and the block-causal
-    # scope from stage N3 (attn_scope, tests/net/test_scope.py); these are not.
+    # B9-B12 are built from stage N2 on (tests/net/test_structure.py), the block-causal scope
+    # from stage N3 (attn_scope, tests/net/test_scope.py) and A5's piece-centric tokens for the
+    # dense scope (tests/net/test_piece_centric.py); these are not.
     flags = (
-        dict(piece_centric=True),
         dict(history_window=True),
+        dict(piece_centric=True, attn_scope="block_causal"),  # A5 is dense-scope only (BUILD_LOG issue 252)
+        dict(piece_centric=True, opp_reply=True),  # A5 has no reply head (issue 251)
     )
     for flag in flags:
         with pytest.raises(NotImplementedError):
             build_model(NetConfig(**flag))
     build_model(NetConfig(attn_scope="block_causal", n_layers=1))
+    build_model(NetConfig(piece_centric=True, n_layers=1))
 
 
 def test_open_choices_reject_unknown_values():

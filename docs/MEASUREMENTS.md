@@ -53,6 +53,7 @@ quiet-machine block).
 | KV memory per state | ~260 MB (240) / ~649 MB (600); ~113 MB windowed | BF16 250.9 MB (240, 8 TL), 635.8 MB (600, 12 TL) - frozen boards only, exact; FP8 50.1% | N3 table below; one perspective - under A7 every store holds two entries per root frozen board from the moment its epoch is made (note below) | 0.97 / 0.98 | 2026-10-02, N3 |
 | Local/global interleave | 0.067 TF per node | - | | | |
 | Board-layout embedding (A8) | ~0.1% of attention at 44 boards; ~1.6M parameters at 16 channels | projection 1,573,888 parameters (1,572,864 without its bias), 0.138 GFLOP at 44 boards - **0.099%** of attention by §15.3's formula (0.072% of the counted kernel attention); with the register's FFN (8x, a placeholder) 2,629,120 parameters and 6.29 GFLOP - **4.5%** of attention, 2.0% of the counted forward (0.83% / 0.62% at 240 boards); in the cached configuration A8 adds **10.1%** / **14.4%** to a node (44 / 240 boards: every token embedded at every node); CPU wall indicative only: the embedding +18 ms at 44 boards, +103 ms at 240 (BF16), the forward's change inside the noise | A8 section below; FLOPs counted (load-independent); wall time on a loaded machine (85-100% CPU) | **45x - flagged** (A8 as the register defines it, its FFN at the placeholder's 8x; at least 6.6x with any per-token FFN); the projection alone 0.99 (FLOPs); parameters 1.64x (the projection's 0.98) | 2026-10-23, N-A8 (review fixes the same day) |
+| Piece-centric tokens (A5) - no §15.3 row (proposed edit 197); §14.4's figures | 2.3x fewer tokens midgame, 2.7x in sparse endgames; ~250 destination tokens at 240 boards; ~4.4-6.5x on dense attention; ~2.7x on the cached per-node term, the same on KV | human games, legal moves, by bucket 1-49 / 50-99 / 100-159 / 160-186 boards: tokens 1.94 / 2.19 / 2.43 / 2.35x fewer; D (empty destination tokens) median 35 / 50 / 100 / 140; dense evaluation 2.49 / 3.34 / 4.35 / 4.37x cheaper; cached node (analytic, A5 refused there) 1.42 / 2.05 / 2.63 / 2.55x; **C26's phase form pooled by decisions (M18), N\* = 50: 2.45x - dense below N\* 2.46x, the cached node at or above it 2.11x** (N\* = 100: 2.73x; 2.73x / 2.62x); the pre-CHECKPOINT-9 reading: dense at every size 2.79x, cached 1.56x, M16's blend 2.19x; frozen K/V 2.05-2.51x; counted forward at 44 boards 2.66x (block-sparse) / 2.79x (every key); synthetic 240 / 600 boards 4.8-9.9x; CPU wall at 44 boards 3.0x (indicative, loaded) | A5 section below; 716 replayed games, 22,761 distinct positions, action starts only; F1, FP32 counts | under C26, legal destinations: tokens 0.84-1.06 (of 2.3); the cached node at or above N\* 1.28x below ~2.7x (N\* = 100: 1.03x), inside; dense: the range's conditions (240-600 boards) not reached by the games - synthetic 4.8-9.9x; KV inside. **No flag stands** (the 2026-10-23 flags compared across conditions - withdrawn, see the section) | 2026-10-23, N-A5; re-weighed 2026-10-24 |
 | Leaf-batching gain | 1.2-1.5× | - | | | |
 | NNUE eval | ~10k MACs, sub-µs | - | | | |
 | Movegen throughput | ≥ 20,000/s at 240; ≥ 10,000/s at 600 (§15.6) | pseudo-legal expansion, 1 thread: 44,047/s at 240 boards, 24,951/s at 600 (scope + relations); with the legal-moves filter: milliseconds to minutes per expansion | M9 section below | 2.2x / 2.5x the target (pseudo-legal); far below it with the filter | 2026-10-02, 2740e66 |
@@ -205,6 +206,127 @@ FP32 block was stopped unfinished (the machine at 100%). For the quiet-machine b
 The embedding runs in FP32 under either trunk (it precedes the trunk's autocast), so its time does
 not follow the trunk's precision. Lc0's "5% latency" is a GPU figure for a different network and is
 not compared.
+
+### A5 - piece-centric tokens: token counts on the human games, counted FLOPs (2026-10-23)
+
+**What it is.** Section 14.4's figures for register A5 (piece-centric tokenisation, a prototype
+behind `NetConfig.piece_centric`; BUILD_LOG issues 244-257), which no §15.3 row carries (proposed
+edit 197): "~250 tokens across a 240-board state ... 2.3x tokens midgame, 2.7x in sparse endgames -
+~4.4-6.5x on dense attention, ~2.7x on the cached per-node term, the same on KV memory". A5's tokens
+as built: the pieces, the candidate moves' empty destination cells (D) and the registers, `T_A5 =
+pieces + D + 2N + 16` against A1's `66N + 16`. M18 weighs this decision by "where compute goes - the
+human games now"; process note 2 asks for the figures at the scale they would run at.
+
+**Token counts on the human games** - `py -m t5d.engine.token_counts <t0db>` (`python/t5d/engine/
+token_counts.py`, the engine binding only): t0database (`data/t0database/`, `Data.csv` sha256
+`37fb7c1c...`) converted by `py data/t0database/to_5dpgn.py`, 761 records, replayed as the gate's
+parse mode replays (`Game.from_pgn(legal=False)`); **716 replay to the end** and count (45 refused, as
+M7's); at every action start the counts for the **legal** moves (`legal_moves=True`, exact: no
+budget) and the pseudo-legal ones, through the network's own construction (`net.cost.token_counts`,
+recounted independently from the engine's piece count and move flags in the tests); positions
+distinct by fingerprint and side to move - **22,761**, the same per-bucket counts as M7's legal
+table (19,410 / 3,162 / 171 / 18); the decisions behind them (28,843 action starts, repeats
+included) weight the pooled figures. **Action starts only**: the ply split's mid-action leaves and a
+search's deeper nodes are not measured. Engine at main `0e37093`, the tool as first committed
+(`lane/net` `72e5f96` - `token_counts.py` first exists there, not in `f89c79f` as first written
+here); machine `dev-r`; counts do not depend on load. Re-run 2026-10-24 after main `7483103` was
+merged into `lane/net` (`3a87fb0`), with the tool of the A5 review fixes (the commit after it: C26's phase form added, the JSON
+lines carrying each position's decisions): the same 22,761 positions and counts, line for line, and
+the same per-bucket and pooled figures as before (52 s). The analytic costs are section 9.1's model (`cost.piece_centric_costs`,
+d 256, L 16): the dense evaluation (`4 T^2 d L + 40 T d^2 L`); the cached node - the live queries
+against every token, A1's the head boards' tokens and the 16 global registers, A5's the heads'
+pieces and registers, **every destination token** (transient, never cached - BUILD_LOG issue 252's
+reading (f)) and the 16 - and the frozen boards' K/V. A5's cached figures are this model's only: the
+cached path refuses A5 as built (issue 252).
+
+Legal moves - means over the distinct positions of each bucket (ratios A1 / A5 of the means):
+
+| N bucket | positions | median N | pieces per board | D median / p95 / max | D on head boards | T_A1 / T_A5 | Tokens fewer (median per position) | Dense eval | Dense attention alone | Cached node | Frozen K/V |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1-49 | 19,410 | 24 | 30.6 | 35 / 82 / 247 | 57% | 1,676 / 862 | **1.94x** (1.89) | **2.49x** | 3.90x | **1.42x** | 2.05x |
+| 50-99 | 3,162 | 60 | 27.2 | 50 / 151 / 401 | 55% | 4,212 / 1,922 | 2.19x (2.18) | 3.34x | 4.81x | 2.05x | 2.26x |
+| 100-159 | 171 | 112 | 24.3 | 100 / 203 / 306 | 60% | 7,860 / 3,232 | 2.43x (2.41) | 4.35x | 5.82x | 2.63x | 2.51x |
+| 160-186 | 18 | 169.5 | 25.2 | 140 / 306 / 549 | 61% | 11,229 / 4,780 | 2.35x (2.55) | 4.37x | 5.43x | 2.55x | 2.43x |
+| pooled by decisions (M18), every size - the pre-CHECKPOINT-9 reading | 28,843 decisions | | | | | | | 2.79x | | 1.56x | |
+
+**Pooled under CHECKPOINT 9's phase form** (C26, spec section 7.10: a search whose root has fewer
+than N\* boards runs dense, one at or above N\* cached; N\* a placeholder, 50). Each position is a
+decision's root, so it is costed dense below N\* and as a cached node at or above it; section 7.10
+and M18 weigh the cache by the compute above N\*, so that half is given apart. Weighted by
+decisions (`token_counts --n-star`, `pooled.phase`):
+
+| Move set | N\* | decisions below / at or above | Phase form pooled | Dense below N\* | Cached node at or above N\* | Share of A1's / A5's phase-form compute at or above N\* |
+|---|---|---|---|---|---|---|
+| legal | 50 (placeholder) | 25,336 / 3,507 | **2.45x** | **2.46x** | **2.11x** | 3.3% / 3.8% |
+| legal | 100 (sensitivity) | 28,654 / 189 | 2.73x | 2.73x | 2.62x | 0.3% / 0.3% |
+| pseudo-legal (sensitivity) | 50 | 25,336 / 3,507 | 2.40x | 2.43x | 1.79x | 3.3% / 4.4% |
+| pseudo-legal (sensitivity) | 100 | 28,654 / 189 | 2.69x | 2.69x | 2.22x | 0.3% / 0.4% |
+
+(Unweighted - one per distinct position - the review's re-pooling gave 2.48x / 2.12x, 2.76x / 2.62x,
+2.43x / 1.80x and 2.72x / 2.22x.) A cached node costs a small fraction of a dense evaluation, so
+on the human games the phase form's compute is almost all dense below N\*: what A5 buys there is
+the dense figure. The pre-CHECKPOINT-9 reading, kept for comparison: M16's blend (0.9 cached, 0.1
+dense, at every size) pooled **2.19x**. Under A1 the dense compute falls 58.6% / 35.2% / 5.2% /
+1.0% in the four buckets. Pseudo-legal moves (upper bounds on D): D median / p95 / max 38 / 104 /
+285, 73 / 191 / 403, 127 / 266 / 505, 212 / 502 / 626; tokens 1.93 / 2.16 / 2.40 / 2.32x fewer;
+dense 2.46 / 3.27 / 4.27 / 4.27x; cached node 1.30 / 1.74 / 2.24 / 2.15x; pooled at every size:
+dense 2.75x, node 1.42x, blend 2.07x. About 40% of the destination tokens land on history boards (travel
+moves' landing squares), which bears on issue 252: §14.4 calls only the head boards' destination
+tokens transient.
+
+**FLOPs, counted** - `py -m t5d.engine.token_counts --flops --flops-record <t0db>/t0db-0002.5dpgn
+--flops-check` and `--flops`: one dense forward of the F1 network (FP32 trunk - counts do not depend
+on the precision or on load; B9's two move-graph heads, B15; random weights, model seed 0),
+`FlopCounterMode` with the CPU fused-attention formula (`net/cost.py`), counted at 1 and 2 layers and
+extrapolated to 16 - the layers are identical, so the difference is one layer's; checked at 44 boards,
+where the full 16-layer counts are the extrapolation's exactly (280,815,012,416 and 105,427,533,568).
+Positions: the first action start of t0db-0002 with 44 boards (the human median game length; legal
+moves; T 2,920 / 1,491) and `synthetic_state(0, N, n_timelines=k)` at the spec's 8 and 12 timelines
+and the corpus's 24 - synthetic boards hold 17-25 pieces and the generator's capped move sample gives
+D 78-152, so their token ratios (2.4-3.4x) are the generator's, not a game's. Window none.
+
+| Position | T_A1 / T_A5 | Analytic A1 / A5 (TF) | Counted block-sparse A1 / A5 | Counted every key A1 / A5 | Ratio: analytic / block-sparse / every key |
+|---|---|---|---|---|---|
+| human, 44 boards | 2,920 / 1,491 | 0.262 / 0.099 | 0.281 / 0.105 | 0.323 / 0.116 | **2.65 / 2.66 / 2.79x** |
+| synthetic 240, 8 TL | 15,856 / 4,760 | 4.784 / 0.571 | 5.501 / 0.666 | 6.583 / 0.759 | 8.38 / 8.26 / 8.67x |
+| synthetic 240, 24 TL | 15,856 / 6,606 | 4.784 / 0.992 | 5.563 / 1.162 | 6.583 / 1.335 | 4.82 / 4.79 / 4.93x |
+| synthetic 600, 12 TL | 39,616 / 11,767 | 27.375 / 2.762 | 30.613 / 3.257 | 38.617 / 3.920 | 9.91 / 9.40 / 9.85x |
+| synthetic 600, 24 TL | 39,616 / 15,924 | 27.375 / 4.822 | 30.882 / 5.627 | 38.618 / 6.830 | 5.68 / 5.49 / 5.65x |
+
+The counted saving follows the analytic one to within 5% on both paths: A5 is A1's computation on a
+smaller token set (no parameter added - issue 244(b)). The brief's reconstruction of §14.4's figures
+(2.3x fewer tokens at 240 boards, 15,856 -> 6,894: 4.5x; 2.7x at 600: 6.6x - pinned by
+`test_the_analytic_figures_section_14_4_rests_on`) holds for the dense evaluation's total, which is
+what "~4.4-6.5x on dense attention" must mean (attention alone would be 5.3-7.3x); at the human median
+of 44 boards the linear terms are about half the cost, so a 1.96x token cut buys 2.65x.
+
+**CPU wall time - indicative only.** The F1 network as shipped (BF16 trunk, block-sparse), the
+44-board human position, 4 torch threads, one warm-up then five forwards each: A1 5.65 s, A5 1.90 s
+(medians; **3.0x**). The machine was loaded (other lanes' jobs; Windows' processor load 96%): for
+the quiet-machine block. GPU figures, varlen kernels among them, are deferred (M19).
+
+**Against §14.4's estimates (the 2x rule) - re-stated under CHECKPOINT 9's C26, on the
+legal-destination set §14.4 speaks of** ("only head boards carry the full legal-destination set";
+the pseudo-legal figures are a sensitivity, not the flagged ones). Tokens: 1.94-2.43x fewer by
+bucket against "2.3x midgame, 2.7x sparse endgames" - 0.84-1.06 of 2.3 (the human games stop at 186
+boards; their late buckets hold 189 positions): inside. Destination tokens: median 140 at 160-186
+boards (0.87 per board, about 210 at 240) against "~250 at 240 boards" - inside. Cached per-node
+term: under C26 the cache runs only at or above N\*, where the node is 2.11x cheaper (N\* = 50) or
+2.62x (N\* = 100) against "~2.7x" - 1.28x and 1.03x below, **inside** (pseudo-legal 1.79x, 1.5x
+below, inside). Dense evaluation: "~4.4-6.5x" is the dense evaluation's total at 240-600 boards (the
+brief's reconstruction, above); the human games never reach those sizes, so the estimate's
+conditions were not measured on games - synthetic positions there count 4.8-9.9x (the generator's
+D), at or above the range; where C26 runs dense, below N\*, A5 buys 2.46x, a size §14.4 gives no
+estimate for. KV: 2.05-2.51x against "the same" (2.7x) - inside. **No figure is flagged.**
+
+Withdrawn (the 2026-10-23 reading): "cached node 2.1x below with pseudo-legal moves (1.30x) - flagged"
+compared a cached node at every size, under 50 boards included, where C26 never caches, on the
+pseudo-legal set §14.4 does not speak of; "dense 2.6x below its top" compared the 600-board 6.5x with
+the under-50-board figure - estimate and measurement under different conditions, which the 2x rule
+does not judge. What stays true at every size: A5's live set carries every destination token, about
+35 under 50 boards beside a head board's 66 tokens under A1, so at one or two live heads a cached node
+under 50 boards barely shrinks (1.42x) - moot under C26, which caches nothing there. Logged as BUILD_LOG
+issue 256; the write-back is proposed edit 198.
 
 ### Engine E4 - the gate's full mode on the corpus (2026-10-02)
 

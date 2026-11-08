@@ -209,6 +209,8 @@ def _setup(boards: int, timelines: int | None, dtype: str, scope: str, seed: int
     from .model import build_model
     from .synthetic import synthetic_state
 
+    if flags.get("piece_centric"):
+        raise NotImplementedError("the cache bench measures the cached path, which refuses A5's piece-centric tokens (BUILD_LOG issue 252)")
     torch.set_grad_enabled(False)
     model = build_model(NetConfig(trunk_dtype=dtype, attn_scope=scope, **flags), seed=seed).eval()
     return model, synthetic_state(seed, boards, n_timelines=timelines)

@@ -25,8 +25,16 @@ concurrency:
 
 jobs:
   test:
+    # The suite outgrew one hour-long job (about two hours on a runner by 2026-11): it runs
+    # as four shards in parallel, each test in exactly one, chosen by a hash of its id
+    # (T5D_TEST_SHARD, tests/conftest.py).
+    name: test (shard ${{ matrix.shard }} of 4)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     defaults:
       run:
         working-directory: python
@@ -60,6 +68,7 @@ jobs:
           cmake --build build/engine --target t5d t5d-gate --parallel
 
       - name: Lint
+        if: matrix.shard == 0
         run: |
           ruff check .
           ruff format --check .
@@ -67,4 +76,5 @@ jobs:
       - name: Test
         env:
           T5D_REQUIRE_ENGINE: "1"
+          T5D_TEST_SHARD: "${{ matrix.shard }}/4"
         run: python -m pytest -q -p no:cacheprovider
