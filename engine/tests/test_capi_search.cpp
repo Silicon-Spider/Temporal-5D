@@ -1227,87 +1227,257 @@ TimeHandle new_timeman(const t5d_time_params* p = nullptr) {
   return TimeHandle(tm);
 }
 
+// A clock reading a search's playouts at a fixed price each: an elapsed time the
+// step driver supplies - it reads the same count through t5d_search_info and
+// computes the same expression - so a clocked decision is reproducible on both
+// sides, and the flat arms differ (the model clock makes them one behaviour).
+class PlayoutClock final : public t5d::mcts::Clock {
+ public:
+  PlayoutClock(const t5d::mcts::Search& search, double price) : search_(search), price_(price) {}
+  double now() override { return static_cast<double>(search_.stats().playouts) * price_; }
+
+ private:
+  const t5d::mcts::Search& search_;
+  double price_;
+};
+
+// One of 6o's switches as the C API passes it, and as the C++ reference sets it.
+struct TimeArm {
+  const char* name;
+  int32_t allocator;
+  t5d::mcts::Allocator reference;
+  int32_t signals;
+  bool clocked;  // the driver's elapsed time (PlayoutClock), else the model clock (NaN)
+};
+
 }  // namespace
 
 TEST(capi_search_time_management_drives_the_step_api_as_run_timed_does) {
-  // A step-API driver - check between slices of batch_size playouts, the model
-  // clock (elapsed NaN) - builds the tree run_timed builds with the same
-  // answers, decision after decision (H15's digest), with the same plans and
-  // stops; Hashed's moves-left and categoricals reach the plan and the signals.
+  // A step-API driver - check between slices of batch_size playouts - builds the
+  // tree run_timed builds with the same answers, decision after decision (H15's
+  // digest), with the same plans and stops; Hashed's moves-left and categoricals
+  // reach the plan and the signals. Under each of 6o's switches as the C API
+  // passes them (review M7): the defaults on the model clock (elapsed NaN), and
+  // on an elapsed time the driver supplies - the integral arm with the signals on
+  // and off, and both flat arms. The driver's price (2 ms a playout, about 3.6x
+  // the prior's at these boards) makes the flat arms differ: the wall-clock arm
+  // stops long before the evaluations arm. A 6 s clock: decisions long enough
+  // for the stop signals (stop_min_evaluations, 32) under both splits.
+  using t5d::mcts::Allocator;
+  constexpr double kPrice = 2e-3;
+  const TimeArm arms[] = {
+      {"integral, model clock", T5D_ALLOCATOR_INTEGRAL, Allocator::Integral, 1, false},
+      {"integral", T5D_ALLOCATOR_INTEGRAL, Allocator::Integral, 1, true},
+      {"integral, signals off", T5D_ALLOCATOR_INTEGRAL, Allocator::Integral, 0, true},
+      {"flat evaluations", T5D_ALLOCATOR_FLAT_EVALS, Allocator::FlatEvals, 1, true},
+      {"flat wall clock", T5D_ALLOCATOR_FLAT_WALL_CLOCK, Allocator::FlatWallClock, 1, true},
+  };
   for (const int32_t split : {T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_FLAT}) {
-    const Game g = variant_game("Standard - Two Timelines");
-    t5d_search_params p = quick_params();
-    p.split = split;
-    p.batch_size = 4;
-    p.hunt = 0;
-    p.settling = 0;
-    p.asset_map = 0;
-    const SearchHandle s = new_search(g.get(), p);
-    const TimeHandle tm = new_timeman();
+    std::vector<std::vector<std::uint64_t>> digests;  // each arm's, decision by decision
+    for (const TimeArm& arm : arms) {
+      digests.emplace_back();
+      const Game g = variant_game("Standard - Two Timelines");
+      t5d_search_params p = quick_params();
+      p.split = split;
+      p.batch_size = 4;
+      p.hunt = 0;
+      p.settling = 0;
+      p.asset_map = 0;
+      const SearchHandle s = new_search(g.get(), p);
+      t5d_time_params tp;
+      t5d_time_params_default(&tp);
+      tp.allocator = arm.allocator;
+      tp.signals = arm.signals;
+      const TimeHandle tm = new_timeman(&tp);
 
-    t5d::mcts::SearchParams q;
-    q.split = split == T5D_SPLIT_FLAT ? t5d::mcts::TurnSplit::Flat : t5d::mcts::TurnSplit::BoardMove;
-    q.batch_size = 4;
-    q.hunt = false;
-    q.settling = false;
-    q.asset_map = false;
-    q.expand.square_features = t5d::SquareFeatures::None;
-    t5d::mcts::Search reference(t5d::variant_start(*t5d::find_variant("Standard - Two Timelines")), q);
-    t5d::mcts::TimeManager ref_tm;
-    Hashed ev;
-    t5d_time_context ctx{2.0, 0.05, std::nan(""), nullptr, 0};
-    for (int decision = 0; decision < 3; ++decision) {
-      t5d_time_plan plan;
-      REQUIRE_EQ(t5d_timeman_begin(tm.get(), s.get(), &ctx, &plan, nullptr), T5D_OK);
-      t5d_time_verdict v{};
-      for (int slice = 0; slice < 100000; ++slice) {
-        REQUIRE_EQ(t5d_timeman_check(tm.get(), s.get(), std::nan(""), &v, nullptr), T5D_OK);
-        if (v.stop != T5D_TIME_STOP_NONE) break;
+      t5d::mcts::SearchParams q;
+      q.split = split == T5D_SPLIT_FLAT ? t5d::mcts::TurnSplit::Flat : t5d::mcts::TurnSplit::BoardMove;
+      q.batch_size = 4;
+      q.hunt = false;
+      q.settling = false;
+      q.asset_map = false;
+      q.expand.square_features = t5d::SquareFeatures::None;
+      t5d::mcts::TimeParams rp;
+      rp.allocator = arm.reference;
+      rp.signals = arm.signals != 0;
+      t5d::mcts::Search reference(t5d::variant_start(*t5d::find_variant("Standard - Two Timelines")), q);
+      t5d::mcts::TimeManager ref_tm(rp);
+      PlayoutClock clock(reference, kPrice);
+      Hashed ev;
+      t5d_time_context ctx{6.0, 0.05, std::nan(""), nullptr, 0};
+      for (int decision = 0; decision < 3; ++decision) {
+        t5d_time_plan plan;
+        REQUIRE_EQ(t5d_timeman_begin(tm.get(), s.get(), &ctx, &plan, nullptr), T5D_OK);
         t5d_search_summary info;
         REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
-        drive_hashed(s.get(), info.playouts + p.batch_size, p.batch_size);
+        const double t0 = static_cast<double>(info.playouts) * kPrice;
+        t5d_time_verdict v{};
+        for (int slice = 0; slice < 100000; ++slice) {
+          REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
+          const double elapsed = arm.clocked ? static_cast<double>(info.playouts) * kPrice - t0 : std::nan("");
+          REQUIRE_EQ(t5d_timeman_check(tm.get(), s.get(), elapsed, &v, nullptr), T5D_OK);
+          if (v.stop != T5D_TIME_STOP_NONE) break;
+          drive_hashed(s.get(), info.playouts + p.batch_size, p.batch_size);
+        }
+        REQUIRE_EQ(t5d_timeman_end(tm.get(), s.get(), nullptr), T5D_OK);
+        const t5d::mcts::TimeContext rctx{ctx.remaining_seconds, ctx.increment_seconds, ctx.moves_left_turns,
+                                          std::nullopt};
+        const t5d::mcts::TimedRun r = t5d::mcts::run_timed(reference, ev, ref_tm, rctx, arm.clocked ? &clock : nullptr);
+        CHECK_EQ(plan.soft_evaluations, r.plan.soft_evaluations);
+        CHECK_EQ(plan.hard_seconds, r.plan.hard_seconds);
+        CHECK_EQ(plan.moves_left_given, decision == 0 ? 0 : 1);  // the carried root's network moves-left
+        CHECK_EQ(v.stop, static_cast<int32_t>(r.verdict.stop));
+        CHECK_EQ(v.target_evaluations, r.verdict.target_evaluations);
+        CHECK_EQ(v.extensions, r.verdict.extensions);
+        CHECK_EQ(v.scale, ref_tm.scale());
+        CHECK_EQ(v.converged, r.verdict.converged() ? 1 : 0);
+        if (arm.signals == 0) CHECK_EQ(v.extensions, 0u);
+        std::uint64_t digest = 0;
+        REQUIRE_EQ(t5d_search_digest(s.get(), &digest), T5D_OK);
+        CHECK_EQ(digest, reference.digest());
+        digests.back().push_back(digest);
+        size_t index = 0;
+        int32_t reason = 0;
+        REQUIRE_EQ(t5d_search_choose(s.get(), &index, &reason, nullptr), T5D_OK);
+        CHECK_EQ(index, reference.choose().index);
+        REQUIRE_EQ(t5d_search_advance(s.get(), index, nullptr), T5D_OK);
+        reference.advance(index);
+        ctx.remaining_seconds -= r.seconds;
       }
-      REQUIRE_EQ(t5d_timeman_end(tm.get(), s.get(), nullptr), T5D_OK);
-      const t5d::mcts::TimeContext rctx{ctx.remaining_seconds, ctx.increment_seconds, ctx.moves_left_turns, std::nullopt};
-      const t5d::mcts::TimedRun r = t5d::mcts::run_timed(reference, ev, ref_tm, rctx);
-      CHECK_EQ(plan.soft_evaluations, r.plan.soft_evaluations);
-      CHECK_EQ(plan.hard_seconds, r.plan.hard_seconds);
-      CHECK_EQ(plan.moves_left_given, decision == 0 ? 0 : 1);  // the carried root's network moves-left
-      CHECK_EQ(v.stop, static_cast<int32_t>(r.verdict.stop));
-      CHECK_EQ(v.target_evaluations, r.verdict.target_evaluations);
-      CHECK_EQ(v.extensions, r.verdict.extensions);
+      // t5d_search_run_timed: the same with a built-in evaluator (on the model
+      // clock: it takes no clock but the steady one).
+      const SearchHandle t = new_search(g.get(), p);
+      const TimeHandle tm2 = new_timeman(&tp);
+      t5d_time_plan plan;
+      t5d_time_verdict verdict;
+      REQUIRE_EQ(t5d_search_run_timed(t.get(), T5D_EVALUATOR_RANDOM, 3, tm2.get(), &ctx, 0, &plan, &verdict, nullptr),
+                 T5D_OK);
+      CHECK(verdict.stop != T5D_TIME_STOP_NONE);
+      t5d::mcts::Search same(t5d::variant_start(*t5d::find_variant("Standard - Two Timelines")), q);
+      t5d::mcts::TimeManager tm3(rp);
+      const std::unique_ptr<t5d::mcts::Evaluator> random =
+          t5d::mcts::make_evaluator(t5d::mcts::BuiltinEvaluator::Random, 3);
+      const t5d::mcts::TimedRun r = t5d::mcts::run_timed(
+          same, *random, tm3,
+          t5d::mcts::TimeContext{ctx.remaining_seconds, ctx.increment_seconds, ctx.moves_left_turns, std::nullopt});
       std::uint64_t digest = 0;
-      REQUIRE_EQ(t5d_search_digest(s.get(), &digest), T5D_OK);
-      CHECK_EQ(digest, reference.digest());
-      size_t index = 0;
-      int32_t reason = 0;
-      REQUIRE_EQ(t5d_search_choose(s.get(), &index, &reason, nullptr), T5D_OK);
-      CHECK_EQ(index, reference.choose().index);
-      REQUIRE_EQ(t5d_search_advance(s.get(), index, nullptr), T5D_OK);
-      reference.advance(index);
-      ctx.remaining_seconds -= r.seconds;
+      REQUIRE_EQ(t5d_search_digest(t.get(), &digest), T5D_OK);
+      CHECK_EQ(digest, same.digest());
+      CHECK_EQ(verdict.stop, static_cast<int32_t>(r.verdict.stop));
+      CHECK_EQ(verdict.extensions, r.verdict.extensions);
+      CHECK_EQ(plan.soft_evaluations, r.plan.soft_evaluations);
+      CHECK_EQ(verdict.scale, tm3.scale());
     }
-    // t5d_search_run_timed: the same with a built-in evaluator.
-    const SearchHandle t = new_search(g.get(), p);
-    const TimeHandle tm2 = new_timeman();
+    // The premise: on the driver's clock each switch changes the decision.
+    CHECK(digests[1] != digests[2]);  // the signals on, off
+    CHECK(digests[3] != digests[4]);  // the two flat arms
+  }
+}
+
+TEST(capi_search_time_management_reports_through_the_c_api) {
+  // The verdict's and the plan's flags, the switches' behaviour and the wall
+  // clock as the C API carries them (review M7).
+  const Game g = variant_game("Standard");
+  t5d_search_params sp = quick_params();
+  sp.hunt = 0;
+  sp.settling = 0;
+  // signals 0: a decision ends on the soft budget or the hard bound and takes no
+  // extension (C01).
+  {
+    const SearchHandle s = new_search(g.get(), sp);
+    t5d_time_params tp;
+    t5d_time_params_default(&tp);
+    tp.signals = 0;
+    const TimeHandle tm = new_timeman(&tp);
+    const t5d_time_context ctx{600.0, 0.0, std::nan(""), nullptr, 0};
     t5d_time_plan plan;
-    t5d_time_verdict verdict;
-    REQUIRE_EQ(t5d_search_run_timed(t.get(), T5D_EVALUATOR_RANDOM, 3, tm2.get(), &ctx, 0, &plan, &verdict, nullptr),
+    t5d_time_verdict v;
+    REQUIRE_EQ(t5d_search_run_timed(s.get(), T5D_EVALUATOR_RANDOM, 3, tm.get(), &ctx, 0, &plan, &v, nullptr), T5D_OK);
+    CHECK(v.stop == T5D_TIME_STOP_SOFT_BUDGET || v.stop == T5D_TIME_STOP_HARD_BOUND);
+    CHECK_EQ(v.extensions, 0u);
+    CHECK_EQ(v.converged, 0);
+  }
+  // The flat arms: after one batch, a check at 1.5x the soft time (well inside
+  // the hard bound) - the wall-clock arm has spent its time, the evaluations arm
+  // has not done its work (C02).
+  for (const int32_t arm : {T5D_ALLOCATOR_FLAT_EVALS, T5D_ALLOCATOR_FLAT_WALL_CLOCK}) {
+    const SearchHandle s = new_search(g.get(), sp);
+    t5d_time_params tp;
+    t5d_time_params_default(&tp);
+    tp.allocator = arm;
+    tp.signals = 0;
+    const TimeHandle tm = new_timeman(&tp);
+    const t5d_time_context ctx{600.0, 0.0, std::nan(""), nullptr, 0};
+    t5d_time_plan plan;
+    t5d_time_verdict v;
+    REQUIRE_EQ(t5d_timeman_begin(tm.get(), s.get(), &ctx, &plan, nullptr), T5D_OK);
+    REQUIRE_EQ(t5d_search_run(s.get(), T5D_EVALUATOR_UNIFORM, 1, 8, nullptr), T5D_OK);
+    REQUIRE(1.5 * plan.soft_seconds < plan.hard_seconds);
+    REQUIRE_EQ(t5d_timeman_check(tm.get(), s.get(), 1.5 * plan.soft_seconds, &v, nullptr), T5D_OK);
+    CHECK_EQ(v.stop, arm == T5D_ALLOCATOR_FLAT_WALL_CLOCK ? T5D_TIME_STOP_SOFT_BUDGET : T5D_TIME_STOP_NONE);
+  }
+  // E8's won't-resolve flag in the plan: a censored mass of 0.6 sets it and
+  // plans the hard bound (reading A); 0.4 does not (C04).
+  for (const float censored : {0.6f, 0.4f}) {
+    const SearchHandle s = new_search(g.get(), sp);
+    t5d_time_params tp;
+    t5d_time_params_default(&tp);
+    tp.difficulty_weighting = 1;
+    const TimeHandle tm = new_timeman(&tp);
+    std::array<float, T5D_EFFORT_BINS> effort{};
+    effort[3] = 1.0f - censored;
+    effort[T5D_EFFORT_BINS - 1] = censored;
+    const t5d_time_context ctx{60.0, 0.0, std::nan(""), effort.data(), effort.size()};
+    t5d_time_plan plan;
+    REQUIRE_EQ(t5d_timeman_begin(tm.get(), s.get(), &ctx, &plan, nullptr), T5D_OK);
+    CHECK_EQ(plan.difficulty_applied, 1);
+    CHECK_EQ(plan.wont_resolve, censored > 0.5f ? 1 : 0);
+    if (censored > 0.5f) {
+      CHECK(std::abs(plan.soft_evaluations - plan.hard_seconds / plan.seconds_per_evaluation) <=
+            1e-9 * plan.soft_evaluations);
+    }
+  }
+  // converged: a stop on smart pruning or the KLD says so, at every check of a
+  // step-driven decision, and run_timed's final verdict does (C07).
+  {
+    const SearchHandle s = new_search(g.get(), sp);
+    const TimeHandle tm = new_timeman();
+    const t5d_time_context ctx{600.0, 0.0, std::nan(""), nullptr, 0};
+    t5d_time_plan plan;
+    t5d_time_verdict v{};
+    REQUIRE_EQ(t5d_timeman_begin(tm.get(), s.get(), &ctx, &plan, nullptr), T5D_OK);
+    for (int slice = 0; slice < 100000; ++slice) {
+      REQUIRE_EQ(t5d_timeman_check(tm.get(), s.get(), std::nan(""), &v, nullptr), T5D_OK);
+      const bool converging = v.stop == T5D_TIME_STOP_SMART_PRUNING || v.stop == T5D_TIME_STOP_KLD_GAIN ||
+                              v.stop == T5D_TIME_STOP_SOLVED;
+      CHECK_EQ(v.converged, converging ? 1 : 0);
+      if (v.stop != T5D_TIME_STOP_NONE) break;
+      REQUIRE_EQ(t5d_search_run(s.get(), T5D_EVALUATOR_RANDOM, 3, 16, nullptr), T5D_OK);
+    }
+    CHECK(v.stop == T5D_TIME_STOP_SMART_PRUNING || v.stop == T5D_TIME_STOP_KLD_GAIN);  // the premise
+    CHECK_EQ(v.converged, 1);
+    REQUIRE_EQ(t5d_timeman_end(tm.get(), s.get(), nullptr), T5D_OK);
+    const SearchHandle t = new_search(g.get(), sp);
+    const TimeHandle tm2 = new_timeman();
+    REQUIRE_EQ(t5d_search_run_timed(t.get(), T5D_EVALUATOR_RANDOM, 3, tm2.get(), &ctx, 0, &plan, &v, nullptr), T5D_OK);
+    CHECK(v.stop == T5D_TIME_STOP_SMART_PRUNING || v.stop == T5D_TIME_STOP_KLD_GAIN);  // the premise
+    CHECK_EQ(v.converged, 1);
+  }
+  // wall_clock: run_timed on the steady clock measures the cost scale; on the
+  // model clock the prior stands (C11).
+  for (const int32_t wall : {0, 1}) {
+    const SearchHandle s = new_search(g.get(), sp);
+    const TimeHandle tm = new_timeman();
+    const t5d_time_context ctx{5.0, 0.0, std::nan(""), nullptr, 0};
+    t5d_time_plan plan;
+    t5d_time_verdict v;
+    REQUIRE_EQ(t5d_search_run_timed(s.get(), T5D_EVALUATOR_UNIFORM, 1, tm.get(), &ctx, wall, &plan, &v, nullptr),
                T5D_OK);
-    CHECK(verdict.stop != T5D_TIME_STOP_NONE);
-    t5d::mcts::Search same(t5d::variant_start(*t5d::find_variant("Standard - Two Timelines")), q);
-    t5d::mcts::TimeManager tm3;
-    const std::unique_ptr<t5d::mcts::Evaluator> random =
-        t5d::mcts::make_evaluator(t5d::mcts::BuiltinEvaluator::Random, 3);
-    const t5d::mcts::TimedRun r = t5d::mcts::run_timed(
-        same, *random, tm3,
-        t5d::mcts::TimeContext{ctx.remaining_seconds, ctx.increment_seconds, ctx.moves_left_turns, std::nullopt});
-    std::uint64_t digest = 0;
-    REQUIRE_EQ(t5d_search_digest(t.get(), &digest), T5D_OK);
-    CHECK_EQ(digest, same.digest());
-    CHECK_EQ(verdict.stop, static_cast<int32_t>(r.verdict.stop));
-    CHECK_EQ(plan.soft_evaluations, r.plan.soft_evaluations);
-    CHECK_EQ(verdict.scale, tm3.scale());
+    if (wall != 0) {
+      CHECK(v.scale != t5d::mcts::TimeParams{}.cost_seconds_per_evaluation);
+    } else {
+      CHECK_EQ(v.scale, t5d::mcts::TimeParams{}.cost_seconds_per_evaluation);
+    }
   }
 }
 

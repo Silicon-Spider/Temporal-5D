@@ -12,7 +12,10 @@ replay through the gate, a flag ends a game, self-play takes no clock.
 from __future__ import annotations
 
 import math
+import re
 import time
+from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -24,8 +27,12 @@ from t5d.engine.capi import (
     T5D_EVALUATOR_UNIFORM,
     T5D_SPLIT_BOARD_MOVE,
     T5D_SPLIT_FLAT,
+    T5D_STOP_EVALUATIONS,
+    T5D_STOP_PLAYOUTS,
     T5D_TIME_STOP_HARD_BOUND,
     T5D_TIME_STOP_NONE,
+    T5D_TIME_STOP_SEARCH,
+    T5D_TIME_STOP_SOFT_BUDGET,
     CTimeParams,
     layout_mismatches,
     load_library,
@@ -88,6 +95,99 @@ def test_time_params_defaults_names_and_refusals():
         time_params(reserve=1.0)  # no root-scan reserve (issue 306)
     with pytest.raises(Exception, match="hard_fraction"):
         TimeManager(time_params(hard_fraction=2.0))
+
+
+def test_the_allocator_names_are_the_headers_constants():
+    """``ALLOCATORS`` maps each of 6o's arms to the constant ``t5d/capi_search.h`` defines for it
+    (review M7: a swap of the two flat arms ran the other arm silently)."""
+    header = (Path(__file__).resolve().parents[3] / "engine" / "include" / "t5d" / "capi_search.h").read_text(encoding="utf-8")
+    defined = {name.lower(): int(value) for name, value in re.findall(r"#define T5D_ALLOCATOR_(\w+) (\d+)", header)}
+    assert defined == {"integral": 0, "flat_evals": 1, "flat_wall_clock": 2}
+    assert defined == ALLOCATORS
+
+
+def test_the_time_manager_refuses_a_proof_hook_set_by_hand():
+    """``TimeManager``'s own refusal, past ``time_params``' (a field set afterwards)."""
+    p = time_params()
+    p.proof_volatility = 1
+    with pytest.raises(ValueError, match="issue 180"):
+        TimeManager(p)
+
+
+def test_the_flat_arms_execute_as_named_from_python():
+    """After one batch, a check at 1.5x the plan's soft time (inside the hard bound): the
+    wall-clock arm has spent its time, the evaluations arm has not done its work."""
+    for name, expected in (("flat_evals", T5D_TIME_STOP_NONE), ("flat_wall_clock", T5D_TIME_STOP_SOFT_BUDGET)):
+        params = time_params(allocator=name, signals=0)
+        with Game.variant("Standard") as g, Search(g, params=search_params(hunt=0, settling=0)) as s, TimeManager(params) as tm:
+            plan = tm.begin(s, remaining=600.0)
+            s.run(T5D_EVALUATOR_UNIFORM, 8)
+            assert 1.5 * plan.soft_seconds < plan.hard_seconds
+            assert tm.check(s, 1.5 * plan.soft_seconds).stop == expected
+            tm.end(s)
+
+
+def _engine_timed(search, tm, *, remaining, increment, clock):
+    """``run_timed``'s loop through the C API with the engine's own uniform evaluator - a check,
+    then a slice of ``batch_size`` playouts (one when synchronous) - on the driver's clock."""
+    batch = 1 if search.params.synchronous else max(int(search.params.batch_size), 1)
+    plan = tm.begin(search, remaining=remaining, increment=increment)
+    t0 = clock()
+    while True:
+        verdict = tm.check(search, clock() - t0)
+        if verdict.stop != T5D_TIME_STOP_NONE:
+            break
+        if search.run_limits(T5D_EVALUATOR_UNIFORM, playouts=batch) not in (T5D_STOP_PLAYOUTS, T5D_STOP_EVALUATIONS):
+            verdict = replace(verdict, stop=T5D_TIME_STOP_SEARCH)
+            break
+    tm.end(search)
+    return plan, verdict, clock() - t0
+
+
+@pytest.mark.parametrize(
+    "allocator,signals",
+    [("integral", 1), ("integral", 0), ("flat_evals", 1), ("flat_wall_clock", 1)],
+)
+@pytest.mark.parametrize("split,synchronous", [(T5D_SPLIT_BOARD_MOVE, 0), (T5D_SPLIT_FLAT, 0), (T5D_SPLIT_BOARD_MOVE, 1)])
+def test_a_timed_decision_from_python_is_the_engines_on_the_drivers_clock(split, synchronous, allocator, signals):
+    """Under each of 6o's switches, on an elapsed time the driver supplies (review M7): a clock
+    that reads the search's playouts at 2 ms each - about 3.6x the prior's price at these boards,
+    so the flat arms differ - ``run_timed_search`` (Python's loop and evaluator) builds the tree
+    the engine's own slices build, decision after decision, with the same plans and stops."""
+    price = 2e-3
+    with Game.variant("Standard - Two Timelines") as g:
+        params = search_params(seed=3, split=split, batch_size=4, synchronous=synchronous, hunt=0, settling=0, asset_map=0)
+        a, b = Search(g, params=params), Search(g, params=params)
+        ta = TimeManager(time_params(allocator=allocator, signals=signals))
+        tb = TimeManager(time_params(allocator=allocator, signals=signals))
+        remaining = 6.0
+
+        def clock_a():
+            return a.info().playouts * price
+
+        def clock_b():
+            return b.info().playouts * price
+
+        try:
+            for _ in range(3):
+                run = run_timed_search(a, UniformEvaluator(), ta, remaining=remaining, increment=0.05, clock=clock_a)
+                plan, verdict, seconds = _engine_timed(b, tb, remaining=remaining, increment=0.05, clock=clock_b)
+                assert run.plan == plan
+                assert replace(run.verdict, kld_gain=0.0) == replace(verdict, kld_gain=0.0)
+                kld_a, kld_b = run.verdict.kld_gain, verdict.kld_gain
+                assert kld_a == kld_b or (math.isnan(kld_a) and math.isnan(kld_b))
+                assert verdict.stop != T5D_TIME_STOP_NONE
+                assert run.seconds == seconds
+                assert signals or verdict.extensions == 0
+                assert a.digest() == b.digest()
+                pick = a.choose()[0]
+                assert pick == b.choose()[0]
+                a.advance(pick)
+                b.advance(pick)
+                remaining -= run.seconds
+        finally:
+            for x in (a, b, ta, tb):
+                x.close()
 
 
 @pytest.mark.parametrize("split,synchronous", [(T5D_SPLIT_BOARD_MOVE, 0), (T5D_SPLIT_FLAT, 0), (T5D_SPLIT_BOARD_MOVE, 1)])

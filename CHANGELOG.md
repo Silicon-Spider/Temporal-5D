@@ -10,6 +10,37 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-09 - E11/E8 review fixes 2: the time surface through the C API and Python tested past its defaults
+
+Review of 05afde5..644801c, phase 1, finding M7 (the main loop's decision: the step-API digest
+tests parametrized over the signals off and both flat arms on an elapsed time the driver supplies,
+and every probe as a test). Each mutant the finding names is killed on this tree (C01, C02, C04,
+C07, C11, Y15, Y02: 7 of 7).
+- **`engine/tests/test_capi_search.cpp`**: the step-API test now runs five configurations under
+  both splits - the defaults on the model clock (as before) and, on a clock reading the search's
+  playouts at 2 ms each (the C driver computes the same elapsed time from `t5d_search_info`; the
+  C++ reference takes it as a `Clock`), the integral arm with the signals on and off and both flat
+  arms; a 6 s clock, so the stop signals act under both splits. The C side's switches come through
+  `t5d_time_params` (the old test passed none), the reference's are set in C++, so a translation
+  that dropped a switch or swapped the arms parts them; a premise check that each switch changes
+  the decision. New `capi_search_time_management_reports_through_the_c_api`: the signals off end
+  on the soft budget or the hard bound with no extension (C01); the flat arms at 1.5x the soft time
+  (C02); `wont_resolve` at a censored mass of 0.6 and not at 0.4 (C04); `converged` at every check
+  of a step-driven decision and in `run_timed`'s verdict (C07); `wall_clock` measuring the scale
+  (C11).
+- **`python/t5d/engine/evaluator.py`**: `run_timed_search(clock=...)` - a driver's clock in place
+  of the wall clock, as `run_timed` takes a `Clock` (no deadline given to the search: that is the
+  steady clock's; refused together with `model_clock`). Nothing else changes.
+- **`python/tests/engine/test_time_management.py`**: `run_timed_search` on the driver's clock
+  equals the engine's own slices under each switch, all three split/synchronous settings (12
+  cases); `ALLOCATORS` equals the header's `T5D_ALLOCATOR_*` (Y15 - the old check compared the map
+  with itself); the flat arms by name at 1.5x the soft time; `TimeManager`'s own refusal of a proof
+  hook set after `time_params` (Y02 - the old case was refused by `time_params` first).
+- **Docs**: the engine README's "Tested" paragraph and its note on `run_timed_search`.
+
+Spec: none of the spec changes - 6o's switches (§13.1; register E7) as built, tested through the
+C API and Python. No proposed edit; no measured figure.
+
 ### 2026-11-09 - E11/E8 review fixes 1: E7's stop/extend rules and allocator inputs pinned, E8's floor and cap tested, the strict hard bound
 
 The review of 05afde5..644801c (E11 and E8 on `lane/search`: 1 HIGH, 8 MEDIUM, 13 LOW) is fixed in
