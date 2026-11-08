@@ -905,6 +905,66 @@ TEST(mcts_fault_boosted_turns_and_suggestions_count_once) {
   }
 }
 
+TEST(mcts_fault_boosted_turns_recounted_at_the_root) {
+  // P13's bound above (a failed pull raises asset_boosted_edges by no more than
+  // the turns it kept) let a rollback that forgets the count through: the
+  // review's mutant M28, re-run on the fixed tree, survived it. Here the count
+  // is recounted through the public interface instead (review finding L6):
+  // with the asset map steering the root alone and every turn generated at
+  // once (widening off), it is exactly the number of root children a boost
+  // raised (RootChild::boost > 0). Every allocation of the delivery that
+  // expands a fresh search's root, each on a fresh search: after each fault,
+  // and after searching on, the count and the recount agree.
+  const GameState s0 = asset_position();
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  const auto boosted_root = [](const Search& s) {
+    std::uint64_t b = 0;
+    for (const RootChild& c : s.root_children()) b += c.boost > 0 ? 1u : 0u;
+    return b;
+  };
+  for (const bool graph : {false, true}) {
+    SearchParams p = flat_steered();
+    p.graph = graph;
+    p.asset_root_only = true;
+    p.widening = false;
+    const auto prepared = [&](std::vector<Evaluation>& ev) {
+      Search s(s0, p);
+      (void)s.gather(1);  // the root alone, waiting for its evaluation
+      ev.resize(s.requests().size());
+      uniform->evaluate(s.requests(), ev);
+      return s;
+    };
+    long long total = 0;
+    std::uint64_t boosted = 0;
+    {
+      std::vector<Evaluation> ev;
+      Search s = prepared(ev);
+      REQUIRE_EQ(ev.size(), std::size_t{1});
+      total = allocations_of([&] { s.deliver(ev); });
+      boosted = s.stats().asset_boosted_edges;
+      REQUIRE(boosted > 0);
+      REQUIRE_EQ(boosted_root(s), boosted);
+    }
+    std::size_t faults = 0;
+    std::size_t off = 0;
+    for (long long k = 0; k < total; ++k) {
+      std::vector<Evaluation> ev;
+      Search s = prepared(ev);
+      faults += faulted(k, [&] { s.deliver(ev); }) ? 1u : 0u;
+      CHECK_NOTHROW(s.check_invariants());
+      if (s.stats().asset_boosted_edges != boosted_root(s)) ++off;
+      s.run(*uniform, Limits{4});
+      CHECK_NOTHROW(s.check_invariants());
+      if (s.stats().asset_boosted_edges != boosted_root(s)) ++off;
+    }
+    std::printf("  flat %s, the root steered alone: its expansion makes %lld allocations, %zu faults, %llu turns "
+                "boosted, %zu counts off the recount\n",
+                graph ? "graph" : "tree", total, faults, static_cast<unsigned long long>(boosted), off);
+    CHECK(faults > 0);
+    CHECK_EQ(off, std::size_t{0});
+  }
+}
+
 // ---- L9, L10: a root hook that throws, a failed re-root with the ladder on ----------------------
 
 TEST(mcts_fault_a_root_hook_that_throws_after_the_reroot) {
