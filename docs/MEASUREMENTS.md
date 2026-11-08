@@ -1636,3 +1636,38 @@ that mixed them per node would be a different search (the per-node-switch mutant
 dense pass is not a function of the position alone in its last bits (about 1e-6 here, with the batch
 or the grad mode), which is why the phase form's dense mode is the dense evaluator itself, batch for
 batch, and why §15.2's row is proposed reworded (edit 380).
+
+### Refresh and supersession inside a turn (C27) - the deferral's gaps (numerics; no threshold, no verdict)
+
+**What it is.** The figures behind section 15.2's C27 row as built (`python/tests/net/test_turn_refresh.py`,
+`python/tests/engine/test_cached_tree_form.py`; BUILD_LOG issues 267-271): how far the deferred
+recompute's evaluations are from their from-scratch references. Between the two arms - recompute
+at the next evaluated node and recompute at supersession - nothing is measured: they are bit for
+bit equal in every case (the entries are content-addressed and computed by one function).
+
+**Conditions.** 2026-11-09, machine `dev-r` (loaded: another lane's test suite ran beside these),
+PyTorch 2.13.0+cpu, Python 3.14.7, NumPy 2.5.2, 4 torch threads, the engine library built Release in
+`lane/net`; FP32, 2 layers, the v1 configuration under the block-causal scope, random weights at
+initialisation scale. Fixture: `test_cache.py`'s seven geometries, seeds 0-2, both C20 readings, the
+lineage and two-parent readings (and, for evaluations alone, the creation reading and current frozen
+features), causal, root-refresh and node-refresh epochs, paths of 9-15 moves with inner segments of
+1-4 nodes. Engine: every variant's random play to 12 boards (seeds 0 and 1), turn starts evaluated
+and, by marking, the present gate's state or half the mid-action states; the step API's tree form at
+two random-play roots (natural gates and none; 40 playouts; against the every-gate search's 160),
+causal, root refresh and C26's cached half; the flat form, 24 playouts.
+
+| Quantity | Largest | Bound |
+|---|---|---|
+| Fixture: an evaluated node against its reference, trunk (max abs) | 1.91e-6 | 2e-5 |
+| ... heads (value, WDL, policy) | 1.55e-6 | 1e-4 |
+| Real actions: an evaluated state against its reference, trunk | 1.79e-6 | 2e-5 |
+| ... heads | 1.43e-6 | 1e-4 |
+| The step API's tree and flat forms: a leaf against its reference (move, WDL, categorical logits) | 1.43e-6 | 1e-4 |
+| Deferred against eager, every evaluation and every shared entry | 0 (bitwise) | bitwise |
+
+*Read.* The deferred recompute costs nothing in accuracy: every gap is the cached path's own
+summation-order level (MT-04's figures), and the two arms never differ in a bit. What the deferral
+changes is when a board is computed - at the next evaluated node, once per board, perspective and
+epoch - and how many: a board superseded inside a turn and never read by an evaluated node (an
+eager entry the turn's next evaluated nodes do not read, as after the present moves under the
+current frozen features) is never computed.

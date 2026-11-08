@@ -102,6 +102,19 @@ refresh, and carried nodes keep the statistics their dense evaluations gave them
 N* is ``CacheConfig.phase_boards``, placeholder 50. The conditioning-offset hook (C3's training,
 parked) applies the same predicate to the conditioning root when it is built.
 
+**Inside a turn (C27, CHECKPOINT 9; sections 7.3's end and 7.9).** Under D2's tree form (section
+8.2) the network evaluates only some nodes - the root, turn starts and interaction points - and the
+inner submove nodes between them make no network call. Nothing here runs at an inner node: a board
+our submoves supersede there is computed when the network next runs, by the next evaluated node's
+``evaluate``, which computes every frozen board without an entry, in topological order, in that
+node's epoch. The deferral is exact by construction: an entry's key is its epoch's and a digest of
+the board with the acting player (A7) and of its past's digests; ``compute_board`` reads only the
+board's own tokens, its causal past's entries (its ancestry, closed under future moves - C23) and
+geometry in a frame centred on itself; and ``put`` never overwrites. So each entry - a board with
+its past, a perspective and an epoch - is computed once, at the first evaluated node that reads it,
+and shared below it: "once per board and epoch", per perspective (BUILD_LOG issue 267). The
+refresh triggers are checked only at evaluated nodes (``tree.py``).
+
 **Storage precision (C15, G1).** The cache stores frozen K/V in the network's own format,
 ``NetConfig.frozen_kv_format`` (``kvformat.py``): ``"match"`` (default) stores them exactly
 as the live computation produces them - BF16 under the BF16 trunk, FP32 under the FP32

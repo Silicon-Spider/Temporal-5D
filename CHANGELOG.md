@@ -10,6 +10,62 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-09 - C27: refresh and supersession inside a turn (section 15.2's C27 row)
+
+CHECKPOINT 9's ruling 2, C27's half: "C27 goes into the tree form's work for the cached flag -
+refresh triggers only at nodes the network evaluates, and a board our submoves supersede mid-turn is
+recomputed when the network next runs, once per board and epoch":
+- **Which nodes the engine evaluates** (read, nothing changed): under the ply split every expanded
+  node; under the tree form the root, turn starts, gated mid-turn nodes and a carried inherited
+  root, every other mid-turn node expanded by `inherit()` on the last evaluated node's logits without
+  reaching the caller; under the flat form every node, a turn start. The engine has one epoch per
+  search and no node refresh (issue 271).
+- **The fixture's tree form** (`net/tree.py`). `SearchTree(evaluates=...)` takes the gate decision for
+  each new node; a node it declines is `inner` (`Node.inner`; the root never is; `evaluates` None: every
+  node evaluated, as before). An inner node is never evaluated or refreshed (both refused) and no
+  trigger is checked at it. Rung 1 at an evaluated node reads a branching travel move anywhere on its
+  segment since the nearest evaluated node (`segment_branched` - per path, issue 268); C24's travel
+  counts inner travel (unchanged code: inner nodes never refresh) and its effort is the nearest
+  evaluated ancestor's (`evaluated_ancestor` - issue 269); a refresh forks inner descendants with the
+  rest.
+- **The deferred recompute** is the cached path's own, exact by construction (docstrings in
+  `net/cache.py` and `net/complexity.py`; no code): a board an inner move supersedes is computed by
+  the next evaluated node's `evaluate`, which computes every frozen board without an entry, in that
+  node's epoch - once per board, with its past and its perspective (A7; issue 267), and epoch.
+- **Section 15.2's row**: on the fixture (`python/tests/net/test_turn_refresh.py`, T6) the deferred
+  arm against recompute at supersession (every frozen board of an inner node's position computed
+  there, from both colours' sides): every evaluated node bit for bit alike, the deferred entries the
+  eager ones tensor for tensor, every evaluated node its reference (largest gaps 1.91e-6 on the trunk, 1.55e-6 on the heads), and the
+  deferral non-vacuous in every case - every geometry, both C20 readings, the lineage and two-parent
+  readings, causal, root and node epochs (supersession inside a refreshed subtree), three markings,
+  the present moving and a timeline woken inside inner segments; evaluations alone under the creation
+  reading and current frozen features; slow, the rest of seeds 0-2 and BF16/FP8. T7: once per board
+  and epoch. The triggers only at evaluated nodes, and with every node evaluated the fixture as it
+  was (C24's simulation unchanged). On engine positions (`python/tests/engine/test_cached_tree_form.py`):
+  the same two arms on every engine variant's random play (T8: turn starts evaluated, by marking also
+  the present gate's state or half the mid-action states; non-vacuous in 31 of 32 cases, the 32nd has
+  no action of two moves; largest gaps 1.79e-6 and 1.43e-6); the step API's tree form (T9: natural gates and none;
+  causal, root refresh and the phase form's cached half - every leaf its reference, within 1.43e-6; with no
+  gates a turn start computes boards its turn's inner moves superseded; every leaf the every-gate
+  search also meets bit for bit alike, turn starts among them); the flat form's leaves turn starts
+  offering no submit, nothing inherited (T10).
+
+Checks: ruff "All checks passed!", "117 files already formatted"; with `T5D_REQUIRE_ENGINE=1`, the
+two new modules, slow tests included, "93 passed in 1453.13s" (per commit alone: the fixture's "28
+passed, 22 deselected in 470.96s", the engine's "24 passed, 19 deselected in 259.72s"); `test_tree`,
+`test_complexity`, `test_cache`, `test_fork_protocol`, the phase form's fixture module and
+`test_turn_refresh` "167 passed, 23 deselected in 1060.69s" (a loaded machine). The default path bit for
+bit: the scratch probe's 69 cases identical at issue 259's commit and here. Mutants killed: triggers
+at inner nodes (rung 1, and C24's `complexity_due` called directly - a check added for it), rung 1
+reading only the incoming move, the effort signal taken from an inner parent, a fork that skips inner
+descendants (T6's node epoch, T7), a node evaluated in its epoch lineage's root epoch; a frozen
+board's digest without its past survives T6 (one path never holds two pasts of one board) and is
+killed by `test_cache`'s origin test. `harness.py verify` as before.
+
+Spec: §7.3's end, §7.9 "Inside a turn", §8.2 and §15.2's C27 row; register C3a, C20, C24, C27, D2, A7
+(spec issue 303); issues 267-270 (268 and 269 for the user); proposed edits 383 (once per board,
+perspective and epoch) and 384 (the triggers under the tree and flat forms).
+
 ### 2026-11-09 - C26: the phase form in the cached path, behind its flag (section 15.2's C26 row)
 
 CHECKPOINT 9's ruling 2 (low priority, `lane/net` after A5): "in the cached path behind its flag, a

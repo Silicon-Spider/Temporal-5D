@@ -1830,7 +1830,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | C3, C3a (rung 1) | built, tested | Root refresh and the travel-triggered, visit-gated rung-1 fork (copy-on-write epochs), behind flags. C3's conditioning-offset training hook is parked with the deferred cached configuration ("Parked", below) |
 | C3a (rungs 2-3), C18, C22 | not built (rule) | Held open (M5 for rungs 2-3) |
 | C26 | built behind its flag (the cached path), tested; not adopted | CHECKPOINT 9 - Committed if C2 adopts the cache: the phase form, built in the cached path behind `CacheConfig.phase_form` (off; `lane/net`, 2026-11-08): `CacheConfig.mode` is the one predicate (dense when the root's board count is under N\* = `phase_boards`, placeholder 50 = `token_counts.N_STAR`); `root_epoch` applies it to the search root - under N\* the evaluator's one dense epoch (no anchor, history or store; its engine number hash("dense"), shared below N\*, never 0), at or above it the root refresh, which the phase form requires (issue 260); `CachedNetworkEvaluator` hands a dense epoch's batches to the dense evaluator itself, so a search rooted under N\* is the dense search bit for bit (issue 262). Section 15.2's row green through the C step API (`tests/engine/test_phase_form.py`, `tests/net/test_phase_form.py`): every split, the cache on and off, a per-node-switch mutant killed, the boundary, one evaluator and one shared cache across the crossing, a carried search and whole games crossing it. Issue 259's anchor fix first. The conditioning-offset hook stays parked with C3; when built, it applies `CacheConfig.mode` to the conditioning root. Issues 259-266, 272-275; edits 380-382 |
-| C27 | not built (planned, low priority) | CHECKPOINT 9 - Committed if C2 adopts the cache: refresh inside a turn (the ladder's triggers only at nodes the network evaluates; a board our submoves supersede mid-turn recomputed when the network next runs, once per board and epoch), with its new section 15.2 row - in the cached path behind its flag (`lane/net`, after C26) |
+| C27 | built behind the fixture's tree form (the cached path), tested; not adopted | CHECKPOINT 9 - Committed if C2 adopts the cache: refresh inside a turn, built in the search-tree fixture (`net/tree.py`, `lane/net`, 2026-11-09): `SearchTree(evaluates=...)` marks the tree form's inner submove nodes (`Node.inner`) - never evaluated or refreshed, no trigger checked at them; rung 1 at an evaluated node reads its whole segment since the nearest evaluated node (`segment_branched`, per path - issue 268); C24's travel counts inner travel and its effort is the nearest evaluated ancestor's (issue 269). The deferred recompute is the cached path's own: a board an inner move supersedes is computed when the network next runs, once per board, perspective and epoch (issue 267) - exact by construction (content-addressed entries under the state-defined mask), and section 15.2's row green against recompute at supersession on the fixture (every geometry, both C20 readings, the lineage and two-parent readings, causal, root and node epochs) and on real actions of every engine variant, and through the step API's tree form (every leaf its reference; bitwise against the every-gate search's leaves). The engine's search has no ladder (issue 271), so the triggers run only in the fixture. Issues 267-271; edits 383-384 |
 | C5, C7 | not built (rule) | The window: killed, provisionally (M16, CHECKPOINT 5); re-checked by the pilot self-play run (M18) |
 | C6 | step 1 done | The \|E\| curve measured (M7); the head-to-head is Ablation 1, halted with the window until the pilot run (M18) |
 | C8 | honoured | C24's add-only rule (and rung 1's) - refreshes are only ever added |
@@ -2002,7 +2002,7 @@ The protocol (section 15.2) asks for:
 | 4 | Supersession recompute = from scratch | C20 | green | - |
 | 5 | A refresh fork leaves sibling subtrees unchanged | C3a | green, short | No refresh fork on an engine variant, a 3x3, 4x4, 6x6 or 7x7 board, or a T0 board; a root-refreshed parent on one seed only |
 | 6 | Phase form: under N\* node for node dense; at or above it every node cached | C26 | green on `lane/net` (2026-11-08; C26 behind its flag) | - (on main once merged) |
-| 7 | Tree form, cached: supersession recompute at the next evaluated node = recompute at supersession | C27 | waiting (low priority) | The same, with the tree form's cached work |
+| 7 | Tree form, cached: supersession recompute at the next evaluated node = recompute at supersession | C27 | green on `lane/net` (2026-11-09; C27 in the fixture's tree form) | - (on main once merged) |
 | 8 | Same state + epoch -> same evaluation; MCGS transposition hits identical | C19-C21 | green | - |
 | 9 | Incremental Zobrist = from scratch, duplicated boards | H18 | green (short of every variant before the audit's test) | - |
 | 10 | ~~NNUE accumulator = recompute~~ | F4 | void: the NNUE is retired (CHECKPOINT 9) | - |
@@ -2017,13 +2017,13 @@ The protocol (section 15.2) asks for:
 | 19 | Turn-state counts = a brute-force recount | A6 | green (short of every variant before the audit's test) | - |
 
 **Count.** 19 rows:
-- green: 14 rows (1, 4, 5, 8, 9 and 11-19), and row 6 on `lane/net` (2026-11-08). Of these, five
-  are short of the protocol as named:
+- green: 14 rows (1, 4, 5, 8, 9 and 11-19), and rows 6 and 7 on `lane/net` (2026-11-08/09). Of
+  these, five are short of the protocol as named:
   1, 5, 11, 15 and 16. That count holds once `lane/audit`'s tests (4a1c753) are merged; on main
   today rows 9, 17 and 19 are short as well, giving 1, 5, 9, 11, 15, 16, 17 and 19.
 - deferred: 2 rows (2, 3).
 - void: 1 row (10).
-- waiting: 2 rows (6, 7) - row 6 built on `lane/net` since. Both are low priority by the user's
+- waiting: 2 rows (6, 7) - both built on `lane/net` since. Both are low priority by the user's
   CHECKPOINT 9 brief, and both
   committed only if C2 adopts the cache (issue 536).
 
@@ -2110,9 +2110,23 @@ The protocol (section 15.2) asks for:
      nodes at N\* or above included; nothing refreshes) and at N\* (the cached path's, rung 1 as
      before).
    C26 is class C in the register. Issues 259-266, 272-275.
-7. **Refresh inside a turn (C27)**: not built (main and every lane, 2026-11-08). Plan (CHECKPOINT 9
-   brief): low priority, in the cached path behind its flag, `lane/net` after C26; the engine side
-   if the tree form needs it. C27 is class R in the register.
+7. **Refresh inside a turn (C27).** Built on `lane/net` (2026-11-09), with the row's tests:
+   - on the search-tree fixture, `python/tests/net/test_turn_refresh.py`: the deferred arm (nothing at
+     an inner node) against recompute at supersession (every frozen board of an inner node's position
+     computed there, both colours' sides) - every evaluated node bit for bit alike and the reference,
+     the deferred entries the eager ones tensor for tensor, the deferral non-vacuous in every case;
+     every geometry x seeds 0-1 (2 slow) x both C20 readings x the lineage and two-parent readings x
+     causal, root-refresh and node-refresh epochs (supersession inside a refreshed subtree), three
+     markings of the inner nodes, the present moving and a timeline woken inside inner segments;
+     evaluations alone under the creation reading and current frozen features; once per board and
+     epoch (T7); the triggers only at evaluated nodes;
+   - on real engine positions, `python/tests/engine/test_cached_tree_form.py`: the same two arms on
+     every engine variant's random play (turn starts evaluated, by marking also the present gate's
+     state or half the mid-action states), and through the step API's tree form (natural gates and
+     none; causal, root refresh and the phase form's cached half) - every leaf its reference, and the
+     leaves the every-gate search also meets bit for bit alike; the flat form's leaves turn starts.
+   The engine's search has no refresh ladder (issue 271): the triggers are the fixture's. C27 is
+   class R in the register. Issues 267-271.
 8. **Evaluation purity (C19-C21).**
    - Python, `test_cache.py`: `test_same_state_and_epoch_same_evaluation` (causal and
      root-refresh), `test_different_epochs_evaluate_differently`,
@@ -5030,6 +5044,34 @@ superseded or made moot says so; nothing is deleted.
     refuses A5 before anything else (issue 252), the phase form on or off, so A5 and C26 cannot run
     together; MEASUREMENTS' A5-under-C26 figures (the cached node 2.11x at or above N\*) assume an
     A5 cached network that issue 252 refuses. Unchanged; for the user with issue 252.
+267. **"Once per board and epoch" is per board with its past, its perspective and its epoch** (§7.3's
+    end, §7.9; register C20, C27; spec issue 303). *C27 built behind the fixture's tree form
+    (2026-11-09).* The cached path keys an entry by (epoch, digest), the digest covering the board,
+    the acting colour (A7: frozen boards are encoded from the acting side) and its causal past's
+    digests. So a board superseded inside a turn is computed once per perspective that reads it -
+    twice when the turn's next evaluated nodes act for both colours, as after the present moves -
+    and under `frozen_features="current"` once per status it is read under (the present's moves
+    change its input). Built so (it is the store's rule; nothing new was needed); tested (T7). Edit
+    383 words the rule so.
+268. **Rung 1 per path below an inner branching jump** (§7.9; register C3a, C27). C27: "A travel move
+    made at an inner node counts toward the next evaluated node". Built: rung 1 fires at an evaluated
+    node whose segment - the moves since its nearest evaluated ancestor, the move into it included -
+    holds a move that created a timeline (`tree.segment_branched`), so several evaluated nodes below
+    one inner branching jump (siblings, or a line's next evaluated nodes on different paths) each
+    refresh at their own V-th visit: one unbudgeted rung-1 fork per path. The other reading - the
+    jump counts once, toward the first evaluated node only - would need rung 1 to remember which
+    jumps it has fired for, which makes it C24's travel signal. For the user if 6c's rung-1 sub-arm
+    runs under the tree form. Edit 384.
+269. **C24's effort signal under an inner parent** (§7.9 "Complexity as a trigger"; register C24,
+    C27; issue 78). C24's effort signal is "the parent's outputs"; under the tree form an inner
+    parent has none. Built: the nearest evaluated ancestor's predicted difficulty - the evaluation
+    whose logits the inner nodes inherited (`tree.evaluated_ancestor`). This departs from issue 78's
+    "an unevaluated parent contributes nothing" (which would give None under every inner parent);
+    add-only either way. For the user with issue 268. Edit 384.
+270. **C27 does not name the flat form** (§7.9, §8.2; register C27, D2). Under the flat form every
+    node is a turn start and every node is evaluated, and a turn's travel lies on the edge into the
+    child, so rung 1 and C24 read it there, as under the ply split. Nothing to build (tested: T10,
+    every flat leaf a turn start); edit 384 says so.
 272. **Dead epochs' entries in the engine's evaluation cache** (§8.7; register C14, C26). When a game
     crosses N\* - and at every root refresh - the previous epoch's entries are never served again,
     but they are purged only by board count (`EvalCache::purge_fewer_boards`, at a search's start
@@ -8520,6 +8562,24 @@ struck through, where nothing of it is left to apply); the others stand as writt
     equal wall-clock ... placeholder 50". Proposed - add: "N\* belongs to the evaluator until
     conditioning-offset training exists; from then it is pinned with the network - the training
     mask's N\* is the deployment's (§7.7)". Why: issue 263.
+
+383. **§7.3's end, §7.9 "Inside a turn", register C20 and C27 ("once per board and epoch")**: now -
+    §7.3: "the recompute waits for the next node the network evaluates ... and is done once per board
+    and epoch"; §7.9: "recomputed (§7.3) when the network next runs, once per board and epoch"; C20
+    and C27 the same. Proposed - "once per board - with its causal past and the acting colour's
+    perspective (A7) - and epoch". Why: issue 267 - the cached path's entries are per perspective
+    (spec issue 303), so a board superseded inside a turn is computed once for each colour whose
+    next evaluated node reads it.
+
+384. **§7.9 "Inside a turn", register C3a and C24 (the triggers under the tree form and the flat
+    form)**: now - "The ladder's triggers - rung 1 and the complexity trigger - are checked only at
+    nodes the network evaluates ... A travel move made at an inner node counts toward the next
+    evaluated node". Proposed - add: "Rung 1 reads a branching travel move anywhere on the segment
+    since the nearest evaluated node, per path: each evaluated node below an inner branching jump is
+    eligible at its own visit gate. The complexity trigger's 'parent's outputs' are the nearest
+    evaluated ancestor's. The flat form evaluates every node, so the ladder runs per node there and a
+    turn's travel counts on the edge into its node." Why: issues 268, 269 and 270 - three readings
+    the build had to choose, each named for the user.
 
 <!-- A new list, so that the numbers from 400 render as written. -->
 
