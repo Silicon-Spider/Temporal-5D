@@ -432,8 +432,7 @@ TEST(mcts_root_noise_survives_an_allocation_failure_in_the_roots_expansion) {
   // expanded afresh. Before, the flag saying it was drawn was set with the
   // draw, so the root was expanded again without noise for the rest of the
   // search (issue 600). Every allocation of the root's first expansion (the
-  // first batch's deliver; the flat form's generator and first pull, past
-  // their first 400, at a stride).
+  // first batch's deliver: the flat form's generator and first pull too).
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
   for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
     SearchParams p = without_ladder(quick());
@@ -454,7 +453,7 @@ TEST(mcts_root_noise_survives_an_allocation_failure_in_the_roots_expansion) {
       total = allocations_of([&] { s.deliver(ev); });
     }
     std::size_t faults = 0;
-    for (long long k = 0; k < total; k += k < 400 ? 1 : 17) {
+    for (long long k = 0; k < total; ++k) {
       Search s(root, p);
       const std::vector<Evaluation> ev = first_batch(s);
       faults += faulted(k, [&] { s.deliver(ev); }) ? 1u : 0u;
