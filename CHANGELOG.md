@@ -10,9 +10,29 @@ the spec describes the change.
 
 ## Unreleased
 
-### 2026-11-09 - Merge main (05afde5) into lane/net, after the C26/C27 work
+### 2026-11-17 - Cited commit ids follow the history rewrite of 2026-11-16
 
-Main's three commits since the lane took it (e15f173): the network job's Linux-only failures (issue
+On 2026-11-16 the user had the history of `main` and of every lane rewritten and pushed again, so
+every commit of this repository has a new id. No commit's files, dates or message text changed
+(ids cited inside commit messages were updated in the same pass). The documents went on citing
+the old ids. Each id of this repository cited in `CHANGELOG.md`, `docs/BUILD_LOG.md`,
+`docs/MEASUREMENTS.md` and `engine/README.md` is now the new id of the same commit, at the length
+it was written with; nothing else in those files changes. The same edit is made, with this entry,
+on `main` and on each lane that holds work `main` lacks, once it is free of uncommitted work; a
+lane with nothing of its own takes it from `main`.
+
+Still the old ids: those in code and test comments (`engine/tests/`, `python/tests/`,
+`oracles/tests/test_lineage.py`), and the engine id recorded in `engine/testdata/hunt-truth/`,
+which is a pinned recording and is not edited by hand (that commit is now `b1d0ca9`). Ids of the
+upstream design documents and of the oracles' pins belong to other repositories and are
+untouched. The rewrite was the user's own decision; the brief's rule against rewriting pushed
+history stands.
+
+Spec: none - commit ids cited in documents; no part of the spec describes it.
+
+### 2026-11-09 - Merge main (faaa64e) into lane/net, after the C26/C27 work
+
+Main's three commits since the lane took it (d6cbdb7): the network job's Linux-only failures (issue
 602: t5d-audit built, two tolerances fitted - `test_params.py`, `test_quant.py`) and the upstream
 drafts for three oracle notation-reader gaps (issue 579). Two conflicts, both sides kept: CHANGELOG
 by heading, main's entries first, then the lane's; BUILD_LOG's session log, main's entry first. No
@@ -26,7 +46,7 @@ Spec: no part of the spec describes a merge (the merged entries carry their own 
 ### 2026-11-09 - The network job's three Linux-only failures: t5d-audit built, two tolerances fitted to what they measure
 
 Once sharded (issue 601), the network job ran its whole suite on Linux. It failed the same three
-tests on every run (42469920087 on c8a9c49, 42473372690 on 9bc10fc, 42476803590 on e15f173), and
+tests on every run (42469920087 on 03eca7a, 42473372690 on 7f79f9b, 42476803590 on d6cbdb7), and
 none of them fails on the development machine (issue 602):
 
 - **`tests/engine/test_decision_log.py`** needs `t5d-audit` beside the library, and the job built
@@ -117,8 +137,8 @@ forbids reporting).
 ### 2026-11-09 - C26/C27: the default path, bit for bit - evidence (no code)
 
 Commit 4 of the C26/C27 work (`lane/net`): no file of code changes. A scratch probe (not committed)
-recorded per-case hashes of 93 cases at three trees - main e15f173, issue 259's commit 46f94ad and the
-lane's head f852ef3 (C26, C27, issue 271) - with the engine library unchanged between them:
+recorded per-case hashes of 93 cases at three trees - main d6cbdb7, issue 259's commit 99b81b1 and the
+lane's head 0f934d7 (C26, C27, issue 271) - with the engine library unchanged between them:
 - the cached path's every output (every `NetOutput` field, bit for bit) along `test_cache.py`'s random
   paths on its seven geometries x both C20 readings x the causal, root-refresh and node-refresh epochs
   (42 cases);
@@ -332,7 +352,7 @@ register C3; issue 259. No part of the spec names the anchor's expansion: no edi
 
 ### 2026-11-08 - Kairos round 2 review fixes: the lineage table fails closed and its wiring is tested; what of Kairos is ftxi's, corrected
 
-The review of 28a102b..203fabd (2026-11-02: no HIGH, 1 MEDIUM, 12 LOW, 5 refuted), every finding
+The review of 01ebbe5..c9d051f (2026-11-02: no HIGH, 1 MEDIUM, 12 LOW, 5 refuted), every finding
 fixed or, for L12, put to the user (`docs/BUILD_LOG.md`, issues 577 and 578):
 - **The lineage table fails closed (M1, as the main loop decided).** `gate.engine_differential`
   requires `lineages` - no default that would count every implementation apart - and refuses a table
@@ -345,7 +365,7 @@ fixed or, for L12, put to the user (`docs/BUILD_LOG.md`, issues 577 and 578):
   followed by a lineage named with its members (L1); a parse-only source's printed answers settle
   nothing, while its boards still count and its recorded divergences are still looked at (L11). New
   tests: the members a label names (L6), the lock file's three untested lineage checks (L8), the
-  eight combinations against frozen values from 28a102b's gate (L9), one primary source per
+  eight combinations against frozen values from 01ebbe5's gate (L9), one primary source per
   implementation (L5).
 - **What reading the pins found, corrected (L2, L3).** Kairos's exhaustive enumerator and its check
   test's pass set are ftxi's code translated - the pass set from ftxi's later commit f66c4ee - so its
@@ -365,14 +385,14 @@ fixed or, for L12, put to the user (`docs/BUILD_LOG.md`, issues 577 and 578):
   `kairos:parse` kept (once `judges_actions` and the divergence rule are changed) - in
   `adapters/__init__.py`, `oracles/README.md` and issue 530. The comments that grouped its replay with
   "any move it can place" corrected, and its two stages attributed to CHECKPOINT 9's brief, not H52 (in
-  the adapter, the driver, a test's docstring and this file's entry for 203fabd).
+  the adapter, the driver, a test's docstring and this file's entry for c9d051f).
 - **Wording (L9, L10).** "Lineages" in `Gated.oracles`' comment, the gate's docstring and the README's
-  gated summary; "every verdict and ungated reason" in issue 573 and this file's entry for 0435199; the
+  gated summary; "every verdict and ungated reason" in issue 573 and this file's entry for 6b4f2d3; the
   H47 row's built date (2026-11-02).
 - The Kairos driver's header comments changed with them, so Kairos was rebuilt (no golden file hashes
   its driver). The review's mutation survivors re-run on the fixed tree with its runner: G03, G16,
   G18, G19, L01, L02 and L08 killed; R06 survives, equivalent as the review judged it (no test added);
-  six more mutants of the fixed lines, all killed. Main merged first (73a048f).
+  six more mutants of the fixed lines, all killed. Main merged first (54c7658).
 
 Spec: register H47, H52, H26, H37, H32; §11.0 ("Tiered CI", "Kairos, the fourth oracle", its table
 row) - proposed edit 401 (what of Kairos is its own), edit 400's Chess in 5D clause aligned; issues
@@ -472,7 +492,7 @@ reading, which was never committed:
 - **The four existing oracles gate as before:** each is its own lineage; the tests give every
   verdict and ungated reason as before - the gated summary says "oracle lineages" (reworded after
   the review of 2026-11-02: this said "every verdict and message", and its test compared the gate
-  with itself; it now holds the values 28a102b gave) - and the nightly tier with the table on and
+  with itself; it now holds the values 01ebbe5 gave) - and the nightly tier with the table on and
   Kairos absent gates exactly Standard - Half Reflected and Standard - Reversed Royalty.
 - `CONTRIBUTING.md`'s "Changing a pin" adds reading the NOTICE, credits and code and updating the
   lineage; `oracles/README.md`'s gating conditions say lineages.
@@ -557,7 +577,7 @@ test docstring only.
 
 `docs/BUILD_LOG.md` gains a new section, "Done-means audit (2026-10-24; finished
 2026-11-02)", after "Parked, and why". It is the gate lane's step-2 audit, checked against
-main 28a102b's code and design documents (CHECKPOINT 9's rows and CHECKPOINT 10's ruling
+main 01ebbe5's code and design documents (CHECKPOINT 9's rows and CHECKPOINT 10's ruling
 included). It holds:
 
 - **Section 15.2, row by row:** the tests that establish each row, what they assert, at what
@@ -632,7 +652,7 @@ of each test's id, and `lane/fix535` found a module whose last case checks what 
 recorded (`tests/engine/test_flat_head.py::test_some_case_leaves_a_board`, issue 601) - split
 across shards it failed, or was skipped and checked nothing. Files now go to shards greedily by
 test count, largest first, ties by path, so every job that collects the same files computes the
-same split. Checked on the suite at main dbf9be8: 1,976 tests as 494 / 494 / 495 / 493 in 13 /
+same split. Checked on the suite at main f668b3e: 1,976 tests as 494 / 494 / 495 / 493 in 13 /
 13 / 14 / 14 files, no file in two shards, union equal to the whole. Unset, every test runs, as
 before.
 
@@ -646,7 +666,7 @@ evaluation identity added an `unsigned long long` literal to a `std::uint64_t` c
 signed move count. On Linux `std::uint64_t` is `unsigned long`, and g++ 13 and 14 report the
 promotion under `-Wsign-conversion`, an error under `--werror`; MinGW's `std::uint64_t` is
 `unsigned long long`, so the local builds never saw it. The line came in with A6
-(7bccea6, 2026-10-17), while CI was down. The constant is now a `std::uint64_t`, so the sum
+(94f64b8, 2026-10-17), while CI was down. The constant is now a `std::uint64_t`, so the sum
 stays in one type; the identity's value is unchanged bit for bit (the same sum modulo
 2^64), so no MCGS table, cache key or test moves. With the library building, CI's test build
 showed the same promotion twice more - `engine/tests/test_capi_search.cpp:148` and
@@ -660,10 +680,10 @@ Spec: none - a portability fix; no part of the spec describes it.
 
 ### 2026-11-02 - A5 review fixes: the figures re-weighed under CHECKPOINT 9's phase form, no 2x flag left standing; the token set held exact; the survivors killed
 
-Two reviews of A5 (`fd83390`, `f89c79f`, `72e5f96`: one of spec and correctness with probes, one a
+Two reviews of A5 (`5fbeedf`, `bf49a6d`, `6670d9e`: one of spec and correctness with probes, one a
 mutation pass - 48 mutants, 32 killed, 1 equivalent, 15 survivors, no behavioural bug), the main
-loop's decisions binding. Written on 2026-10-24 after main `7483103` was merged in, stopped there by
-the account's usage limit, and committed on 2026-11-02 after main `1c085ac` and `28a102b` were
+loop's decisions binding. Written on 2026-10-24 after main `b73d073` was merged in, stopped there by
+the account's usage limit, and committed on 2026-11-02 after main `cb72413` and `01ebbe5` were
 merged in too (the three entries below).
 
 - **The measurements against CHECKPOINT 9** (`engine/token_counts.py`; `docs/MEASUREMENTS.md`, "A5"
@@ -683,7 +703,7 @@ merged in too (the three entries below).
   withdrawn. The measured figures' conditions now say action starts only (the ply split's
   mid-action leaves and deeper nodes not measured); the JSON lines carry each position's decisions
   (written once every record is read), so every pooled figure can be re-computed from them; the
-  tool's commit corrected (`72e5f96`, where `token_counts.py` first exists).
+  tool's commit corrected (`6670d9e`, where `token_counts.py` first exists).
 - **The token set held exact** (`net/state.py`). Validation required the mask to cover the occupied
   cells only, and the conversion kept a piece-centric input's cells by union, so an A5 state whose
   moves were cut kept stale destination tokens (the review's probe: 224 tokens against a fresh 197).
@@ -735,7 +755,7 @@ merged in too (the three entries below).
   `test_the_layout_follows_the_mask`, `test_the_bench_takes_piece_centric`).
 - **Checks** (the engine DLL built: "ninja: no work to do."): ruff "All checks passed!" and "111
   files already formatted"; the whole pytest suite with `T5D_REQUIRE_ENGINE=1` in two workers on the
-  fixed tree after main `1c085ac` was merged (`28a102b` brought documents only) - `tests/engine`
+  fixed tree after main `cb72413` was merged (`01ebbe5` brought documents only) - `tests/engine`
   "344 passed, 1 skipped in 791.24s (0:13:11)", `tests/net` and `tests/train` "1589 passed in
   5445.70s (1:30:45)" (a loaded machine); `verify` every check ok but `pins` and the boundary's copy
   check, both "kairos is not checked out" in this worktree - not synced, since `harness.py sync`
@@ -751,9 +771,9 @@ proposed edits 196 (amended), 197 and 198 (rewritten), 199 (new: §7.10's N\* un
 the "A5" section and its section 15.3 row (the phase form; the 2x verdicts re-stated; the conditions;
 the commit).
 
-### 2026-11-02 - main (28a102b) merged into lane/net: the CHECKPOINT 10 design documents and their plan
+### 2026-11-02 - main (01ebbe5) merged into lane/net: the CHECKPOINT 10 design documents and their plan
 
-Main since `1c085ac` (the CHECKPOINT 10 design documents from upstream - the user's ruling that ftxi
+Main since `cb72413` (the CHECKPOINT 10 design documents from upstream - the user's ruling that ftxi
 and Kairos are one lineage for H47's two-oracle bar - and the build log's plan for it) merged into
 `lane/net` (M23: merged, never rebased) before A5's review fixes are committed. Documents only:
 nothing under `python/`, `engine/` or `oracles/` changed, and nothing in it touches A5, C26 or G10.
@@ -763,9 +783,9 @@ state" main's).
 Spec: no part of the spec describes the merge itself; the merged change's entries name theirs. No
 edit proposed.
 
-### 2026-11-01 - main (1c085ac) merged into lane/net: A5's lane beside Kairos and CHECKPOINT 9's brief
+### 2026-11-01 - main (cb72413) merged into lane/net: A5's lane beside Kairos and CHECKPOINT 9's brief
 
-Main since `7483103` (Kairos pinned and wired as two pending sources, H52, with its review fixes;
+Main since `b73d073` (Kairos pinned and wired as two pending sources, H52, with its review fixes;
 CHECKPOINT 9's brief read into the build log) merged into `lane/net` (M23: merged, never rebased)
 before A5's review fixes are committed. No code conflict: main changed nothing under `python/` or
 `engine/`. CHANGELOG: main's entries, the lane's four entries (the first merge and A5's three) on
@@ -781,9 +801,9 @@ changed (the review fixes' commit runs it whole).
 Spec: no part of the spec describes the merge itself; the merged changes' entries name theirs. No
 edit proposed.
 
-### 2026-10-24 - main (7483103) merged into lane/net: A5 beside G9, CHECKPOINT 9 and E10
+### 2026-10-24 - main (b73d073) merged into lane/net: A5 beside G9, CHECKPOINT 9 and E10
 
-Main since `0e37093` (G9's bounded AMD attempt, the upstream design documents with CHECKPOINT 9,
+Main since `40a1f1c` (G9's bounded AMD attempt, the upstream design documents with CHECKPOINT 9,
 the build log's CHECKPOINT 9 plan, E10's verification v3 in the search and H44's audit-lane
 tooling) merged into `lane/net` (M23: merged, never rebased) before A5's review fixes. One code
 conflict, `python/t5d/engine/netplay.py`'s arguments: the lane's `--piece-centric` and E10's
@@ -844,14 +864,14 @@ binding only; no training run.
   together; A8; the block-causal scope; no registers) on synthetic and engine positions, the training
   rows' batch and targets (an engine game's, square labels included, and synthetic ones), the board
   permutation, mirror and relayout outputs, `mirror_tokens`, the engine scope's tokens and the
-  evaluator's evaluations - identical between `0e37093` (main) and this commit; the 437th, the smoke
-  run's losses, differs between two runs at `0e37093` too (autograd's CPU
+  evaluator's evaluations - identical between `40a1f1c` (main) and this commit; the 437th, the smoke
+  run's losses, differs between two runs at `40a1f1c` too (autograd's CPU
   reductions are not deterministic). The parameter fingerprints (`tests/net/test_params.py`) pass.
 
 Spec: §9.1, §13.1, §14.4, §15.3; register A5, M4, M16, M18, M19, M24. BUILD_LOG: register row A5;
 spec issues 255-257; proposed edits 197 (a §15.3 row), 198 (§14.4's figures written back, objections
 (2) and (3)). MEASUREMENTS: the §15.3 table's A5 row and the "A5" section (Review correction,
-2026-10-24: the engine there is main `0e37093` with this commit's tool, `72e5f96` - not `f89c79f`).
+2026-10-24: the engine there is main `40a1f1c` with this commit's tool, `6670d9e` - not `bf49a6d`).
 
 ### 2026-10-23 - A5's plumbing: the evaluator and the training rows convert at the network's edge; games end to end; purity
 
@@ -960,7 +980,7 @@ annotated; the waiting list, "Current state", step 2's order and the H23, H26, H
 rows brought in line; CHECKPOINT 9's interim "one implementation" reading marked superseded.
 No code changed.
 
-Spec: none edited here. The ruling as written upstream (b5a33e4) - §11.0, §12.6; register
+Spec: none edited here. The ruling as written upstream (027082b) - §11.0, §12.6; register
 H23, H26, H34, H47, H52, reversal 33 - is the plan's; nothing is proposed.
 
 ### 2026-11-01 - Design documents: the CHECKPOINT 10 ruling, from upstream - ftxi and Kairos one lineage for the two-oracle bar
@@ -986,8 +1006,8 @@ Kairos answers and ftxi does not). Edited upstream; nothing proposed here.
 The user's CHECKPOINT 9 brief reached the main loop on 2026-11-01, after the build had
 stopped at the account's usage limit on 2026-10-24. `docs/BUILD_LOG.md`'s "CHECKPOINT 9"
 section now carries the brief's rulings and what the build does with each: the design
-documents had already reached main as the user's own commits (7ed03a8..74c1ab9, merged in
-765c5b6, identical to the working tree), so no separate commit was made; the register-status
+documents had already reached main as the user's own commits (193fa91..644a1ea, merged in
+c22c87a, identical to the working tree), so no separate commit was made; the register-status
 rows of the retired NNUE (H6-H9, H20, F4; 6d and 6q void) relabelled; rows for G10 and for
 C26/C27 (low priority, in the cached path behind its flag, after each lane's current order;
 the conditioning-offset hook parked with C3, applying C26's rule when built); I7's and M18's
@@ -1138,9 +1158,9 @@ confirmed: the count from the exhaustive enumerator, the driver route, the parti
 independence from ftxi) and 363 (the opponent role and the boundary); issues 524-534 (533:
 the smoke run's results; 534: the instruction files' "three oracles", the user's).
 
-### 2026-10-23 - main (62ff24d) merged into lane/search: E10's replica prior read by the flat form's per-board pruning
+### 2026-10-23 - main (529098d) merged into lane/search: E10's replica prior read by the flat form's per-board pruning
 
-Main since 88d2007 (A8, engine ABI round 3, D2's flat head and the flat form's policy target with
+Main since 2b752ba (A8, engine ABI round 3, D2's flat head and the flat form's policy target with
 records version 2, MT-04) merged into `lane/search` (M23: merged, never rebased). Two code
 conflicts, each resolved so both sides' behaviour survives:
 
@@ -1180,7 +1200,7 @@ option's prior is its turns' unsteered priors, E10's replica prior). No new issu
 
 ### 2026-10-23 - E10 review fixes: self-play without the asset map until I2's steered visits are validated, the additive boost monotone and capped, a donor search no longer takes its successor's verdicts, Hunt not asked where the root's settling scan asks its question, every "only confirmed proofs enter" gate tested with a certificate E4 rejects
 
-Two reviews of E10 (`lane/search` 62d4310 and 2931ffa): reviewer A on the spec, the proof channel
+Two reviews of E10 (`lane/search` 1de7b46 and f0b8e22): reviewer A on the spec, the proof channel
 and the concurrency (probes); reviewer B by 52 mutants (25 survived) and 16 verified tests. The
 main loop's decisions bind where it gave them.
 
@@ -1305,7 +1325,7 @@ H44 (tooling built), H42, H19, H23, I3, I15. Proposed: edit 146; issues 191-197.
 
 ### 2026-10-23 - E10 redone, commit 1: verification v3 wired into the search per 6b″'s table - Hunt under 100 boards, the settling scans under 50, the asset map's boosts and I2's steered visits, Guard's hook off; every proof withheld while the proof channel is off
 
-E10 was lost with the machine; redone from the documents (`lane/search`, from main 88d2007).
+E10 was lost with the machine; redone from the documents (`lane/search`, from main 2b752ba).
 
 - **The verification ladder** (`engine/include/t5d/ladder.hpp`, `src/ladder.cpp`; register H1,
   H10, H14): at a decision's turn-start root, **Hunt** under 100 boards (H43) and the root's
@@ -1387,7 +1407,7 @@ lifetime, §11.3's proof stores); issues 177-190 logged, 180 put to the user.
 ### 2026-10-23 - CHECKPOINT 9 taken in: the design documents updated upstream, the build's plan for each ruling in the build log
 
 The user updated the design spec, the decision register and the architecture document
-upstream (74c1ab9; main took them by merge). `docs/BUILD_LOG.md` gains a "CHECKPOINT 9"
+upstream (644a1ea; main took them by merge). `docs/BUILD_LOG.md` gains a "CHECKPOINT 9"
 section saying what the untrained build does with each ruling: Kairos as the fourth
 oracle (H52) built in the gate lane, its golden files and triage in the quiet-machine
 block; the phase form (C26) and refresh inside a turn (C27) built in the cached path for
@@ -1512,7 +1532,7 @@ describes the test file, and no edit is proposed.
 
 ### 2026-10-23 - D2 flat head review fixes: the flat target pruned per board after marginalising, the optimistic prior refused under the flat form, the loss's claim corrected, the survivors killed
 
-Two reviews of D2's flat head (`cd310be`) and the flat form's policy target (`c3f9038`): one of spec
+Two reviews of D2's flat head (`3a870fb`) and the flat form's policy target (`fc7e2c1`): one of spec
 fidelity and correctness, one a mutation pass (66 mutants, 17 survivors, no bug found). In the
 network lane - no training run: optimiser steps only the smoke steps on synthetic rows.
 
@@ -1625,7 +1645,7 @@ head (BUILD_LOG issue 165). In the network lane - no training run.
 - **Parameters**: +257 (256 + 1) - the v1 is 22,965,683 (was 22,965,426), F2's arm 46,895,091, A8
   on 25,594,803. The head draws from a generator of its own (`model.d2_seed`), so every parameter
   that existed before it is drawn as before, bit for bit - pinned by fingerprints recorded at
-  `9c59cb0` (the small network at seed 7 under the default and the prototype flags, the v1 at seed
+  `188707a` (the small network at seed 7 under the default and the prototype flags, the v1 at seed
   0) and by the head's own draw (`test_params.py`).
 - **Delivered**: `NetworkEvaluator` and `CachedNetworkEvaluator` give every board's leave logit
   (`Evaluation.board_logits`, the input's board order), and `check_evaluation` checks them (one per
@@ -1655,7 +1675,7 @@ register D2, F1, M21 (D7, D8, B8 read). Issues 241, 242(e); proposed edit 187.
 
 ### 2026-10-23 - Engine ABI round 3 review fixes: the exchange label's recaptures read where they are made; the Q6 fallback, mid-action placement, the pin's royal half, the C API's bits and labels and every label reading tested; the labels' cost measured
 
-Two reviews of engine ABI round 3 (5d8b12b, 0986472): one of the rules (probes on hand-built
+Two reviews of engine ABI round 3 (baebd1c, 4a80ad5): one of the rules (probes on hand-built
 positions and random play), one of 42 mutants, 14 of which survived every test tier - one
 finding HIGH, seven MEDIUM, five LOW. All HIGH and MEDIUM fixed; the LOWs fixed but for the
 deprecated alias (below).
@@ -1836,7 +1856,7 @@ BUILD_LOG issues 172-174. §15.2's A7 row is unchanged (the mirror test now cove
 
 ### 2026-10-23 - A8 review fixes: the cost flagged under the 2x rule, the cached node's share counted, the FFN's form pinned, non-square padding and FP32 values tested
 
-A review of register A8 (`lane/net` a1ec09b: spec fidelity, and 24 mutants run at test time, five
+A review of register A8 (`lane/net` c2dd245: spec fidelity, and 24 mutants run at test time, five
 of which survived). In the network lane - no training run.
 
 - **The cost was presented as confirmed while more than 2x off section 15.3's estimate.** The row's
@@ -1980,7 +2000,7 @@ survivors.
   `apply_qat` validates its configuration, so its "another 8-bit format" refusal is tested with a
   validated one; the clamp before the cast documented as unobservable on this backend (torch 2.13's
   CPU cast saturates by itself); the gradient figure given as bound 0.5, measured at most 0.117
-  (CHANGELOG's G8 entry and the f2007c7 message said "within 0.12"); the DeepSeek-V3 report's
+  (CHANGELOG's G8 entry and the 3f0e87f message said "within 0.12"); the DeepSeek-V3 report's
   finding that Hopper FP8 GEMMs accumulate in about 14 bits - verified against the report - logged
   as a placeholder for 6w's GPU arm (238(f)).
 
@@ -2059,10 +2079,10 @@ cache refuses FP8 attention while C2 is deferred). Spec issue 238.
 
 ### 2026-10-23 - D2 flat form review fixes: children complete only when every successor is there; a point's realisations walked once; the per-board scores, widening, fallback and cost tested
 
-Two reviews of D2's flat form (42f3590, 3251857, 95d23cc): one of soundness (probes against
+Two reviews of D2's flat form (b1e9d00, c39e253, 943e0d7): one of soundness (probes against
 E4's listing over 1,171 positions under seven rulesets) and a pass of 31 mutants of the flat
 code, 12 of which survived every test tier - three findings HIGH, four MEDIUM, eight LOW.
-Merged first: main (the network heads, M21's training loop) into `lane/engine` (22a7337,
+Merged first: main (the network heads, M21's training loop) into `lane/engine` (b40f631,
 M23's merge); there the training generator (`python/t5d/train/selfplay.py`) now refuses the
 flat form by name until its policy target - D2's per-board marginals, the net lane's flat
 head - exists (it named the retired whole-turn arm), issue 234(b) and the D2 row say so, and
@@ -2128,7 +2148,7 @@ its legal-moves flag no longer reads split 1 as the whole-turn arm.
 - Docs: the three flat-form entries below corrected where they claimed what was untrue or
   untested; docs/BUILD_LOG.md (the D2 row; issues 163, 165, 167-171; edits 132, 134);
   docs/MEASUREMENTS.md (the many-realisation point's cost before and after; the memory per
-  flat node - 136 KB, the estimate x1.20 of the heap, about 137 KB and x1.23 at 3251857 -
+  flat node - 136 KB, the estimate x1.20 of the heap, about 137 KB and x1.23 at c39e253 -
   with their conditions; the tree form's deepest turn start, 3-6 with §8.2's gates and 3-8
   across its gate readings, reconciled with the D2 row - B-L9).
 
@@ -2469,7 +2489,7 @@ follows.
   finish after each first move; nodes, points, regions, boxes removed, the most positions
   held) on 571 positions - 300 tiny multiverses under random rulesets, random games from the
   sparse starts under five rulesets and from every named variant - unlimited and under node
-  budgets that stop it, hashed; the hash recorded at 2f07079, before the generator, and equal
+  budgets that stop it, hashed; the hash recorded at e8d3688, before the generator, and equal
   after it. `tiny_position` moved, unchanged, from test_detectors.cpp to
   `engine/tests/test_tiny.hpp` to be shared.
 - **Spec 15.2's row** (`engine/tests/test_turngen.cpp`): on 300 tiny multiverses (265 with
@@ -2516,7 +2536,7 @@ nine low; all fixed.
   evaluation and the search's record of its root read 37 turns (`tests/engine/test_evaluator.py`;
   the random head's outputs clamp to 0, so the old checks could not tell turns from log1p).
 - **LOW**: the pre-D3 parameters pinned - a fingerprint of the 64 parameters a small network had
-  at 47bc857 (seed 7), recorded there, under the default flags and with every prototype on
+  at 2dcffe0 (seed 7), recorded there, under the default flags and with every prototype on
   (`tests/net/test_params.py`; three float64 sums, not a hash of the bytes, so as not to depend
   on float32 libm across platforms); D9's submit mask tested on an offered but illegal submit
   (`tests/net/test_model.py`); the reply map's `ambiguous="turn"` arm on a reply with one masked
@@ -2666,7 +2686,7 @@ already consumes them.
 
 ### 2026-10-23 - D2 tree form review fixes: a carried inherited root is evaluated; the inherited value's refusal; the untested readings tested; the counts committed
 
-Two reviews of the tree form (f2b4679) - one finding HIGH, six MEDIUM, nine LOW, and a
+Two reviews of the tree form (af7aef0) - one finding HIGH, six MEDIUM, nine LOW, and a
 pass of 24 mutants of its code of which 13 survived the tree tests.
 
 - **The root is always evaluated - now true** (`engine/src/mcts.cpp`). A re-root onto
@@ -2836,7 +2856,7 @@ replaces it).
 
 ### 2026-10-23 - Network A6: the turn-state inputs embedded into the global registers
 
-Register A6's network side (the engine side, ABI round 1, merged at e8de15e): the three exact
+Register A6's network side (the engine side, ABI round 1, merged at 3f04f8e): the three exact
 turn-state counts - mandatory boards still to move, optional boards still playable, moves
 already made in the action - reach the network.
 
@@ -2959,7 +2979,7 @@ note; issue 156).
 
 ### 2026-10-22 - ABI round 2 review fixes: an MCGS residual fires on a draw lag, a missing uncertainty signal refused where it is read, the side table and the noise's edge set tested
 
-Two reviews of engine ABI round 2 (7c650d3, 7828d0d, 9d919c2) found four medium faults
+Two reviews of engine ABI round 2 (12df293, 3b7b151, 5769d41) found four medium faults
 and eight low ones; reviewer B's twelve mutants left ten alive. Every medium one is
 fixed, and every low one but part of B-L7 (below).
 
@@ -3320,7 +3340,7 @@ fixed, and every low one but part of B-L7 (below).
 
 ### 2026-10-22 - A7 review fixes: the other colour's refresh view without the anchor's moves; the mirror's own timeline map
 
-Two reviewers' findings on the A7 commit (00c4c41); no wrong result in the canonicalisation
+Two reviewers' findings on the A7 commit (c4b6b3a); no wrong result in the canonicalisation
 itself.
 
 - **A refresh's other-colour view** (`net/cache.py`, `viewed_by`; spec issue 229, new). It
@@ -3514,7 +3534,7 @@ player's side, as AlphaZero, Lc0 and KataGo do.
     `ConcurrentSolvedStore` and `DisproofStore`. 8 threads released at once probe and write
     185 positions spread over 60 of the 64 shards. Every shortest proof, every deepest
     disproof and exactly one entry per position must be kept.
-  - Built against the old code (a scratch copy of `e8de15e` with this file, `ShardLock`
+  - Built against the old code (a scratch copy of `3f04f8e` with this file, `ShardLock`
     named `std::shared_mutex`), each failed in every run: 50 of 50 on 2026-10-22 (the lock
     test with 136-876 overlaps a run, and lost increments in 31 runs; the store test by
     crashing), as in 120 of 120 on 2026-10-17. With `ShardLock` both passed 300 of 300 runs
@@ -3547,7 +3567,7 @@ player's side, as AlphaZero, Lc0 and KataGo do.
   for a plain mutex - not measured here.
 - The truth's sources. `scanner.hpp`, `scanner.cpp`, `prover.hpp` and `prover.cpp` are in
   `T5D_TRUTH_SOURCES`, so the truth's code signature changes again. It already differed from
-  M17's: `9be6f04` typed the prover's hash constants, and `e554da0` changed the prover's
+  M17's: `cc1e224` typed the prover's hash constants, and `7c932d2` changed the prover's
   reported line. No verdict logic changes. M17's verdicts stand on what they were read from:
   every 6b″ refutation and mate was confirmed by E4 alone. M17's 5-thread rates, though, were
   measured with the old lock's race and cost, so they may understate what 50 ms reaches.
@@ -3840,7 +3860,7 @@ Thirteen review findings on the two entries below (none refuted).
   ruleset can meet the gating conditions with that tier's oracles alone. `docs/BUILD_LOG.md`:
   the H47 row (what changed for a restricted run; the `AGENTS.md` lines put to the user -
   never edit the baseline or its pin by hand, never record a `LOSS` to make a gate run
-  pass); issue 126's ruling line in main's exact wording (a8a5920) and its built note;
+  pass); issue 126's ruling line in main's exact wording (c0fe27c) and its built note;
   issues 132 (a) and 133; proposed edit 104 carries H33's double-edit limit to the
   baseline's pin.
 - **The ftxi question** (`docs/checkpoints/upstream/ftxi-check-test-passed-boards.md`): the
@@ -4177,7 +4197,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   by temporary mutants of the worktree's own files, restored afterwards: B16 on frozen rows
   fails the definition and cached = dense; B16 at the anchor fails the root-refresh and
   refresh-fork rows - in the cached path alone. (The review fixes above re-ran the anchor
-  mutants on the suite before their new tests - B17's commit, fe99a55 - patched in at test
+  mutants on the suite before their new tests - B17's commit, 7aa963c - patched in at test
   time, over `test_cache`, `test_d8` and `test_complexity`: in the cached path alone B16 at the anchor fails those rows and every
   other that compares a refreshed anchor's evaluation with the reference or the dense model -
   the 6y, BF16, D8 and C24 cases, 10 in all; in both paths it fails the root-refresh, BF16 and
@@ -4345,7 +4365,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   before). No t0database record writes `x` on a move that takes nothing; 661 of them write
   captures without `x` (8,034 moves), which the reader now reads with a warning, as before
   but for the warning. `docs/MEASUREMENTS.md` unchanged. Re-run after the review fixes: this
-  build's `t5d-measure` and the parent commit's (cb7af77) byte-identical again, standard
+  build's `t5d-measure` and the parent commit's (ac7e1cd) byte-identical again, standard
   output and error, for `--turns --turn-summary` and `--moves-after-shift --summary`, each
   with and without `--legal` (716 of 761 records to their end in each).
 - `engine/README.md` (the reader's readings, the adapter's warnings, the corpus note, 6b's
@@ -4359,7 +4379,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   does not say which (step 2 and H31 had "as both say"); H51's writers; spec issue 127's
   measurement superseded (a two-oracle rule would now ungate Turn Zero) and H23's row stale
   on what nightly gates (left to the issue-122 component, which changes the gating); CI
-  started no run on `lane/gate` from a5e61d9 on - account billing - so H51 is unconfirmed on
+  started no run on `lane/gate` from f13d5ea on - account billing - so H51 is unconfirmed on
   Linux and the nightly dispatch still owed; `CLAUDE.md`'s "rulings R1-R10" (R1-R11 now) put
   to the user, the instruction files being theirs to change (H38's row).
 - Spec: §11.0 ("Running the gate": capture markers read leniently - built; "A
@@ -4385,7 +4405,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   (`T5D_TRUTH_SOURCES`: the state machine, movegen, check, legal ... untouched). Commit 1
   changed two of them, `prover.hpp` and `prover.cpp` (the line the prover reports, only:
   no verdict, distance or node count changes), so after this component the truth's code
-  signature differs from main's - as main's already differs from M17's (d96d6d9; 9be6f04
+  signature differs from main's - as main's already differs from M17's (f3d36c9; cc1e224
   typed the prover's hash constants). The main loop runs the Lazy SMP timing test before
   merging.
 - `engine/include/t5d/capi.h`, `src/capi.cpp`, `src/capi_internal.hpp`: `t5d_expansion`
@@ -4450,7 +4470,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   `docs/BUILD_LOG.md`: register A6 (engine side built, tested), C11, C14; spec issues
   143-145 (A6's arithmetic is not the rules' count; the two undefined counts read; §15.4's
   turn structure and the count); proposed edits 116-118.
-- Review fixes, the same day (after 7bccea6). The C API's root count was tested only at
+- Review fixes, the same day (after 94f64b8). The C API's root count was tested only at
   0 and 1, which the old flag gives too: a search reading the handle's count as the flag
   passed every engine and Python test. `capi_search_takes_the_moves_made_from_the_game_a6`
   and `test_the_root_takes_a_count_the_turn_start_flag_cannot_give_a6` now build a search,
@@ -4521,7 +4541,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   past such a node from it (`proof_line` does, when one is recorded) and stops at the
   defender's turn - continuing needs the defender's longest defence, which only an
   enumeration of the defender's actions finds (not cheap). So the tests check the
-  contract. (Corrected at review: this entry and e554da0's message first gave as the
+  contract. (Corrected at review: this entry and 7c932d2's message first gave as the
   reason that Guard records no certificate, 6b″ having measured it without one - but
   6b″'s tool ran Guard with `record_certificate` on, for its cross-check against E4
   (M17's "every refutation confirmed by E4"); only Guard's default records none.)
@@ -4777,7 +4797,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
 - `docs/BUILD_LOG.md`: register M22 measured; step 5's M22 note; spec issues 140-142
   (what "optional moves played" means; the ranges and the unit; nothing maps the
   figures to an order of the D2 work - put to the user); proposed spec edits 110-115.
-- Review fixes, the same day (after 2864be0). The D2 reading counted "where the arms
+- Review fixes, the same day (after f5948ab). The D2 reading counted "where the arms
   differ" by the moves played (4.1 / 19.7 / 50.9% of turns of more than one move);
   it is now counted by the turn's start, as §8.2's cost argument and the built ply
   split count it (15.1 / 65.2 / 99.4%), in MEASUREMENTS, issue 142 and edit 110. An
@@ -4795,9 +4815,9 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   K's turn-construction gate get the edit 6x gets (edit 115); the issue and edit
   lists start new Markdown lists, so that GitHub shows 140 and 110 as written; the
   `turn_summary_group` line and the `"error"` path documented; and the conditions
-  name the commit the figures were counted at (607e4b1, rebuilt and re-run there:
+  name the commit the figures were counted at (c4b45eb, rebuilt and re-run there:
   byte for byte), where the first version said only "this change", and say what the
-  fixes changed in the run's output against 2864be0's (one count, fields added,
+  fixes changed in the run's output against f5948ab's (one count, fields added,
   nothing else).
 - Spec: §8.2 "Measure first" and §15.1's Phase 1 row (the M4 write-back proposed:
   edits 110 and 114); §13.1 6x ("after the turn-width measurement", now met; edit
@@ -5030,7 +5050,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   PASSED` (calibration 1.33x); `gate --tier nightly` ok - oracle layer ok, `engine
   differential: PASSED`, gated Standard - Half Reflected and Standard - Reversed
   Royalty (calibration 1.20x). In CI (ubuntu-24.04) the commit tier passed with the
-  engine at 3a46da9 (run 39009070712, calibration 0.75x); the nightly is still to be
+  engine at e8a4f5d (run 39009070712, calibration 0.75x); the nightly is still to be
   run there. The engine compared with every recorded oracle answer (all six golden
   files): 169 disagreements, every one matched by an entry, every entry matched. The
   proof channel stays disabled.
@@ -5109,16 +5129,16 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
 ### 2026-10-17 - Build log: the CHECKPOINT 6-7 rulings, the plan by lane, the register brought up to date
 
 - `docs/BUILD_LOG.md`, "Where things stand": a section "CHECKPOINTS 6 and 7 - ruled
-  upstream (design documents f07568c)" - what the rulings decide, by register ID
+  upstream (design documents 65b8cce)" - what the rulings decide, by register ID
   with the register's status words; how each question of 2026-10-04's "Waiting on
   the user" is answered (Q-A -> H47, Q-B -> H48, the GPU question -> M19, issue
   121 -> M20 except D8's readout form, A5 -> behind its flag, D8's whole-turn token ->
   the flat form (D2), the training rows -> M21 and I12-I20); what changes for the
   build. Then "Current state (2026-10-17)": what is on main; where each lane stands,
-  by commit, as of 16:54 (gate: H47 with its review's fixes, 7530e36, issues 122-124
+  by commit, as of 16:54 (gate: H47 with its review's fixes, e150182, issues 122-124
   put to the user, edit 98 pending the ruling on 122, the gate with the engine
-  configured in progress; engine: M22 measured, 2864be0, issue 142 put to the user;
-  net: F5 and F6 built, f830f31, issue 204 put to the user - none merged); how to
+  configured in progress; engine: M22 measured, f5948ab, issue 142 put to the user;
+  net: F5 and F6 built, dc33b71, issue 204 put to the user - none merged); how to
   recreate a lane's worktree, and how the lanes share the one machine; the plan -
   three lanes in worktrees (the main loop's plan under M23's rule), the number blocks
   (spec issues: gate 122-139, engine 140-199, net 200-299, main loop 300 and up;
@@ -5133,7 +5153,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   (nothing that blocks: the standing items, and the lanes' issues put to the user as
   each lane merges). "Recovery": the comparison with the last green CI runs, made after
   the user's `gh auth login` - the same results; the engine job's one failure on
-  3b33942 (g++-13) is an intermittent five-thread Guard test, queued for the engine
+  497d649 (g++-13) is an intermittent five-thread Guard test, queued for the engine
   lane. The old state stays as history under "State on 2026-10-04 (before
   the loss)", its held, running, remaining and waiting lists superseded; the recovery
   notes point at the plan.
@@ -5218,7 +5238,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
 ### 2026-10-17 - Recovery after the lost machine: the toolchain rebuilt, main verified, the losses listed
 
 - `docs/BUILD_LOG.md`: "Recovery after the lost machine" at the top - what survived
-  (everything on `main` at 3b33942), what was lost because it was never pushed (the
+  (everything on `main` at 497d649), what was lost because it was never pushed (the
   gate-with-engine branch with its 113 triaged known divergences; engine E10) and
   where each is redone; main's verification on the rebuilt machine (engine 526 of
   526, network 775 passed and 2 skipped, `verify`, `selftest`, the commit-tier
@@ -5253,13 +5273,13 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
 - `engine/src/prover.cpp`: the prover's 64-bit hash constants are written as
   `std::uint64_t{...}` instead of `ull` literals. On Linux `std::uint64_t` is
   `unsigned long`, and g++ 13 and 14 rejected one expression mixing the two under
-  `-Werror=sign-conversion` (CI's engine job failed on the E9 merge, d96d6d9); g++
+  `-Werror=sign-conversion` (CI's engine job failed on the E9 merge, f3d36c9); g++
   16 here did not. All seven literals converted; 526 tests pass.
 - Spec: none - a portability fix.
 
 ### 2026-10-04 - 6b″ on a quiet machine: Hunt adopted under 100 boards, Guard in no range (M17)
 
-- `docs/MEASUREMENTS.md`: experiment 6b″ (M17) with engine E9 merged (d96d6d9),
+- `docs/MEASUREMENTS.md`: experiment 6b″ (M17) with engine E9 merged (f3d36c9),
   on a quiet machine, every test as pre-registered and read per board-count
   range - the same 805 roots as 6b, 5 threads, 50 ms, Guard and Hunt as they ship,
   only E4-confirmed proofs counted. Guard's depth 1 completes in 65.1% / 15.8% /
@@ -5528,7 +5548,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
 ### 2026-10-03 - 6b′ on a quiet machine: the verification redesign fails at 50-199 boards - M15's STOP
 
 - `docs/MEASUREMENTS.md`: experiment 6b′ (M15) with engine E8's prototype of the
-  redesign (M14; branch bd08c48, not merged - it waits on the design review), on
+  redesign (M14; branch 9c8916d, not merged - it waits on the design review), on
   a quiet machine, every test as pre-registered and read per board-count range.
   The df-pn proof channel decides 77.4% of roots under 50 boards (pass), 40.7% at
   50-99, 23.7% at 100-199 and 0.0% at 200+ (fail); the estimate channel fits the
@@ -5583,7 +5603,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
 ### 2026-10-03 - M7 on real games: the |E| curve from t0database, its verdict, the refused games
 
 - `docs/MEASUREMENTS.md`: the |E| phase curve over the 716 t0database games that
-  replay to the end (901e5be, Q4 as ruled, legal and pseudo-legal destinations),
+  replay to the end (c7840d8, Q4 as ruled, legal and pseudo-legal destinations),
   the games' board counts (max 186; 14 reach 100 boards), and M7's verdict from
   §15.6 as written: on at k = 8 from 50 to 186 boards; under 50 boards inside the
   ±10% band (1.60x at k = 4, 1.45x at k = 8, against 1.5x), and the kill clause
@@ -6416,7 +6436,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   (https://github.com/Silicon-Spider/Temporal-5D). GitHub created it with a
   commit of its own - `LICENSE` (the GPL-3.0 text) and a two-line `README.md` -
   so the graft commit, never pushed, was rebased onto it: e1b6980 is now
-  a56beb4. Nothing has been pushed yet. The project's licence is still being
+  f943fbe. Nothing has been pushed yet. The project's licence is still being
   decided, and whether that `LICENSE` file stays is part of the decision. The
   oracle work stays uncommitted, as before. `AGENTS.md`, `CLAUDE.md`,
   `CONTRIBUTING.md` and `oracles/README.md` no longer say the repository has no
@@ -6474,7 +6494,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   and its stock CLI, not its Python bindings; a fourth repository, the notation
   specification, is pinned; and no oracle answers every question the gate asks.
 
-### 2026-09-30 - graft wiring (commit e1b6980, rebased as a56beb4)
+### 2026-09-30 - graft wiring (commit e1b6980, rebased as f943fbe)
 
 - Added the wiring of graft, a code-navigation tool for coding agents:
   `.claude/helpers/`, `.claude/skills/graft/`, and entries in
