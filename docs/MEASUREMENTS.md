@@ -56,8 +56,8 @@ quiet-machine block).
 | Piece-centric tokens (A5) - no §15.3 row (proposed edit 197); §14.4's figures | 2.3x fewer tokens midgame, 2.7x in sparse endgames; ~250 destination tokens at 240 boards; ~4.4-6.5x on dense attention; ~2.7x on the cached per-node term, the same on KV | human games, legal moves, by bucket 1-49 / 50-99 / 100-159 / 160-186 boards: tokens 1.94 / 2.19 / 2.43 / 2.35x fewer; D (empty destination tokens) median 35 / 50 / 100 / 140; dense evaluation 2.49 / 3.34 / 4.35 / 4.37x cheaper; cached node (analytic, A5 refused there) 1.42 / 2.05 / 2.63 / 2.55x; **C26's phase form pooled by decisions (M18), N\* = 50: 2.45x - dense below N\* 2.46x, the cached node at or above it 2.11x** (N\* = 100: 2.73x; 2.73x / 2.62x); the pre-CHECKPOINT-9 reading: dense at every size 2.79x, cached 1.56x, M16's blend 2.19x; frozen K/V 2.05-2.51x; counted forward at 44 boards 2.66x (block-sparse) / 2.79x (every key); synthetic 240 / 600 boards 4.8-9.9x; CPU wall at 44 boards 3.0x (indicative, loaded) | A5 section below; 716 replayed games, 22,761 distinct positions, action starts only; F1, FP32 counts | under C26, legal destinations: tokens 0.84-1.06 (of 2.3); the cached node at or above N\* 1.28x below ~2.7x (N\* = 100: 1.03x), inside; dense: the range's conditions (240-600 boards) not reached by the games - synthetic 4.8-9.9x; KV inside. **No flag stands** (the 2026-10-23 flags compared across conditions - withdrawn, see the section) | 2026-10-23, N-A5; re-weighed 2026-10-24 |
 | Leaf-batching gain | 1.2-1.5× | - | | | |
 | NNUE eval | ~10k MACs, sub-µs | - | | | |
-| Movegen throughput | ≥ 20,000/s at 240; ≥ 10,000/s at 600 (§15.6) | pseudo-legal expansion, 1 thread: 44,047/s at 240 boards, 24,951/s at 600 (scope + relations); with the legal-moves filter: milliseconds to minutes per expansion | M9 section below | 2.2x / 2.5x the target (pseudo-legal); far below it with the filter | 2026-10-02, 2740e66 |
-| Scanner nodes/s | no figure | 1,036,000/s (Q4 per the Guide) and 1,033,000/s (Q4's other reading), one thread, pooled over the corpus; lower on large positions (85% of the nodes are E4 searches) | 6b section below | - | 2026-10-02, bde62c5 |
+| Movegen throughput | ≥ 20,000/s at 240; ≥ 10,000/s at 600 (§15.6) | pseudo-legal expansion, 1 thread: 44,047/s at 240 boards, 24,951/s at 600 (scope + relations); with the legal-moves filter: milliseconds to minutes per expansion | M9 section below | 2.2x / 2.5x the target (pseudo-legal); far below it with the filter | 2026-10-02, b5c1176 |
+| Scanner nodes/s | no figure | 1,036,000/s (Q4 per the Guide) and 1,033,000/s (Q4's other reading), one thread, pooled over the corpus; lower on large positions (85% of the nodes are E4 searches) | 6b section below | - | 2026-10-02, ad2769d |
 
 ### Network N3 - the cached path, counted (2026-10-02)
 
@@ -227,10 +227,10 @@ recounted independently from the engine's piece count and move flags in the test
 distinct by fingerprint and side to move - **22,761**, the same per-bucket counts as M7's legal
 table (19,410 / 3,162 / 171 / 18); the decisions behind them (28,843 action starts, repeats
 included) weight the pooled figures. **Action starts only**: the ply split's mid-action leaves and a
-search's deeper nodes are not measured. Engine at main `0e37093`, the tool as first committed
-(`lane/net` `72e5f96` - `token_counts.py` first exists there, not in `f89c79f` as first written
-here); machine `dev-r`; counts do not depend on load. Re-run 2026-10-24 after main `7483103` was
-merged into `lane/net` (`3a87fb0`), with the tool of the A5 review fixes (the commit after it: C26's phase form added, the JSON
+search's deeper nodes are not measured. Engine at main `40a1f1c`, the tool as first committed
+(`lane/net` `6670d9e` - `token_counts.py` first exists there, not in `bf49a6d` as first written
+here); machine `dev-r`; counts do not depend on load. Re-run 2026-10-24 after main `b73d073` was
+merged into `lane/net` (`1bd78d8`), with the tool of the A5 review fixes (the commit after it: C26's phase form added, the JSON
 lines carrying each position's decisions): the same 22,761 positions and counts, line for line, and
 the same per-bucket and pooled figures as before (52 s). The analytic costs are section 9.1's model (`cost.piece_centric_costs`,
 d 256, L 16): the dense evaluation (`4 T^2 d L + 40 T d^2 L`); the cached node - the live queries
@@ -394,7 +394,7 @@ from AMD's ROCm 10.1.0 release (2026-10-05; PyTorch 2.14.0 on Windows for Python
 (HIP 7.16.26385, MIOpen 3.6.1, rocm-sdk 10.1.0, NumPy 2.5.3), in a separate venv on Python
 3.14.7 under the git-ignored `build/` (the project `.venv`, torch 2.13.0+cpu, untouched); no
 Triton (below). Smart App Control read as off; nothing on the machine changed. The network:
-lane/gate at 62ff24d (F1, the v1 defaults, random weights, `build_model(seed=0)`); the engine
+lane/gate at 529098d (F1, the v1 defaults, random weights, `build_model(seed=0)`); the engine
 library `build/engine/t5d.dll` built from the same engine sources. Inputs `synthetic_state(N,
 N)` (one position per batch element, distinct seeds); window none; medians of 3-5 synchronised
 runs after a warm-up. "pad8" marks the padded-width arm (below): a probe-local wrapper, not the
@@ -504,7 +504,7 @@ network lane's to take or leave (issue 521).
 
 **Conditions.** dev, quiet machine (the bench measured the machine busy 4-5%
 during 1-thread samples - itself), Windows 11, g++ 16.2 `-O2 -DNDEBUG`, static
-`t5d-bench --samples 15` at 2740e66 (15 interleaved rounds of 200 ms after a
+`t5d-bench --samples 15` at b5c1176 (15 interleaved rounds of 200 ms after a
 warm-up; worker threads pinned, one per physical core first; thread CPU time by
 QueryThreadCycleTime). SYNTHETIC positions from seeded random play, 16 games per
 class, at the spec's assumed timeline counts (N100 T6 ... N600 T12); timed streams
@@ -560,7 +560,7 @@ moves once the filter below is fast.
 **With legality** - engine E5a's classifier in tiers (`t5d/legal.hpp`: exact;
 budgeted, which never calls a move illegal without proof and leaves the rest
 "unknown"; fast, budget 0). Profile per expansion of scope + relations with the
-classification inside, one thread, `t5d-bench --legal-profile` at E5a's 8d08b09,
+classification inside, one thread, `t5d-bench --legal-profile` at E5a's ed70ca9,
 **machine shared with other agents' builds and tests** - not a verdict.
 Synthetic M9 classes, 20 expansions each, median / p95 / worst (share of moves
 left unknown):
@@ -589,7 +589,7 @@ mate-search tail (minutes at 400-600 boards, against E4's per-move filter: 157 m
 median at 240 boards). On check-heavy random play the fast mode proves few moves
 legal (it settles 36-73% of moves, as illegal); how search treats an unknown move
 is spec issue 46. **M9 with legality, quiet machine** (`t5d-bench --samples 15 --legal
---legal-budget 0,0 --no-flatness` at bde62c5; 1-thread samples at 5% load, the
+--legal-budget 0,0 --no-flatness` at ad2769d; 1-thread samples at 5% load, the
 bench itself; the FAST mode - budget 0: unknown moves kept, 27-47% of moves unknown
 by class). Scope + relations + legality, wall /s median [min, max] over 15 rounds:
 
@@ -646,7 +646,7 @@ in the ±10% band resolving to off). A pilot self-play run before serious self-p
 re-checks it (M18) - after §15.5, outside the untrained build.
 
 
-2026-10-03, engine at 901e5be (Release, g++ 16.2, 383 tests passing). The data:
+2026-10-03, engine at c7840d8 (Release, g++ 16.2, 383 tests passing). The data:
 t0database (`data/t0database/`, pinned, MIT): `py data/t0database/to_5dpgn.py
 build/t0db` writes its 761 games with the source's own `[Board "Standard - Turn
 Zero"]`; `t5d-measure --moves-after-shift --summary [--legal]` (Q4 as ruled, R8)
@@ -723,7 +723,7 @@ games, which run 4 active timelines there (the table assumes 6).
 ### The window on the corpus (M7) - superseded by the real games above
 
 
-`t5d-measure --summary` over the 41 corpus records (2026-10-02, 2740e66),
+`t5d-measure --summary` over the 41 corpus records (2026-10-02, b5c1176),
 PSEUDO-LEGAL destinations (every |E| an upper bound), distinct positions, records
 grouped into games (NP, NP0 and many2 one game; standard and softmate one; the two
 futures one). Under Q4's other reading (`--moves-after-shift`, which the nine
@@ -792,7 +792,7 @@ E4's default.
 
 ### Verification v3: 6b″ (M17) - ADOPT HUNT UNDER 100 BOARDS; GUARD IN NO RANGE
 
-2026-10-04. Engine at d96d6d9 (E9 merged: Guard, Hunt, the asset map, Hunt's
+2026-10-04. Engine at f3d36c9 (E9 merged: Guard, Hunt, the asset map, Hunt's
 ground truth, `t5d-scan6bpp`), Release, g++ 16.2. Quiet machine: under 1% busy
 before the run (all processes, 10 s), during it 15.9% (Guard) and 19.2% (Hunt) -
 the tool's own threads. `t5d-scan6bpp --truth engine/testdata/hunt-truth
@@ -833,7 +833,7 @@ in the long search; its root expansion does not finish in 50 ms (issue 107; a
 lazily expanded root is the remedy, not built).
 
 **Hunt's ground truth** (ruling 5; `engine/testdata/hunt-truth/`, recorded at
-1d2d0d7, 5,097 s on 6 workers): one long offline search per root - the union of
+b1d0ca9, 5,097 s on 6 workers): one long offline search per root - the union of
 the literal class's (every first move, every completion) and the default class's
 proofs, 4M nodes each, a 2M-node tree cap, one thread and fresh stores per root,
 deterministic. The budget from a 101-root curve (mates found against nodes: 5, 6,
@@ -845,8 +845,8 @@ s): every verdict equal.
 
 ### The verification redesign: 6b′ (M14, M15) - 50-199 BOARDS FAIL - M15 OUTCOME: STOP
 
-2026-10-03. Engine E8 (the M14 prototype) at bd08c48 on its branch
-`worktree-agent-a4f2f93a8a448467b` (main ccdbdbd merged in; not yet merged into
+2026-10-03. Engine E8 (the M14 prototype) at 9c8916d on its branch
+`worktree-agent-a4f2f93a8a448467b` (main 61c6480 merged in; not yet merged into
 main), Release, g++ 16.2. Quiet machine: under 1% busy before the run (all
 processes, measured over 10 s); during it 19.7% (A), 18.5% (C), 6.5% (B) - the
 tool's own threads. `t5d-scan6bp --per-position --record-list build/corpus.txt`
@@ -891,7 +891,7 @@ there.
 
 ### The scanner: 6b (M8, M12) - RE-RUN AFTER THE OPTIMISATION PASS: 50-199 BOARDS FAIL - M12 OUTCOME: STOP
 
-**The re-run (M12), 2026-10-03.** Engine at 8841f4b (E5c merged: the bounded
+**The re-run (M12), 2026-10-03.** Engine at e88cf23 (E5c merged: the bounded
 optimisation pass on in-check enumeration and the horizon mate tests, and Lazy
 SMP). Quiet machine (busy 5.8% over the run; 17.0% during the 5-thread wall-clock
 phase - the tool's own 5 of 24 logical processors). `t5d-scan6b --max-nodes 100000
@@ -931,7 +931,7 @@ reach: NNUE v2 and quiet-only training deferred (M8).
 kept for the record.
 
 **Conditions.** dev, quiet machine (busy 5.4% over the run, all processes - the
-tool itself), g++ 16.2 `-O2 -DNDEBUG`, engine at bde62c5 (E5b's scanner merged with
+tool itself), g++ 16.2 `-O2 -DNDEBUG`, engine at ad2769d (E5b's scanner merged with
 E5a's legality tiers). `t5d-scan6b --max-nodes 100000 --jobs 1 --root-wall
 --per-position` over the 41 corpus records (every turn start; 1 leaf per root at 2
 half-turns of random legal play; duplicate roots dropped; TT and histories cleared
@@ -987,9 +987,9 @@ sets no threshold for it, so there is no verdict and no STOP band: it informs th
 order of the D2 work (register part K) and checks part L's prediction.
 
 **Conditions.** 2026-10-17, machine `dev-r` - counts, not timings, so the shared
-machine's load does not matter. The rules engine is `main`'s at f07568c, unchanged;
+machine's load does not matter. The rules engine is `main`'s at 65b8cce, unchanged;
 the counting is `t5d-measure --turns --turn-summary` (`engine/tools/turn_width.hpp`)
-at 607e4b1 (lane/engine: M22, 2864be0, and its review fixes; rebuilt at that commit,
+at c4b45eb (lane/engine: M22, f5948ab, and its review fixes; rebuilt at that commit,
 the run reproduces the raw output byte for byte), Release, MSYS2 g++ 16.2.0 (Rev3),
 `--werror`, 544 of 544 engine tests passing. Data: t0database (`data/t0database/`,
 commit `d49da405...`, `Data.csv` sha256 `37fb7c1c...a4e`), converted by `py
@@ -1017,7 +1017,7 @@ included - was played twice, by the replay and move by move from its start, and
 reached the same state. The summary was recomputed independently from the
 per-action lines (a separate script working from the definitions): 1,648 figures, no
 difference. Raw output `build/m22/turns.jsonl` (git-ignored; reproducible). This
-section was first written from the tool at 2864be0. Against that run, the review
+section was first written from the tool at f5948ab. Against that run, the review
 fixes changed one count - an optional move, at the action's start and when made,
 now includes a jump from a mandatory board onto an optional one, which the first
 version left out (36 actions in all, 35 of them in the 692 games) - and added
@@ -1172,10 +1172,10 @@ register M22 and part L carry the two swapped (build-log spec issue 156). Below,
 the four figures the ruling names, per range.
 
 *Conditions.* 2026-10-23, machine `dev-r` - counts and arithmetic, not timings, so the
-shared machine's load does not matter. The engine is `main`'s at 7f5f853 (after H51,
+shared machine's load does not matter. The engine is `main`'s at da96457 (after H51,
 across which M22's command was byte-identical); the counting is `t5d-measure --turns
 --turn-summary` with this entry's additions to `tools/turn_width.hpp` (the commit that
-adds this paragraph, on 7f5f853), Release, MSYS2 g++ 16.2.0 (Rev3), `--werror`, 583 of
+adds this paragraph, on da96457), Release, MSYS2 g++ 16.2.0 (Rev3), `--werror`, 583 of
 583 engine tests passing. Data and command as above: t0database at `d49da405...`
 (`Data.csv` sha256 `37fb7c1c...`), converted afresh by `py data/t0database/to_5dpgn.py
 build/t0db` (761 records, 237 empty rows skipped; identical, file for file, to a second
@@ -1294,7 +1294,7 @@ wall-clock, which these counts do not measure (proposed edit 130).
 
 **Conditions.** 2026-10-23, machine `dev-r` - counts, not timings: deterministic, so
 the shared machine's load does not matter. The search is lane/engine's at the D2
-tree form's review fixes (the tree form, f2b4679, and the fixes; a fresh root's
+tree form's review fixes (the tree form, af7aef0, and the fixes; a fresh root's
 search is unchanged by them - the counts below are, value for value, those the tree
 form's commit message quoted from an uncommitted scratch harness). The counting is
 `build/engine/t5d-tree-count build/t0db/*.5dpgn` (`engine/tools/t5d_tree_count.cpp`;
@@ -1398,13 +1398,13 @@ matter. 2026-10-23, machine `dev-r`, Release, MSYS2 g++ 16.2.0 (Rev3), `--werror
 (`engine/tests/test_turngen.cpp`; 4x4 boards, timelines -3..+3, the default rules - the
 FreeOrder realisation - and, at k = 5, Q3's play activation - the general realisation), the
 generator unbudgeted, both units; *before*: reviewer A's probe of the review (a scratch
-`rewalk3.cpp` against lane/engine 95d23cc, the same position and scorer); *after*: the test
+`rewalk3.cpp` against lane/engine 943e0d7, the same position and scorer); *after*: the test
 at the review fixes. (b) `mcts_the_memory_estimate_follows_the_heap`
 (`engine/tests/test_mcts_memory.cpp`): Standard - Two Timelines after six actions (each the
 hypercuboid listing's first), the random evaluator (seed 7), batch 8, square features off,
 no evaluation cache, every other parameter the default; 400 playouts under the flat form,
 2,000 under the ply split; the heap counted by the tests' allocation hook. *Before*: as the
-flat form's search arm (3251857) recorded it in build-log issue 171; *after*: the test's
+flat form's search arm (c39e253) recorded it in build-log issue 171; *after*: the test's
 printout at the review fixes.
 
 | (a) k = 7, default rules | realisations tested | nodes | of 5,040 emitted under 200,000 nodes |
@@ -1419,7 +1419,7 @@ realisation walked once, a resumption replaying one path of k moves).
 
 | (b) Two Timelines + 6, tree (not graph) | nodes | estimate | heap | per node (heap) | estimate / heap |
 |---|---|---|---|---|---|
-| flat form, before (3251857, issue 171) | 400 | - | - | about 137 KB | x1.23 |
+| flat form, before (c39e253, issue 171) | 400 | - | - | about 137 KB | x1.23 |
 | flat form, after | 400 | 65,164,477 | 54,512,986 | 136 KB | x1.20 |
 | ply split, after | 2,000 | 7,916,856 | 7,603,136 | 3.8 KB | x1.04 |
 
@@ -1500,7 +1500,7 @@ is the engine's own, identical in both builds). Each call timed three times, the
 reported (the review's first figure, "0.3-38 ms per state", was one timing each). Labels:
 the default options (200,000 mate nodes per search). Relations: `expand(square_features=
 "none")` with attack, defence and x-ray, then with pin and check added. *Before*: the
-review's copy of lane/engine 0986472; *after*: the review fixes (this commit). Probe:
+review's copy of lane/engine 4a80ad5; *after*: the review fixes (this commit). Probe:
 `probe_cost2.py` (scratch; the review's `probe_cost.py` with repeats and the exchange
 counts).
 
@@ -1543,7 +1543,7 @@ real-variant figures beside the synthetic ones. No threshold applies: the bounds
 `tests/net/test_cache.py`'s and `tests/engine/test_network.py`'s.
 
 **Conditions.** 2026-10-23, machine `dev-r`, PyTorch 2.13.0+cpu, Python 3.14.7, the engine library
-built Release in `lane/gate` (main 710921a); one position per evaluation; random weights at
+built Release in `lane/gate` (main 03f4253); one position per evaluation; random weights at
 initialisation scale; window none; lineage reading (C23). Positions: seeded pseudo-legal random
 play from each of the engine's 16 variants (`_walk`: seeds 0 and 1, to the first turn start with
 16 boards, every state of every action), the store shared along each game in one epoch opened a
