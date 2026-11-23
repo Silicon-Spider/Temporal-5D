@@ -5212,3 +5212,29 @@ TEST(mcts_df_pn_checker_under_q3_holds_the_listing_to_every_successor) {
     }
   }
 }
+
+// ---- The review of 2026-11-09, M3: a deadline is its run's alone ----------------------------
+
+TEST(search_deadline_does_not_outlive_its_run) {
+  // M3, adopted (review_search_deadline_does_not_outlive_its_run): a run with a deadline long
+  // passed, then one without - the second's turn-start checks are exact (the mate in one's
+  // checkmate seen), not cut by the first run's deadline (the review's M09: the deadline outlived
+  // its run).
+  const GameState s = t5d_test::solver::mate_in_one(RuleOptions{});
+  SearchParams p = fast();
+  p.hunt = p.settling = false;
+  p.asset_map = false;
+  const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+  Search search(s, p);
+  Limits first;
+  first.playouts = std::uint64_t{1} << 40;
+  first.seconds = 1e-6;
+  search.run(*ev, first);
+  search.run(*ev, Limits{200});
+  std::fprintf(stderr, "  checkmates %llu, unknown verdicts %llu, mate checks %llu\n",
+               static_cast<unsigned long long>(search.stats().checkmates),
+               static_cast<unsigned long long>(search.stats().unknown_verdicts),
+               static_cast<unsigned long long>(search.stats().mate_checks));
+  CHECK(search.stats().checkmates >= 1);
+  CHECK_EQ(search.stats().unknown_verdicts, std::uint64_t{0});
+}

@@ -2009,8 +2009,21 @@ cache and the batch never serve a cut list another list's evaluation, either way
 through `play_game`; a cut fallback listing leaves its root re-listable and the game ends
 `TimeLimit` (issue 406's Q3 node, the flat form's defaults, self-play and match play); 1e9 s
 or more, +infinity included, change nothing - the same search, the same game, the same
-`t5d-play` record; a timed-out decision's playouts and verification counted; and the tool on
-every fixture.
+`t5d-play` record; a timed-out decision's playouts and verification counted. And each place
+the deadline is handed to, held at a position where the call would otherwise run long (the
+review of 2026-11-09's M3 and M4; before, the search test's root classified in 240 nodes, so
+its deadline never met a costly classification, and the play test allowed 20 s for a 1 s
+stop): the root's own exact classification at the 18-board node (cut inside the first batch,
+under 8 s - 0.8 s measured, 16 s untimed); one 600-second tier-3 search (Unknown at a 0.5 s
+deadline); a far deadline changes nothing (the same digest); the turn-start checks at a
+155-board root's ~190-board children; exact lazy verifications at the 192-board node;
+inherited expansions in the tree form; a deadline that does not outlive its run; a chosen
+move's exact verification cut with no child known legal (`TimeLimit`, no decision, at the
+deadline), and with one (the most visited child known legal played instead); a late
+turn-start verdict given the time left. Each wall-clock bound is at least 5x the time measured
+unmutated and below the mutant's, both numbers in the test. And the tool on every fixture -
+the 191-board verdict cut by `--time-limit` included - its search line saying what the search
+applied (the legality, the lazy verifications' budget, the deadline).
 
 ## Stage E5b: the tactical scanner and t5d-scan6b
 

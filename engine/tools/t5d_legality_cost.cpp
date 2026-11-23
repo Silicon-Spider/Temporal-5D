@@ -187,6 +187,15 @@ double seconds_since(std::chrono::steady_clock::time_point t0) {
 
 std::string budget_text(std::uint64_t b) { return b == kExact ? std::string("exact") : std::to_string(b); }
 
+// A classification's budget as a search applies it: "exact", "nodes N", or "C checks, N nodes".
+std::string legality_text(const t5d::LegalityOptions& o) {
+  constexpr std::uint64_t kNone = std::numeric_limits<std::uint64_t>::max();
+  if (o.checks == kNone && o.search_nodes == kNone) return "exact";
+  if (o.checks == kNone) return "nodes " + std::to_string(o.search_nodes);
+  return std::to_string(o.checks) + " checks, " +
+         (o.search_nodes == kNone ? std::string("no node limit") : std::to_string(o.search_nodes) + " nodes");
+}
+
 const char* verdict_name(t5d::Outcome o) {
   switch (o) {
     case t5d::Outcome::Ongoing: return "ongoing";
@@ -343,16 +352,17 @@ void search_at(const Position& p, const Options& o) {
   limits.seconds = o.search_seconds;
   search.run(*ev, limits);
   const t5d::mcts::SearchStats& st = search.stats();
-  const std::string legality = !o.search_legality               ? std::string("the search's default")
-                               : *o.search_legality == kExact ? std::string("exact")
-                                                              : "nodes " + std::to_string(*o.search_legality);
-  std::printf("  search %llu playouts (%s split, legality %s, deadline %.3g s): %.3f s, %llu playouts, stopped by "
-              "%s; terminal checks %.3f s, expansions %.3f s, turn generation %.3f s, verifications %.3f s; %zu nodes\n",
+  // What the search was given, as applied (the review of 2026-11-09's L6: the line printed the
+  // options asked for): the leaves' classification, the lazy verifications' and the deadline.
+  std::printf("  search %llu playouts (%s split, legality %s, verifications %s, deadline %.3g s): %.3f s, %llu "
+              "playouts, stopped by %s; terminal checks %.3f s, expansions %.3f s, turn generation %.3f s, "
+              "verifications %.3f s; %zu nodes\n",
               static_cast<unsigned long long>(o.search_playouts),
               o.split == TurnSplit::Flat   ? "flat"
               : o.split == TurnSplit::Tree ? "tree"
                                            : "ply",
-              legality.c_str(), o.search_seconds, seconds_since(t0), static_cast<unsigned long long>(st.playouts),
+              legality_text(search.params().legality).c_str(), legality_text(search.params().verify_legality).c_str(),
+              limits.seconds, seconds_since(t0), static_cast<unsigned long long>(st.playouts),
               t5d::mcts::stop_reason_name(st.last_stop), st.seconds_mate, st.seconds_expand, st.seconds_generate,
               st.seconds_verify, search.node_count());
   std::fflush(stdout);

@@ -5847,6 +5847,17 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
       safety stop, not E7's tight hard bound, and the flat generator stands outside it, which E7
       (or the search lane's E11, when it lands on this mechanism) must bring under any bound it
       holds tight; `t5d-play`'s header brought in line.
+    - **The deadline's tests (M3, M4, L6)**, one commit: each place the deadline is handed to
+      held where the call would otherwise run long - the adopted review tests (the root's exact
+      classification, one 600-second search, a far deadline, the turn-start checks at ~190
+      boards, the lazy verifications, the tree form's inherited expansions - re-set after H1 so
+      that the deadline falls among them - a deadline that does not outlive its run); the play
+      loop's cut verification with no child known legal, with one (the fallback), and a late
+      verdict given the time left, re-set for a loop that chooses nothing after the deadline
+      (an evaluator steering the choice onto a move whose exact proof takes some 0.8 s); every
+      wall-clock bound at least 5x the time measured unmutated and below the mutant's; the flat
+      play test renamed and its bound 10 s; t5d-legality-cost's search line saying what it
+      applied, its outputs behind MEASUREMENTS' rows asserted, every fixture run.
 411. **Under Q3's play activation E4's listing keeps one successor state per action key, and the
     verification layer took it for every successor - a false proof that check_certificate
     confirmed** (§11.1, §11.3, §13.1 6f; register H19, H37, H41; issues 169 - the search's half,
@@ -9407,3 +9418,11 @@ struck through, where nothing of it is left to apply); the others stand as writt
   (exit 0); gate commit ok (engine differential smoke test passed, baseline 41 compared, 0 declined;
   proof channel DISABLED). The nightly gate is owed (truth sources changed) and runs at the end of
   the round.
+- **2026-11-09 - The review's deadline tests (M3, M4, L6)** (`lane/engine`; issue 410). The eight M3
+  tests and the three M4 tests adopted (the M4 ones re-set for the play loop that chooses nothing
+  after the deadline), the fallback after a cut verification added, the flat play test renamed and
+  its bound tightened; t5d-legality-cost's search line says what it applied, and its outputs are
+  asserted. Tests and a tool only. Checks: engine 734 of 734 (`--werror`, 19.6 minutes - re-run in
+  full on 2026-11-23, the 2026-11-09 run cut off by the account's limit); verify ok (exit 0); gate
+  commit ok (engine differential smoke test passed, baseline 41 compared, 0 declined; proof channel
+  DISABLED). No Lazy SMP run: no search or prover code changed.

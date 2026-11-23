@@ -187,11 +187,16 @@ TEST(search_deadline_reaches_the_legality_classification) {
   // reaches issue 406's 20-second node within a few playouts.
 }
 
-TEST(play_deadline_reaches_the_verdicts_and_the_chosen_moves_verification) {
+TEST(play_flat_with_exact_legality_ends_on_its_stop) {
   // The same root played with exact legality under the flat form and a
-  // 1-second safety stop: the game ends on it (TimeLimit), its moves known
-  // legal, within a few seconds - not after the many minutes one exact
-  // search takes.
+  // 1-second safety stop: the game ends on it (TimeLimit - from a turn
+  // start's verdict: the flat form's root children are never unknown, so no
+  // chosen move is verified here), its actions legal, within seconds - not
+  // after the many minutes one exact search takes. (Named, until the review of
+  // 2026-11-09's M4, play_deadline_reaches_the_verdicts_and_the_chosen_moves_
+  // verification; the verification is play_no_move_is_played_after_the_
+  // deadline's.) Measured: 1.0 s unmutated; with the leaves' classification
+  // untimed (the review's M07) 19.8 s.
   const GameState s = fixture("q3-root.5dpgn", q3());
   mcts::PlayParams pp;
   pp.search.split = mcts::TurnSplit::Flat;
@@ -206,7 +211,7 @@ TEST(play_deadline_reaches_the_verdicts_and_the_chosen_moves_verification) {
   const mcts::GameRecord g = mcts::play_game(s, *ev, pp);
   const double took = seconds_since(t0);
   std::fprintf(stderr, "  %.2f s, %zu actions, %s\n", took, g.actions.size(), mcts::game_end_name(g.end));
-  CHECK(took < 20.0);
+  CHECK(took < 10.0);
   CHECK(g.end == mcts::GameEnd::TimeLimit || g.end == mcts::GameEnd::Checkmate || g.end == mcts::GameEnd::Stalemate);
   // Every action played is legal: replayed and submitted under C4.
   GameState t = s;
@@ -253,14 +258,23 @@ TEST(legality_cost_exe_reports_each_fixture) {
                   fixture_path("q3-flat-node.5dpgn").string()},
                  out, err),
              0);
-  std::string text = read_all(out);
+  // The tool's output in text mode, read here in binary: the line ends without their '\r'.
+  const auto lf_only = [](std::string t) {
+    t.erase(std::remove(t.begin(), t.end(), '\r'), t.end());
+    return t;
+  };
+  std::string text = lf_only(read_all(out));
   std::fprintf(stderr, "%s", text.c_str());
   CHECK(text.find("CONDITIONS t5d-legality-cost") != std::string::npos);
   CHECK(text.find("rules=play_activates") != std::string::npos);
   CHECK(text.find("5 boards, ") != std::string::npos);
   CHECK(text.find("18 boards, ") != std::string::npos);
   CHECK(text.find("141 pseudo-legal moves") != std::string::npos);
-  CHECK(text.find("classify settled at: 2000") != std::string::npos);        // the root
+  // The root settles at the first budget and stops there (not "...: 20000"; the review of
+  // 2026-11-09's T03), its tiers 0-2 counting what they settled, not what tier 3 learned (T04:
+  // MEASUREMENTS' rows rest on both).
+  CHECK(text.find("classify settled at: 2000\n") != std::string::npos);      // the root
+  CHECK(text.find("tiers 0-2 15,") != std::string::npos);
   CHECK(text.find("classify settled at: none of the budgets") != std::string::npos);  // the node
   CHECK(text.find("detect_mate budget=2000: ongoing") != std::string::npos);
   // An exact classification cut by --time-limit: Unknown, quickly.
@@ -284,6 +298,33 @@ TEST(legality_cost_exe_reports_each_fixture) {
   CHECK(text.find("940 pseudo-legal moves (1 named)") != std::string::npos);
   CHECK(text.find("0 legal, 0 illegal, 1 unknown") != std::string::npos);
   CHECK(text.find("search 4 playouts") != std::string::npos);
+  // The 191-board turn start (the fourth fixture): E4's exact verdict cut by --time-limit -
+  // Unknown, within seconds (the review of 2026-11-09's T02: --time-limit never reached --mate;
+  // measured 0.2 s for the verdict here; the verdict uncut runs past 20 minutes).
+  const auto t1 = std::chrono::steady_clock::now();
+  REQUIRE_EQ(run(T5D_LEGALITY_COST_EXE,
+                 {"--mate", "--budget", "exact", "--time-limit", "0.2", fixture_path("vso-seed4-verdict.5dpgn").string()},
+                 out, err),
+             0);
+  text = read_all(out);
+  std::fprintf(stderr, "%s", text.c_str());
+  CHECK(seconds_since(t1) < 15.0);
+  CHECK(text.find("191 boards, ") != std::string::npos);
+  CHECK(text.find("detect_mate budget=exact: unknown") != std::string::npos);
+  // A search given its legality and its deadline (T07, T08): the line says what the search
+  // applied - the leaves' classification and the lazy verifications exact, a 0.5 s deadline -
+  // and the deadline stops it (issue 406's Q3 node under the default rules, the flat form).
+  const auto t2 = std::chrono::steady_clock::now();
+  REQUIRE_EQ(run(T5D_LEGALITY_COST_EXE,
+                 {"--search", "800", "--split", "flat", "--search-legality", "exact", "--search-seconds", "0.5",
+                  fixture_path("q3-flat-node.5dpgn").string()},
+                 out, err),
+             0);
+  text = read_all(out);
+  std::fprintf(stderr, "%s", text.c_str());
+  CHECK(seconds_since(t2) < 15.0);
+  CHECK(text.find("legality exact, verifications exact, deadline 0.5 s") != std::string::npos);
+  CHECK(text.find("stopped by deadline") != std::string::npos);
   // Every K-th turn start of a record; a bad command line.
   REQUIRE_EQ(run(T5D_LEGALITY_COST_EXE, {"--every", "10", "--budget", "2000", fixture_path("vso-seed4-verify.5dpgn").string()},
                  out, err),
@@ -331,17 +372,17 @@ class Sleepy final : public mcts::Evaluator {
   bool slept_ = false;
 };
 
-// The uniform evaluator, but for one move: logit 8 where a leaf's candidates hold it - so that
-// the search's visits, and the play loop's choice, go to it.
+// The uniform evaluator, but for one move: logit 8 (or `logit`) where a leaf's candidates hold it
+// - so that the search's visits, and the play loop's choice, go to it.
 class Steering final : public mcts::Evaluator {
  public:
-  explicit Steering(const Move& favoured) : favoured_(favoured) {}
+  explicit Steering(const Move& favoured, float logit = 8.0f) : favoured_(favoured), logit_(logit) {}
   void evaluate(std::span<const mcts::EvalRequest> batch, std::span<mcts::Evaluation> out) override {
     for (std::size_t i = 0; i < batch.size(); ++i) {
       const MoveList& moves = batch[i].expansion->moves();
       out[i].logits.assign(moves.size(), 0.0f);
       for (std::size_t m = 0; m < moves.size(); ++m) {
-        if (moves[m] == favoured_) out[i].logits[m] = 8.0f;
+        if (moves[m] == favoured_) out[i].logits[m] = logit_;
       }
       out[i].wdl = mcts::wdl_of(0.0);
       out[i].value = mcts::two_hot(0.0);
@@ -350,6 +391,30 @@ class Steering final : public mcts::Evaluator {
 
  private:
   Move favoured_;
+  float logit_;
+};
+
+// Two moves steered: logit 4 for the first, 3.5 for the second, 0 for the rest - the search's
+// visits go to the first, then the second.
+class TwoSteering final : public mcts::Evaluator {
+ public:
+  TwoSteering(const Move& first, const Move& second) : first_(first), second_(second) {}
+  void evaluate(std::span<const mcts::EvalRequest> batch, std::span<mcts::Evaluation> out) override {
+    for (std::size_t i = 0; i < batch.size(); ++i) {
+      const MoveList& moves = batch[i].expansion->moves();
+      out[i].logits.assign(moves.size(), 0.0f);
+      for (std::size_t m = 0; m < moves.size(); ++m) {
+        if (moves[m] == first_) out[i].logits[m] = 4.0f;
+        if (moves[m] == second_) out[i].logits[m] = 3.5f;
+      }
+      out[i].wdl = mcts::wdl_of(0.0);
+      out[i].value = mcts::two_hot(0.0);
+    }
+  }
+
+ private:
+  Move first_;
+  Move second_;
 };
 
 // The candidate list of a leaf at `s` under `p`, classified within p's legality budget or with
@@ -766,4 +831,331 @@ TEST(play_totals_count_a_timed_out_decision) {
     CHECK(g.playouts >= 1);
     if (g.verified_choices > 0) CHECK(g.seconds_search_verify > 0);  // the cut verification's time, counted
   }
+}
+
+// ---- The review of 2026-11-09: the deadline's tests (M3, M4) --------------------------------
+// Wall-clock bounds: each at least 5x the time measured here unmutated, and well below the
+// mutant's (both numbers in each comment) - CI's engine job runs on 2-4-core runners.
+
+namespace {
+
+// The turn start after the first `actions` actions of a fixture's record.
+GameState after_actions(const char* name, const RuleOptions& rules, int actions) {
+  const PgnRecord record = read_pgn(read_all(fixture_path(name)));
+  PgnReplay replay(record, {}, rules);
+  for (int i = 0; i < actions && !replay.finished(); ++i) replay.play_next();
+  return replay.state();
+}
+
+}  // namespace
+
+TEST(search_deadline_cuts_the_roots_classification) {
+  // M3, adopted (review_search_deadline_cuts_the_roots_classification): issue 406's Q3 node as a
+  // flat root with exact legality - its own expansion classifies 141 moves exactly, some 12
+  // million nodes. A 0.5 s deadline must cut it inside the first batch. Measured: 0.8 s
+  // unmutated; with the leaves' classification untimed (the review's M07, M01) 16 s.
+  const GameState s = fixture("q3-flat-node.5dpgn", q3());
+  mcts::SearchParams p = quiet();
+  p.split = mcts::TurnSplit::Flat;
+  p.legality = LegalityOptions::exact();
+  p.verify_legality = LegalityOptions::exact();
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
+  mcts::Search search(s, p);
+  mcts::Limits limits{800};
+  limits.seconds = 0.5;
+  const auto t0 = std::chrono::steady_clock::now();
+  search.run(*ev, limits);
+  const double took = seconds_since(t0);
+  std::fprintf(stderr, "  %.2f s, %llu playouts, stopped by %s, expansions %.2f s\n", took,
+               static_cast<unsigned long long>(search.stats().playouts), mcts::stop_reason_name(search.stats().last_stop),
+               search.stats().seconds_expand);
+  CHECK(took < 8.0);
+}
+
+TEST(legality_deadline_cuts_one_long_search) {
+  // M3, adopted (review_legality_deadline_cuts_one_long_search): the 192-board position's named
+  // move, whose exact classification ran past 600 s (MEASUREMENTS). A 0.5 s deadline must cut its
+  // one tier-3 search part-way: Unknown. Measured: 0.5 s unmutated (the search alone); with the
+  // time left never reaching the search (the review's L03) over 180 s.
+  std::vector<Move> named;
+  const GameState s = fixture("vso-seed4-verify.5dpgn", RuleOptions{}, &named);
+  REQUIRE_EQ(named.size(), std::size_t{1});
+  LegalityOptions o = LegalityOptions::exact();
+  o.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+  std::vector<MoveLegality> out;
+  LegalityStats st;
+  const auto t0 = std::chrono::steady_clock::now();
+  classify_moves(s, named, out, o, &st);
+  const double took = seconds_since(t0);
+  std::fprintf(stderr, "  %.3f s, %llu nodes, %zu unknown\n", took, static_cast<unsigned long long>(st.search_nodes),
+               st.unknown);
+  CHECK(took < 10.0);
+  CHECK(out.at(0) == MoveLegality::Unknown);
+}
+
+TEST(legality_deadline_with_time_to_spare_settles_everything) {
+  // M3, adopted (review_legality_deadline_with_time_to_spare_settles_everything): issue 406's Q3
+  // root settles every move in 240 nodes. A deadline far off must change nothing - no move
+  // unknown, each as the classification without a deadline says (the review's L04 and L05, the
+  // time left's sign flipped and the deadline read inverted, cut every search at once).
+  const GameState s = fixture("q3-root.5dpgn", q3());
+  MoveList all;
+  generate_moves(s, all);
+  const std::vector<Move> moves(all.begin(), all.end());
+  std::vector<MoveLegality> ref;
+  classify_moves(s, moves, ref, LegalityOptions::exact());
+  LegalityOptions o = LegalityOptions::exact();
+  o.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+  std::vector<MoveLegality> out;
+  LegalityStats st;
+  classify_moves(s, moves, out, o, &st);
+  std::fprintf(stderr, "  %zu moves, %zu unknown, %llu nodes\n", moves.size(), st.unknown,
+               static_cast<unsigned long long>(st.search_nodes));
+  CHECK_EQ(st.unknown, std::size_t{0});
+  CHECK(out == ref);
+}
+
+TEST(search_turn_start_checks_take_the_deadline) {
+  // M3, adopted (review_search_turn_start_checks_take_the_deadline): the default-rules game's turn
+  // start after 25 actions (155 boards, Black to move) as a flat root, mate_nodes raised to 2e8:
+  // its children are White turn starts of ~190 boards, where E4's check can run for minutes. The
+  // search's 2 s deadline must reach those checks (Unknown). Measured: 3.8 s unmutated (the flat
+  // generator, never under the deadline, overshoots it); with the checks or the fallback listing
+  // untimed (the review's M02, M04, M05) over 180 s.
+  const GameState s = after_actions("vso-seed4-verdict.5dpgn", RuleOptions{}, 25);
+  REQUIRE(s.to_move() == Colour::Black);
+  mcts::SearchParams p = quiet();
+  p.split = mcts::TurnSplit::Flat;
+  p.mate_nodes = 200'000'000;
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Material);
+  mcts::Search search(s, p);
+  mcts::Limits limits{64};
+  limits.seconds = 2.0;
+  const auto t0 = std::chrono::steady_clock::now();
+  search.run(*ev, limits);
+  const double took = seconds_since(t0);
+  std::fprintf(stderr, "  %.2f s, %llu playouts, stopped by %s, terminal checks %.2f s (%llu checks, %llu unknown)\n",
+               took, static_cast<unsigned long long>(search.stats().playouts),
+               mcts::stop_reason_name(search.stats().last_stop), search.stats().seconds_mate,
+               static_cast<unsigned long long>(search.stats().mate_checks),
+               static_cast<unsigned long long>(search.stats().unknown_verdicts));
+  CHECK(took < 30.0);
+}
+
+TEST(ply_lazy_verification_deadline) {
+  // M3, adopted (review_ply_lazy_verification_deadline): the 192-board position under the ply
+  // split with exact lazy verifications (c) - its named move's exact classification runs past
+  // 600 s; the search's deadline must cut it. Measured: 2.0 s unmutated; with the lazy
+  // verifications untimed (the review's M08) past 600 s.
+  int made = 0;
+  const GameState s = fixture("vso-seed4-verify.5dpgn", RuleOptions{}, nullptr, &made);
+  mcts::SearchParams p = quiet();
+  p.split = mcts::TurnSplit::BoardMove;
+  p.verify_legality = LegalityOptions::exact();
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
+  mcts::Search search(s, p, made);
+  mcts::Limits limits{16};
+  limits.seconds = 2.0;
+  const auto t0 = std::chrono::steady_clock::now();
+  search.run(*ev, limits);
+  const double took = seconds_since(t0);
+  std::fprintf(stderr, "  %.2f s, %llu playouts, stopped by %s, verifications %.2f s (%llu unknown)\n", took,
+               static_cast<unsigned long long>(search.stats().playouts), mcts::stop_reason_name(search.stats().last_stop),
+               search.stats().seconds_verify, static_cast<unsigned long long>(search.stats().verified_unknown));
+  CHECK(took < 30.0);
+}
+
+TEST(search_far_deadline_changes_nothing) {
+  // M3, adopted (review_search_far_deadline_changes_nothing): a deadline that never passes must
+  // change nothing - the search is deterministic. The ply split from issue 406's Q3 node, lazy
+  // verifications within 100,000 nodes, 16 playouts (the review's 400,000 and 40 took 31 s): with
+  // no deadline and with one 120 s away, the same tree (digest) and the same verification counts
+  // (the review's M11, the deadline in milliseconds - 0.12 s - and L04 cut the classifications).
+  const GameState s = fixture("q3-flat-node.5dpgn", q3());
+  mcts::SearchParams p = quiet();
+  p.split = mcts::TurnSplit::BoardMove;
+  p.verify_legality = LegalityOptions::nodes(100'000);
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
+  mcts::Search a(s, p);
+  a.run(*ev, mcts::Limits{16});
+  mcts::Search b(s, p);
+  mcts::Limits far{16};
+  far.seconds = 120.0;
+  b.run(*ev, far);
+  std::fprintf(stderr, "  digests %llx / %llx; verified legal %llu/%llu, unknown %llu/%llu\n",
+               static_cast<unsigned long long>(a.digest()), static_cast<unsigned long long>(b.digest()),
+               static_cast<unsigned long long>(a.stats().verified_legal),
+               static_cast<unsigned long long>(b.stats().verified_legal),
+               static_cast<unsigned long long>(a.stats().verified_unknown),
+               static_cast<unsigned long long>(b.stats().verified_unknown));
+  CHECK_EQ(a.digest(), b.digest());
+  CHECK_EQ(a.stats().verified_unknown, b.stats().verified_unknown);
+  CHECK_EQ(a.stats().verified_legal, b.stats().verified_legal);
+}
+
+TEST(tree_form_inherited_expansions_take_the_deadline) {
+  // M3, adopted (review_tree_form_inherited_no_gates): the tree form with no interaction gate at
+  // issue 406's Q3 node - every mid-turn node below a turn start expanded on inherited priors
+  // inside selection, up to six per simulation, each classification up to 400,000 nodes (some
+  // 0.8 s). The root's own expansion ends first; the 1.2 s deadline then falls among the second
+  // batch's inherited expansions and must reach them. Measured: 1.25 s unmutated; with the
+  // inherited expansions untimed (the review's M06) 9.5 s.
+  const GameState s = fixture("q3-flat-node.5dpgn", q3());
+  mcts::SearchParams p = quiet();
+  p.split = mcts::TurnSplit::Tree;
+  p.tree_gates = 0;
+  p.legality = LegalityOptions::nodes(400'000);
+  p.verify_legality = LegalityOptions::nodes(400'000);
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
+  mcts::Search search(s, p);
+  mcts::Limits limits{800};
+  limits.seconds = 1.2;
+  const auto t0 = std::chrono::steady_clock::now();
+  CHECK_NOTHROW(search.run(*ev, limits));
+  const double took = seconds_since(t0);
+  std::fprintf(stderr, "  %.2f s, %llu playouts, stopped by %s, expansions %.2f s, verifications %.2f s\n", took,
+               static_cast<unsigned long long>(search.stats().playouts), mcts::stop_reason_name(search.stats().last_stop),
+               search.stats().seconds_expand, search.stats().seconds_verify);
+  CHECK(took < 7.0);
+}
+
+TEST(play_no_child_known_legal_at_the_deadline_ends_time_limit) {
+  // M4, adopted (review_play_no_child_known_legal_at_the_deadline_ends_time_limit), given a
+  // verification the deadline cuts: no choice is made after the deadline (M1), so the choice must
+  // come before it. Issue 406's Q3 node with no legality budget (every move unknown, nothing
+  // verified in the search); the evaluator steers the choice onto a move whose exact proof takes
+  // some 0.8 s and sleeps through the search's first batch, so the verification begins with at
+  // most 0.15 s left and is cut: no child known legal, TimeLimit at the turn start - no throw (the
+  // review's S05), no action. Where the stop falls in the search (a slow machine) the game ends
+  // TimeLimit there.
+  const GameState s = fixture("q3-flat-node.5dpgn", q3());
+  mcts::PlayParams pp;
+  pp.search = quiet(pp.search);
+  pp.search.split = mcts::TurnSplit::BoardMove;
+  pp.search.legality = LegalityOptions::budgeted(0, 0);
+  pp.search.verify_unknown = false;
+  pp.match_play = true;  // the most visited child: the steered one
+  pp.playouts = 2;
+  pp.max_seconds = 1.0;
+  Steering steer(find_move(s, "(+2T2)Kb4(+1T1)a4"));
+  Sleepy ev(steer, 0.85, true);
+  const auto t0 = std::chrono::steady_clock::now();
+  mcts::GameRecord g(s);
+  CHECK_NOTHROW(g = mcts::play_game(s, ev, pp));
+  const double took = seconds_since(t0);
+  std::fprintf(stderr, "  %.2f s, %zu actions, %s, %llu verified choices, verification %.3f s, %llu decisions\n", took,
+               g.actions.size(), mcts::game_end_name(g.end), static_cast<unsigned long long>(g.verified_choices),
+               g.seconds_search_verify, static_cast<unsigned long long>(g.decisions));
+  CHECK(g.end == mcts::GameEnd::TimeLimit);
+  CHECK(g.actions.empty());
+  CHECK_EQ(g.decisions, std::uint64_t{0});
+}
+
+TEST(play_no_move_is_played_after_the_deadline) {
+  // M4, adopted (review_play_no_move_is_played_after_the_deadline): as the test above, asserting
+  // what the deadline must stop - no move shown legal by a cut verification is played, so no
+  // decision is made (the review's S06: make_legal's result ignored, the move played), and the
+  // cut verification stops at the deadline (S04: the verification untimed ran its 0.8 s past
+  // it). Measured: 1.0 s unmutated; S04 1.47 s.
+  const GameState s = fixture("q3-flat-node.5dpgn", q3());
+  mcts::PlayParams pp;
+  pp.search = quiet(pp.search);
+  pp.search.split = mcts::TurnSplit::BoardMove;
+  pp.search.legality = LegalityOptions::budgeted(0, 0);
+  pp.search.verify_unknown = false;
+  pp.playouts = 2;
+  pp.max_seconds = 1.0;
+  pp.decision_log = true;
+  Steering steer(find_move(s, "(+2T2)Kb4(+1T1)a4"));
+  Sleepy ev(steer, 0.85, true);
+  const mcts::GameRecord g = mcts::play_game(s, ev, pp);
+  std::fprintf(stderr, "  %.2f s, %zu actions, %s, %llu verified choices, verification %.3f s, %llu decisions\n",
+               g.seconds, g.actions.size(), mcts::game_end_name(g.end),
+               static_cast<unsigned long long>(g.verified_choices), g.seconds_search_verify,
+               static_cast<unsigned long long>(g.decisions));
+  CHECK(g.end == mcts::GameEnd::TimeLimit);
+  CHECK_EQ(g.decisions, std::uint64_t{0});
+  CHECK(g.decision_log.empty());
+  CHECK(g.seconds < pp.max_seconds + 0.3);  // a cut verification ends at the deadline
+}
+
+TEST(play_fallback_after_a_cut_verification_plays_a_child_known_legal) {
+  // M4: the chosen move's exact verification cut, a child the search showed legal (lazy
+  // verifications on) is played instead - the most visited one known legal. Issue 406's Q3 node,
+  // no legality budget in the expansion, lazy verifications within 60,000 nodes: the evaluator
+  // steers the search to a move whose exact proof needs 531,432 nodes (it stays unknown) and then
+  // to a legal one whose proof needs 43,424 (shown legal). Where the stop falls inside the first
+  // move's exact proof (some 0.8 s, from a choice made at about 0.1 s here: every stop), the
+  // fallback plays the second; with more time the proof ends first (the first move illegal; the
+  // second chosen next), and with less the stop falls in the search. Three stops, so that some
+  // machine speed meets each path; whatever the path, the first move played is legal (exact
+  // classification here), every action recorded is, and the game ends TimeLimit.
+  const GameState s = fixture("q3-flat-node.5dpgn", q3());
+  const Move steered = find_move(s, "(+2T2)Kb4(+1T1)a4");
+  const Move legal = find_move(s, "(+1T2)Ka3(+2T2)a3");
+  int fallbacks = 0;
+  for (const double stop : {0.4, 0.6, 0.8}) {
+    mcts::PlayParams pp;
+    pp.search = quiet(pp.search);
+    pp.search.split = mcts::TurnSplit::BoardMove;
+    pp.search.legality = LegalityOptions::budgeted(0, 0);
+    pp.search.verify_unknown = true;
+    pp.search.verify_legality = LegalityOptions::nodes(60'000);
+    pp.match_play = true;
+    pp.playouts = 4;  // the root, the first move twice (lazily verified: unknown), the second (legal)
+    pp.max_seconds = stop;
+    pp.decision_log = true;
+    TwoSteering steer(steered, legal);
+    mcts::GameRecord g(s);
+    CHECK_NOTHROW(g = mcts::play_game(s, steer, pp));
+    CHECK(g.end == mcts::GameEnd::TimeLimit);
+    GameState t = s;  // every action recorded legal: replayed and submitted under C4
+    for (const std::vector<Move>& a : g.actions) {
+      for (const Move& m : a) t.apply(m);
+      CHECK(t.submission_status() == SubmitStatus::Safe);
+      t.submit();
+    }
+    bool fallback = false;
+    if (!g.decision_log.empty()) {
+      const mcts::DecisionLog& d = g.decision_log.front();
+      const std::vector<Move>& played = d.children.at(d.chosen).step.moves;
+      REQUIRE_EQ(played.size(), std::size_t{1});
+      std::vector<MoveLegality> out;
+      classify_moves(s, played, out, LegalityOptions::exact());
+      CHECK(out.at(0) == MoveLegality::Legal);
+      fallback = g.verified_choices >= 1 && !(played.front() == steered);
+    }
+    fallbacks += fallback ? 1 : 0;
+    std::fprintf(stderr,
+                 "  stop %.1f s: %.2f s, %s, %llu verified choices, verification %.3f s, %llu decisions%s\n", stop,
+                 g.seconds, mcts::game_end_name(g.end), static_cast<unsigned long long>(g.verified_choices),
+                 g.seconds_search_verify, static_cast<unsigned long long>(g.decisions),
+                 fallback ? " - a child known legal played in the steered move's place" : "");
+  }
+  std::fprintf(stderr, "  %d of 3 stops played the fallback\n", fallbacks);
+}
+
+TEST(play_late_verdict_gets_the_time_left) {
+  // M4, adopted (review_play_late_verdict_gets_no_time), given an action played before the
+  // deadline (no choice is made after it, M1): the default-rules game's turn start after 25
+  // actions (155 boards, Black to move) under the flat form, one playout (the root's turns, a
+  // child) with the search's own terminal checks cheap (mate_nodes 20,000) and the evaluator
+  // sleeping 1 s in its first batch: Black's action is played at about 1.3 s, and the next turn
+  // start's verdict (~190 boards, minutes untimed) gets the time left and is cut at the 6 s
+  // deadline. Measured: 6.01 s unmutated; with each verdict given max_seconds (the review's S08)
+  // the game overshoots by the time before that verdict - at least the 1 s sleep: 7.31 s.
+  const GameState s = after_actions("vso-seed4-verdict.5dpgn", RuleOptions{}, 25);
+  mcts::PlayParams pp;
+  pp.search = quiet(pp.search);
+  pp.search.split = mcts::TurnSplit::Flat;
+  pp.search.mate_nodes = 20'000;
+  pp.playouts = 1;
+  pp.max_seconds = 6.0;
+  const std::unique_ptr<mcts::Evaluator> material = mcts::make_evaluator(mcts::BuiltinEvaluator::Material);
+  Sleepy ev(*material, 1.0, true);
+  const mcts::GameRecord g = mcts::play_game(s, ev, pp);
+  std::fprintf(stderr, "  %.2f s (verdicts %.2f s), %zu actions, %s\n", g.seconds, g.seconds_verdicts, g.actions.size(),
+               mcts::game_end_name(g.end));
+  CHECK(g.end == mcts::GameEnd::TimeLimit);
+  CHECK(g.seconds < pp.max_seconds + 0.2);  // the late verdict cut at the deadline
 }

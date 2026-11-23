@@ -10,6 +10,52 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-09 - The review of 0e7d2ed..d86f363, the deadline's tests: each place the deadline reaches held where the call would run long (M3, M4, L6)
+
+The review (build-log issue 410) found the deadline's places barely tested: the search test's
+root classified in 240 nodes, so its deadline never met a costly classification; the play test
+allowed 20 s for a 1 s stop and verified no chosen move (the flat form never does); the legality
+test could not see one search overrun; `t5d-legality-cost`'s outputs behind MEASUREMENTS' rows
+went unchecked. Adopted and added, as the main loop decided - each wall-clock bound at least 5x
+the time measured unmutated and below the mutant's, both numbers in the test:
+
+- **M3** (`engine/tests/test_legality_cost.cpp`, adopted from the review):
+  `search_deadline_cuts_the_roots_classification` (the 18-board node's exact root, 0.5 s:
+  under 8 s - 0.8 s measured, 16 s untimed), `legality_deadline_cuts_one_long_search` (the
+  192-board move's 600-second search, Unknown at 0.5 s), `legality_deadline_with_time_to_spare_
+  settles_everything`, `search_turn_start_checks_take_the_deadline` (3.8 s against 30; over 180
+  s untimed), `ply_lazy_verification_deadline` (2.0 s against 30), `search_far_deadline_changes_
+  nothing` (16 playouts, 100,000-node verifications: the review's 40 and 400,000 took 31 s),
+  `tree_form_inherited_expansions_take_the_deadline` (re-set after H1's fix so that the deadline
+  falls among inherited expansions: 1.25 s against 7; 9.5 s untimed); `test_mcts.cpp`:
+  `search_deadline_does_not_outlive_its_run`. The flat play test's bound 10 s (1.0 s measured;
+  19.8 s with the leaves untimed).
+- **M4**: `play_no_child_known_legal_at_the_deadline_ends_time_limit`,
+  `play_no_move_is_played_after_the_deadline` (1.0 s against 1.3; 1.47 s with the verification
+  untimed) and `play_late_verdict_gets_the_time_left` (6.01 s against 6.2; 7.31 s with each
+  verdict given max_seconds), adopted and re-set for the play loop that chooses nothing after
+  the deadline: an evaluator steers the choice onto a move whose exact proof takes some 0.8 s and
+  sleeps through the search's first batch, so the verification begins before the deadline and is
+  cut; `play_fallback_after_a_cut_verification_plays_a_child_known_legal` (lazy verifications on:
+  the most visited child known legal played instead, at three stops - 3 of 3 here); the flat play
+  test renamed `play_flat_with_exact_legality_ends_on_its_stop` (it verifies no chosen move).
+- **L6** (`engine/tools/t5d_legality_cost.cpp`, `legality_cost_exe_reports_each_fixture`): the
+  search line prints what the search applied - its legality, the lazy verifications' budget, the
+  deadline - not the options asked for; asserted: the root settles at the first budget and stops
+  ("...: 2000" then a line end, CR stripped), tiers 0-2 count what they settled (q3-root: 15),
+  `--mate --time-limit` reaches E4 (the 191-board fixture: Unknown, 0.2 s - the tool now runs
+  every fixture), a flat search with `--search-legality exact --search-seconds 0.5` stops by its
+  deadline.
+- Docs: `engine/README.md` (Stage E5a's tests, said as they assert); the issue-406 entry below (a
+  correction note); `docs/BUILD_LOG.md` (issue 410, the session log).
+- Checks: engine 734 of 734 (`--werror`, 19.6 minutes - re-run in full on 2026-11-23, the
+  2026-11-09 run cut off by the account's limit); verify ok (exit 0); gate commit ok (engine
+  differential smoke test passed, baseline 41 compared, 0 declined; proof channel DISABLED).
+  No Lazy SMP run: no search or prover code changed.
+
+Spec: no spec text describes these tests; they hold issue 406's deadline (§8.6 and register E7
+bear on it, unchanged - L7) and MEASUREMENTS' rows. The proof channel stays off (H41).
+
 ### 2026-11-09 - The review of 0e7d2ed..d86f363, H2: under Q3 no verdict from E4's listing of action keys - the prover, check_certificate, loss_confirmed and MT-01's checker
 
 Under Q3's play activation two orders of one set of moves can reach two states under one action
@@ -280,7 +326,13 @@ decision the documents have made exact (issue 408).
   `engine/tests/test_legality_cost.cpp` (the deadline leaves moves unknown and never
   misclassifies; issue 406's root stops at a 0.5 s search deadline; a game with exact legality
   and a 1 s stop ends on time with legal actions; the 191-board verdict ends a game with a 2 s
-  stop in about 2 s; the tool on every fixture); `engine/testdata/legality-cost/` (4 records);
+  stop in about 2 s; the tool on every fixture - review correction, 2026-11-09, M3, M4 and L6:
+  the search test's root classified in 240 nodes, so its deadline never met a costly
+  classification; the play test allowed 20 s for a 1 s stop, and its TimeLimit came from a
+  turn start's verdict - the flat form verifies no chosen move; the legality test could not
+  see one search overrun; the tool never ran the 191-board fixture and its search line printed
+  the options asked for; each now held where the call would run long, issue 410);
+  `engine/testdata/legality-cost/` (4 records);
   `engine/README.md` (Stage E5a's cost and deadlines, Stage E6a's `run` and `t5d-play`, the
   targets table); `docs/MEASUREMENTS.md`; `docs/BUILD_LOG.md` (issue 406 closed out, issues
   407-408, edits 303-304, the Lazy SMP log, the session log).
