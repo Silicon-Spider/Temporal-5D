@@ -18,11 +18,29 @@ pytestmark = pytest.mark.grad
 
 @pytest.mark.parametrize("trunk_dtype", ["bf16", "fp32"])
 def test_smoke_three_steps(trunk_dtype):
-    report = smoke_train(NetConfig(trunk_dtype=trunk_dtype), steps=MAX_STEPS, seed=0)
+    # Board counts (1, 3, 6, 9): the 9-board position holds boards beyond B15's exact classes, which
+    # the v1's per-axis far tables need to move (the guard below); the default (1, 3, 6) has none.
+    report = smoke_train(NetConfig(trunk_dtype=trunk_dtype), steps=MAX_STEPS, seed=0, board_counts=(1, 3, 6, 9))
     assert report.steps == 3 and len(report.losses) == 3
     for step in report.losses:
         assert all(math.isfinite(v) for v in step.values())
     assert report.param_change > 0 and report.changed_fraction == 1.0
+
+
+def test_the_smoke_batch_holds_a_far_board_pair():
+    """B15's two per-axis far tables (register B6, B15; the v1 default since the 2026-11-15 review)
+    act only on pairs of boards more than two timelines or four half-turns apart. The smoke batch at
+    board counts (1, 3, 6, 9) holds such pairs - at the default (1, 3, 6) it holds none, and those
+    two tensors would stay put - so "every tensor moves" in this file does not rest on chance."""
+
+    def far_pairs(counts) -> int:
+        total = 0
+        for state in synthetic_states(0, counts):
+            p, h = torch.as_tensor(state.timeline), torch.as_tensor(state.half_turn)
+            total += int((((p[None, :] - p[:, None]).abs() > 2) | ((h[None, :] - h[:, None]).abs() > 4)).sum())
+        return total
+
+    assert far_pairs([1, 3, 6, 9, 3]) > 0 and far_pairs([1, 3, 6, 3]) == 0
 
 
 @pytest.mark.parametrize(

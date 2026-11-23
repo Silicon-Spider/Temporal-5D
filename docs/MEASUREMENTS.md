@@ -123,6 +123,65 @@ were 3.64x (live set) and 14x (cached vs dense) at 240 boards, 8 timelines. The
 quiet-machine re-run (commands in the build log) records wall and kernel time
 with load samples per job.
 
+### B15's two per-axis far tables and its layer-shared arm - parameters counted (2026-11-22; no threshold, no verdict)
+
+**What it is.** Decision 1 of the 2026-11-15 review (register B6 and B15; §4.1): beyond its exact
+classes B15 "adds B6's two clamped log-bucket scalars, one for Δtime and one for Δtimeline ... for
+3,456 parameters", and ablation 2 "gains a layer-shared arm: one table per head for all sixteen
+layers, a sixteenth of the parameters". Built 2026-11-22 (`python/t5d/net/displacement.py`): the
+far tables are `NetConfig.disp_far_axis`, **on - the ruling changes the default network, so every
+parameter total of the v1 and of F2's arm moves by them**; `disp_far_axis=False` is the network as
+built before the review, bit for bit; the layer-shared arm is `disp_layer_shared`, off. As built
+the two tables are per head per layer, over B6's buckets (19 signed Δtime buckets, exact below 4
+half-turns and clamped at 128; 8 |Δtimeline| buckets, exact below 4 and clamped at 32), and are
+added to every pair of board tokens whose boards lie beyond the exact classes. Machine `dev-r`;
+PyTorch 2.13.0+cpu; parameters by `parameter_breakdown` of the built networks (exact; no
+precision, batch, board count or window enters). FLOPs by `FlopCounterMode` over one forward:
+FP32 trunk, the F1 network, random weights (model seed 0), one position `synthetic_state(0, 44)`
+(T = 2,920), window none - counts do not depend on load (the machine was loaded).
+
+**Parameters (exact).**
+
+| Network | B15's table | Per-axis far tables | B15 | Total |
+|---|---|---|---|---|
+| v1 (F1), the default | 1,623,168 (16 x 8 x 12,681) | **3,456** (16 x 8 x (19 + 8): Δtime 2,432, Δtimeline 1,024) | 1,626,624 | **22,969,139** |
+| v1, `disp_far_axis=False` - as built before the review | 1,623,168 | 0 | 1,623,168 | 22,965,683 |
+| F2's larger arm (L24-ff12), the default | 2,434,752 (24 x 8 x 12,681) | 5,184 (24 x 8 x 27) | 2,439,936 | **46,900,275** (46,895,091 before) |
+| v1, ablation 2's layer-shared arm (`disp_layer_shared`) | 101,448 (8 x 12,681) | 216 (8 x 27) | 101,664 | 21,444,179 |
+| v1, ablation 2's no-table arm (`displacement_bias=False`) | 0 | 0 | 0 | 21,342,515 (unchanged) |
+
+§4.1's "3,456 parameters": 3,456 - ratio 1.00. B15 with them is 7.08% of the v1 (§4.1's "~7% of the
+network" is the table's 7.07%). §4.1's "a sixteenth of the parameters": 101,664 x 16 = 1,626,624,
+exact - which holds only because the arm shares the far tables with the main table. Figures that
+follow the v1's total: with A8 on 25,598,259 at the placeholder's 8x FFN and 24,678,963 at 1x; the
+cached configuration (B16's 304) 22,969,443. Of the 152 (Δtime bucket, Δtimeline bucket) cells 131
+are reached by some board pair beyond the exact classes and 21 never are (both buckets lie inside
+them: |Δtime| below 4 with |Δtimeline| below 3); each of the 19 + 8 scalars per head per layer is
+reached.
+
+**FLOPs: unchanged.** One 44-board forward counts 316,148,587,072 FLOPs with the far tables (the
+default), 316,148,587,072 without them and 316,148,587,072 under the layer-shared arm: the far
+terms are gathers and additions, which the counter leaves out as it leaves out B15's own lookup.
+Every counted figure in this file therefore stands; the parameter totals quoted by earlier dated
+sections are the v1 of their dates.
+
+**The off switch, checked across versions.** The network of the commit before this change
+(`faaa64e`'s `python/t5d`, exported to a scratch directory) and this build with
+`disp_far_axis=False`, at one seed on one batch (`far_state(7)`, `synthetic_state(8, 6,
+n_timelines=3)`, `synthetic_state(9, 1)`): the SHA-256 of the whole `state_dict` and the trunk,
+value, policy, per-board, per-square and leave outputs are bitwise identical in nine
+configurations - the v1 in BF16 and in FP32, the cached configuration's network, the stage-N2
+flags with B17, the chunked, dense and score-function paths, A8 at 1x, and F2's arm.
+
+**Wall time and memory: not measured** - the machine was loaded. By the shapes (arithmetic, not a
+measurement): the far terms add one (batch, heads, boards + 2, boards + 2) FP32 tensor per layer -
+1.9 MB at 240 boards - and, per query block, one more (batch, heads, rows, keys) FP32 gather beside
+B15's own - 134 MB transient at 240 boards with 4-board blocks. For the quiet-machine block:
+`python -m t5d.net.bench --config n2-no-table n2-default --boards 44 240` (from `python/`), whose
+"n2-default" now carries them. The layer-shared arm here shares the function and the count; the
+bias "assembled once per forward" (§10.2) is G11's and is not built, so the arm's wall time today
+is the default's.
+
 ### A8 - the board-layout embedding, counted and timed (2026-10-23)
 
 **What it is.** Section 15.3's row "Board-layout embedding (A8) | ~0.1% of attention at 44
@@ -206,6 +265,52 @@ FP32 block was stopped unfinished (the machine at 100%). For the quiet-machine b
 The embedding runs in FP32 under either trunk (it precedes the trunk's autocast), so its time does
 not follow the trunk's precision. Lc0's "5% latency" is a GPU figure for a different network and is
 not compared.
+
+### A8's FFN at 1x - ablation 6p's second arm, counted (2026-11-22; no threshold, no verdict)
+
+**What it is.** §2.2 since the 2026-11-15 review: "the FFN's width is part of the arm: 6p tests it
+at 1× (about 0.3% of the forward) beside the 8× placeholder". The arm is the A8 section's network
+with the embedding's FFN at width d instead of 8d - `NetConfig(board_layout_embedding=True,
+layout_ffn_ratio=1)`, named `6p-layout-ff1` in `config.PRESETS` and `bench.CONFIGS` beside
+`6p-layout-ff8`. Nothing else differs: at one seed the two arms share every parameter but the
+FFN's two matrices and their biases. No default changed (the flag is off, the placeholder 8x).
+Machine `dev-r`; PyTorch 2.13.0+cpu; FP32 trunk; the F1 network of this date (B9's two move-graph
+heads, B15 with its per-axis far tables, the block-sparse path, dense scope); random weights
+(model seed 0); one position, `synthetic_state(0, N)`; window none. FLOPs by `FlopCounterMode`
+over one forward - counts do not depend on load (the machine was loaded: other jobs of the build).
+
+**Parameters (exact).** The projection (1,573,888) and the merge (4,096) as at 8x; the FFN 131,840
+(gain 256; 256 -> 256 -> 256 with F5's biases) against 1,051,136: A8 is **1,709,824** against
+2,629,120 - 919,296 fewer. The v1's 22,969,139 becomes 24,678,963 (+7.4%), against 25,598,259 at
+8x (+11.4%). (The A8 section above quotes the v1 of its date, 22,965,426 and 25,594,546. With
+B15's per-axis far tables off - the network before the 2026-11-15 review - the three figures are
+22,965,683, 24,675,507 and 25,594,803.)
+
+**FLOPs.** The 44-board row is counted: one forward without A8 316,148,587,072 FLOPs (T = 2,920),
+with the arm at 1x 317,076,380,224 and at 8x 322,434,603,584 - differences 927,793,152 and
+6,286,016,512, exactly `cost.layout_flops` (pinned by `test_layout.py`). The 240-board row is
+**derived**: `cost.layout_flops` (exact) against the 2026-10-23 table's denominators above, not
+re-counted.
+
+| Boards | A8 projection | merge | FFN at 1x | A8 at 1x | A8 at 8x | Attention: analytic / counted | Forward counted (off) | A8 at 1x / attention: analytic / counted | A8 / forward: 1x / 8x |
+|---|---|---|---|---|---|---|---|---|---|
+| 44 (counted) | 0.138 GF | 0.024 | 0.765 | **0.928** | 6.286 | 139.7 / 193.6 GF | 316.1 GF | 0.66% / 0.48% | **0.29%** / 1.99% |
+| 240 (derived) | 0.755 | 0.130 | 4.157 | 5.041 | 34.14 | 4,119 / 4,872 | 5,538 | 0.12% / 0.10% | 0.091% / 0.62% |
+
+**In the cached configuration - derived, not re-counted.** The 2026-10-23 count found that what A8
+adds to a node is exactly `cost.layout_flops` at the child (every token embedded at every node).
+At 1x that is 948,781,056 FLOPs on the 63.83 GF node at 44 boards - **+1.5%** (1.9% of the 49.4 GF
+analytic node) - and 5,062,410,240 on 238.19 GF at 240 boards - **+2.1%** (3.1% of 164.7 GF) -
+against +10.1% and +14.4% at 8x.
+
+**Against the estimates.** §2.2's "about 0.3% of the forward" at 1x: 0.293% - ratio 0.98, inside
+the 2x rule, no flag. Its "2.0% of the forward" at 8x is re-counted on today's network: 1.99%.
+§15.3's own row for A8 ("~0.1% of attention at 44 boards") was flagged on 2026-10-23 for any
+per-token FFN, a 1·d one included (0.66% of attention, 6.6x; issue 240(l)): that flag stands and
+this arm is the figure it named.
+
+**Wall time: not measured** - the machine was loaded. For the quiet-machine block: `python -m
+t5d.net.bench --config n2-default 6p-layout-ff8 6p-layout-ff1 --boards 44 240` (from `python/`).
 
 ### A5 - piece-centric tokens: token counts on the human games, counted FLOPs (2026-10-23)
 
@@ -372,6 +477,341 @@ Records read: 32 to their end or refusal (31 to the end, local/ignores-check to 
 8 `parse_failed` (Kairos's reader fails the whole record; first written as "31 ... 9", a
 miscount corrected 2026-11-02 from the parse-mode dry run); the hypercuboid search cut at 120 s on 1 record (cwmtt/100_timelines, position 21
 of 22), the exhaustive one at 60 s on 10.
+
+### G11 - operators and attention-kernel calls of one forward, counted on the CPU graph (2026-11-22; counts; no threshold, no verdict)
+
+**What it is.** §10.2's third requirement (2026-11-15 review; register G11): "Launches per layer
+are a constant ... It is counted, not assumed: a §15.3 figure. The eager forward's operations can
+be counted on the CPU today; the compiled path's launches are read by profiler on GPU time." This
+is the first half of that sentence - what one eager forward dispatches - counted by
+`python/t5d/net/opcount.py` (`python -m t5d.net.opcount`, from `python/`; its tests are
+`python/tests/net/test_opcount.py`). **It reports two figures, and neither is a count of device
+kernel launches:**
+
+- **Operators dispatched**: every ATen operator the forward hands to the backend, after PyTorch's
+  composite operators have decomposed (a `TorchDispatchMode`: a linear layer on a matrix is one
+  transpose view and one `addmm`; a fused attention call is one operator). An operator is **free**
+  when its schema says its result aliases its input (a view) or it is a bare allocation
+  (`opcount.FREE_OPS`), and **compute** otherwise. The compute operators are the proxy for what the
+  eager path launches on a device - each is at least one kernel or copy there, and one may launch
+  several. **Sync** counts the operators the host waits on, by name (`_local_scalar_dense` -
+  `.item()`, `bool(tensor)` - and `nonzero`): a lower bound, because the `nonzero` inside
+  boolean-mask indexing is issued inside a kernel and never reaches the dispatcher.
+- **Attention-kernel calls**: calls of `torch.nn.functional.scaled_dot_product_attention` (a
+  `TorchFunctionMode`; `attention._kernel` is the network's one call site), each fused (one fused
+  attention operator) or math (PyTorch's matmul-and-softmax path).
+
+Not counted: Python work; device launches as such; time; the compiled path (`torch.compile` is not
+run - its launches are a profiler figure on GPU time, §10.2); `attn_impl="flex"` (PyTorch 2.13's
+eager `flex_attention` fails under a dispatch mode, so the tool refuses it); the cached path and
+training steps.
+
+**Conditions.** `dev-r`; PyTorch 2.13.0+cpu, Python 3.14.7; eager, `torch.no_grad()`. These are
+counts, not timings: they do not depend on the machine, its threads or its load (other jobs were
+running), and they do depend on the PyTorch build (how composites decompose), the configuration,
+the precision (autocast's casts are operators), whether the batch is one position or several and,
+on the block paths, the position. The F1 network (d 256, 16 layers, 8 heads, FFN 8x), random
+weights (`build_model(seed=0)`; the counts do not depend on them), BF16 trunk unless stated; one
+position unless stated, `synthetic_state(seed, N)` with seed 0 unless stated (a batch of b is
+seeds 0 to b - 1, each of N boards); window none. The configurations are `net/bench.py`'s
+`CONFIGS`: "n2-default" is the network as shipped (`attn_impl="block_sparse"`, query blocks of 4
+boards). The tree is faaa64e with the uncommitted work of the 2026-11-15 review's implementers as
+it stood when the counts were taken: **`NetConfig.disp_far_axis` existed and was True** (B15's
+per-axis far tables - the section "B15's two per-axis far tables" above - on by default) and
+`disp_layer_shared` existed and was False; the count with `disp_far_axis=False`, the network as
+built before the review, is given below ("B15's arms"). The counted forward's outputs equal the
+uncounted forward's bit for bit (checked on this network at 44 boards, seeds 0 and 44, and by the
+tests), and a count repeats exactly: every figure here was taken at least twice, in separate
+processes.
+
+**The network as shipped, by board count** (`--config n2-default --boards 10 24 44 112 240`):
+
+| Boards | Tokens | Operators | Compute | Free | Sync | Layer 0 | Layers 1-15, each (compute) | A layer's attention / FFN / norm / other | Kernel calls a layer | a forward |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 10 | 676 | 27,706 | 16,153 | 11,553 | 546 | 1,932 | 1,686 (977) | 1,645 / 14 / 12 / 15 | 14 | 224 |
+| 24 | 1,600 | 46,123 | 26,729 | 19,394 | 914 | 3,324 | 2,821 (1,627) | 2,780 / 14 / 12 / 15 | 26 | 416 |
+| 44 | 2,920 | 76,443 | 44,128 | 32,315 | 1,517 | 5,624 | 4,689 (2,696) | 4,648 / 14 / 12 / 15 | 46 | 736 |
+| 112 | 7,408 | 163,556 | 93,586 | 69,970 | 3,127 | 12,592 | 10,032 (5,720) | 9,991 / 14 / 12 / 15 | 114 | 1,824 |
+| 240 | 15,856 | 334,464 | 190,726 | 143,738 | 6,315 | 26,105 | 20,525 (11,666) | 20,484 / 14 / 12 / 15 | 244 | 3,904 |
+
+Every kernel call is fused - on the CPU; which kernel a device takes is the device's (the AMD
+run's calls fell back to the math backend, below). Outside the layers the count is the same at
+every size, 484 operators: the embedding 66, the context (`make_context`) 245, the final norm 6,
+the heads 167. A layer is its attention sublayer - 4,648 of a layer's 4,689 operators at 44
+boards - and its kernel calls are 4 a query block of 4 boards (two head groups, each with a second
+call for the rows that lack file and rank) plus 2 for the masked heads' free rows (4 at 240
+boards, where those rows take two passes). Layer 0 dispatches more than the others: the
+block-sparse plans are built on first use and reused.
+
+**At 44 boards (2,920 tokens): precision, batch, position** (`--dtype fp32`; `--batch 1 2 8`;
+`--seed 44`):
+
+| Condition | Operators | Compute | Sync | Layer 0 | Layers 1-15, each (compute) | Kernel calls a layer | a forward |
+|---|---|---|---|---|---|---|---|
+| BF16, one position, seed 0 (the row above) | 76,443 | 44,128 | 1,517 | 5,624 | 4,689 (2,696) | 46 | 736 |
+| FP32, one position, seed 0 | 73,195 | 40,880 | 1,517 | 5,421 | 4,486 (2,493) | 46 | 736 |
+| BF16, a batch of 2 (seeds 0-1) | 79,866 | 46,225 | 1,610 | 5,807 | 4,905 (2,828) | 46 | 736 |
+| BF16, a batch of 8 (seeds 0-7) | 79,866 | 46,225 | 1,610 | 5,807 | 4,905 (2,828) | 46 | 736 |
+| BF16, one position, seed 44 | 77,568 | 44,811 | 1,548 | 5,684 | 4,760 (2,739) | 46 | 736 |
+
+FP32 dispatches 203 fewer operators a layer (BF16's casts are operators). A batch of 2 and a batch
+of 8 count the same here, 216 operators a layer above the single position - most of it the second
+position's own, since on this path a block's plan depends on every position of the batch: seed 1
+alone counts 4,831 a layer, and seed 0 twice in one batch 4,710, 21 above seed 0 once (those two
+on a 3-layer network of the same configuration, whose layers count as these do). The kernel calls
+do not move. Seed 44, `synthetic_state(44, 44)`, is the position of the AMD run ("G9's bounded AMD
+attempt", below).
+
+**Other configurations** (`--config n1-dense n2-no-table n2-default-chunked --boards 24 44 240`;
+`--config n2-default-sdpa --boards 10 24 44`):
+
+| Configuration | Boards | Operators | Compute | Sync | Layer 0 | Layers 1-15, each (compute) | Kernel calls a layer | a forward | Outside: embedding / context / final norm / heads |
+|---|---|---|---|---|---|---|---|---|---|
+| n1-dense | 24 | 5,183 | 3,229 | 114 | 307 | 307 (191) | 2 | 32 | 66 / 32 / 6 / 167 |
+| n1-dense | 44 | 5,183 | 3,229 | 114 | 307 | 307 (191) | 2 | 32 | 66 / 32 / 6 / 167 |
+| n1-dense | 240 | 5,183 | 3,229 | 114 | 307 | 307 (191) | 2 | 32 | 66 / 32 / 6 / 167 |
+| n2-no-table | 24 | 25,048 | 15,393 | 738 | 2,018 | 1,515 (928) | 16 | 256 | 66 / 66 / 6 / 167 |
+| n2-no-table | 44 | 37,272 | 22,776 | 1,101 | 3,187 | 2,252 (1,371) | 26 | 416 | 66 / 66 / 6 / 167 |
+| n2-no-table | 240 | 116,189 | 70,782 | 3,499 | 12,474 | 6,894 (4,179) | 124 | 1,984 | 66 / 66 / 6 / 167 |
+| n2-default-chunked | 24 | 24,372 | 13,790 | 547 | 1,493 | 1,493 (840) | 12 | 192 | 66 / 245 / 6 / 167 |
+| n2-default-chunked | 44 | 40,932 | 22,990 | 947 | 2,528 | 2,528 (1,415) | 22 | 352 | 66 / 245 / 6 / 167 |
+| n2-default-chunked | 240 | 203,220 | 113,150 | 4,867 | 12,671 | 12,671 (7,050) | 120 | 1,920 | 66 / 245 / 6 / 167 |
+| n2-default-sdpa | 10 | 7,812 | 4,590 | 147 | 458 | 458 (265) | 2 | 32 | 66 / 245 / 6 / 167 |
+| n2-default-sdpa | 24 | 7,812 | 4,590 | 147 | 458 | 458 (265) | 2 | 32 | 66 / 245 / 6 / 167 |
+| n2-default-sdpa | 44 | 7,812 | 4,590 | 147 | 458 | 458 (265) | 2 | 32 | 66 / 245 / 6 / 167 |
+
+**B15's arms** ("n2-default" at 44 boards, counted with `opcount.measure` on a network built with
+the field changed - `CONFIGS` has no entry for them): with `disp_far_axis=False` 71,977 operators
+(42,064 compute; layer 0 5,348, layers 1-15 4,413 each; context 195; 46 kernel calls a layer) - so
+the far tables add 276 operators a layer and 50 to the context, +6.2% a forward at 44 boards
+(+6.1% at 10 boards, 26,104 against 27,706; +7.3% at 240, 311,662 against 334,464), and no kernel
+call. 71,977 is also what a prototype of this counter counted on the tree of 2026-11-15, before the
+far tables existed (the review's plan for this item). With `disp_layer_shared=True` 76,248
+operators (44,038 compute; layers 1-15 4,676 each; context 258): the arm shares the tables, not
+yet the work - the bias "assembled once per forward" (§10.2) is not built.
+
+**Where a layer's operators go** ("n2-default", 44 boards, a layer after the first: 4,689
+operators; `--ops 12`): `unsqueeze` 791, `slice` 416, `expand` 346 and `view` 145 (free);
+`index.Tensor` 351, `gather` 252, `_to_copy` 227, `where.self` 206, `add.Tensor` 140,
+`mul.Tensor` 138, `cat` 106, `any.dim` 91 (compute) - the masks, the role rows and the bias
+gathers built per query block, per head group and per layer. The context's 245 (additions,
+selects, comparisons, casts) do not grow with the board count.
+
+**Constancy - what requirement 3 asks, as far as counting can judge it** (the tool's verdicts;
+`--check` exits 1 on a "NO"; no verdict is about a magnitude):
+
+| Configuration | Kernel calls equal across layers | Layers equal after the first | Per layer independent of the board count | Per layer independent of the batch (2 and more) | Outside the layers independent of the board count |
+|---|---|---|---|---|---|
+| n1-dense | yes | yes | yes | yes | yes |
+| n2-default-sdpa | yes | yes | yes | yes | yes |
+| n2-default-chunked | yes | yes | **NO** | yes | yes |
+| n2-no-table | yes | yes | **NO** | not judged | yes |
+| n2-default | yes | yes | **NO** | yes | yes |
+
+Rows judged. Board counts: 10 to 240 for "n2-default", 10 / 24 / 44 for "n2-default-sdpa", 24 / 44 /
+240 for the others. Batches: 2 and 4 positions at 10 and 24 boards (`--boards 10 24 --batch 1 2 4`:
+every configuration but "n2-no-table"), and 2 and 8 at 44 boards ("n2-default"). `--check` exits 1
+on `--config n2-default --boards 24 44` and 0 on `--config n1-dense --boards 24 44 --batch 2 4`.
+The default's "yes" on the batch is a fact about these positions, not a property of the path: on
+block-sparse two positions of one size count differently (seeds 0, 1 and 44 above;
+`AttnStructure.block_plan` branches on the position). The one-block path's constancy is structural
+and is pinned by the tests ("n1-dense", "n2-default-sdpa": the same operators in the same places at
+every board count, for every position, and for every batch of 2 or more). It says nothing of the
+magnitude: that path dispatches 458 operators a layer (265 compute).
+
+**Against §15.3's "Kernel launches per forward ... eager as built, about 10,000 a forward" -
+FLAGGED on the default path (the 2x rule).** At 44 boards, BF16, one position:
+
+| Path (44 boards, BF16, one position) | Operators dispatched | Compute | Sync | Kernel calls | Compute / 10,000 | Dispatched / 10,000 |
+|---|---|---|---|---|---|---|
+| n2-default (block-sparse, as shipped), seed 0 | 76,443 | 44,128 | 1,517 | 736 | 4.41 | 7.64 |
+| the same, seed 44 (the AMD run's position) | 77,568 | 44,811 | 1,548 | 736 | 4.48 | 7.76 |
+| the same with `disp_far_axis=False`, seed 0 | 71,977 | 42,064 | 1,517 | 736 | 4.21 | 7.20 |
+| n2-default-chunked, seed 0 | 40,932 | 22,990 | 947 | 352 | 2.30 | 4.09 |
+| n2-default-sdpa (one block), seed 0 | 7,812 | 4,590 | 147 | 32 | 0.46 | 0.78 |
+| n1-dense (no mask, no table), seed 0 | 5,183 | 3,229 | 114 | 32 | 0.32 | 0.52 |
+
+A count and that estimate are not the same quantity, and the row names neither the quantity nor
+the attention path. "About 10,000" (§10.2's "some 10,000 small operations a forward"; "G9's
+bounded AMD attempt" below) is an order of magnitude read from timings with launches made
+blocking, on torch 2.14.0+rocm10.1.0, at lane/gate 529098d (before the far tables), on
+`synthetic_state(44, 44)`: no operator was counted there (`python/tools/g9_amd_probe.py` counts
+none). Read as the default path - what "as built" says - it is **4.4x below the compute operators
+and 7.6x below the operators dispatched: flagged**. Read as the one-block path - whose timings
+(240-580 ms) the sentence follows in §10.2 - it is within 2x of the operators dispatched (0.78)
+and 2.2x above the compute operators. Per layer, against the requirement's "a few tens": the
+default dispatches 4,689 operators (2,696 compute) in 46 kernel calls at 44 boards and 20,525
+(11,666) in 244 at 240 boards; the one-block path 458 (265) in 2 at every size. The requirement
+binds the compiled path, whose launches are a GPU-time figure: nothing here judges it. The spec is
+not edited in this repository: the write-back of the counted figures over the row (M4), and the
+row's missing quantity, path and board count as a spec issue, are for `docs/BUILD_LOG.md`.
+
+### G11 - the kernel's widths, where a layer's operators come from, what is built once per forward (2026-11-23; counts and numerics; no threshold, no verdict)
+
+**What it is.** Three pieces of §10.2's kernel-bound requirement (register G11, 2026-11-15
+review), built in the network after the count above: (a) "Kernel-friendly widths" - decision 15,
+settling BUILD_LOG issue 521 - as `NetConfig.attn_pad_multiple`, the multiple the attention
+kernel's query and key widths are zero-padded to (**default 1, the widths as built**: a placeholder
+of this build, not the ruling's 8 - which of the two is the v1's until GPU time is for the spec's
+owner, through `docs/BUILD_LOG.md`); (b) where one layer's operators
+come from, attributed by the counter's new call paths (`python -m t5d.net.opcount --sites K
+--depth D`); (c) requirement 1, "structure is computed once per forward, not once per layer": what
+no layer changes is now built in the first layer and read by the rest (two per-forward memos,
+`AttnContext.memo` and `AttnStructure.memo`), each layer's keys and queries are taken once a layer
+instead of once per query block, and under B15's layer-shared arm (`disp_layer_shared`) the
+displacement bias is assembled once per forward - **all of it bit for bit the network as it was**.
+Tests: `python/tests/net/test_kernel_pad.py`, `test_once_per_forward.py`.
+
+**Conditions.** `dev-r`; PyTorch 2.13.0+cpu, Python 3.14.7; eager, `torch.no_grad()`. The F1
+network (16 layers), `build_model(seed=0)`, BF16 unless stated, one position
+`synthetic_state(0, N)` unless stated; the tree is faaa64e with the 2026-11-15 review's
+uncommitted work (B15's far tables on) - "before" is that tree as it stood when this work began,
+exported to a scratch copy, "after" the same tree with this work. Counts are load-independent (the
+machine was loaded: other build jobs). Numerical comparisons are taken at one thread count on both
+sides (3 threads; gradients 1): the CPU kernels' last bits depend on it - the untouched
+FlexAttention path differs between 3 and 4 threads by 1.2e-7 - so a comparison across thread counts
+proves nothing either way.
+
+**(a) The kernel's widths.** Queries, keys and values are one width on the fast paths
+(`_KernelKeys` pads the values to the widened keys' width for PyTorch's fast CPU kernels; at 8 the
+padding is applied there and each call's queries follow); B14's score function pads queries and
+keys only:
+
+| Kernel call | As built | At 8 |
+|---|---|---|
+| Fast paths ("block_sparse", "chunked", "sdpa"): rows with every axis - 32 rotated dims + 12 unrotated file/rank dims (B8) + the global merge's extra key | **45** | 48 |
+| Fast paths: rows without file and rank (per-board registers) - 32 dims rotated on timeline and time + the merge's one | **33** | 40 |
+| "flex": all-axes rows / rows without file and rank / global registers' rows (queries and keys; values 32) | 76 / 64 / 32 | 80 / 64 / 32 |
+| Fast paths without per-board registers (ablation 3) / without global registers / under B5 with the routing table | 33 / 44 and 32 / 65 and 33 | 40 / 48 and 32 / 72 and 40 |
+
+BUILD_LOG issue 521's "45 and 33" are verified. The counted forward (`cost.count_flops`, whose
+fused-attention formula takes each call's shapes) moves by exactly what the widths predict - on the
+one-block path `4 H (T - G + 1) (3 (T - G) + 7 x 2N)` a layer, pinned by `test_kernel_pad.py` - and
+the analytic model (§9.1, at `d_head`) does not move:
+
+| Boards (tokens) | Path | Counted, as built | Counted, at 8 | Difference |
+|---|---|---|---|---|
+| 44 (2,920) | block-sparse (BF16; FP32 the same) | 316,148,587,072 | 329,711,987,264 | +13,563,400,192 (+4.29%) |
+| 44 | chunked, and one-block | 322,777,811,520 | 336,651,905,600 | +13,874,094,080 (+4.30%) |
+| 240 (15,856) | block-sparse | 5,537,741,455,424 | 5,881,890,414,656 | +344,148,959,232 (+6.21%) |
+| 240 | chunked | 6,583,441,629,248 | 6,996,108,550,208 | +412,666,920,960 (+6.27%) |
+
+(Analytic, unchanged: 262,170,214,400 at 44 boards, 4,784,195,108,864 at 240.)
+
+**Numerically the forward is bit for bit; gradients are not.** Padded against unpadded, every
+output equal (`torch.equal`): the 16-layer network at 44 boards (block-sparse BF16 and FP32,
+one-block and chunked BF16) and at 240 boards (block-sparse and chunked, BF16); 105 small
+configurations (2-3 layers; every attention implementation including "flex", both precisions, B15's
+and the structure's arms, the scope, the register counts, B5, post-norm, G2's FP8 trunk) against
+the tree before this work; and every case of `test_kernel_pad.py`. Under autograd the padded
+network's gradients differ in the last bits - at most 7.2e-7 on any parameter (FP32, 2 layers, the
+three fast paths): a learned bias sends the CPU kernel to its math path, whose backward products
+run over the padded width. The test module holds the forward to the bounds the suite gives paths
+of one function in another summation order (FP32 2e-5 trunk / 1e-4 heads; BF16 0.06 / 0.03) and
+the gradients to `test_chunked.py`'s, since another platform's kernel need not reproduce the
+bitwise forward (BUILD_LOG issue 602). A numerical comparison cannot see what the padding is - a
+constant pad adds a constant to every score of a row, and softmax ignores it (padding with ones
+moved the FP32 trunk by at most 1.4e-6) - so the zero columns, their place and the merge's column are
+pinned structurally.
+
+**(b) Where a layer's operators come from** (44 boards, a layer after the first, BF16, one
+position; operators, compute in brackets; `--sites 300 --depth 2`, grouped by call path). The 24-board
+rows group the same way (default path 2,821 -> 1,844). Layer 0 carries besides the block-sparse
+plans (about 770 operators: `key_selection`, `role_rows` and `selecting_rows` under `block_plan`)
+and, after this work, the first use of everything kept.
+
+| Where | Class | Default (block-sparse) before -> after | One-block (sdpa) before -> after |
+|---|---|---|---|
+| Projections, norms, FFN, residuals | inherent | 61 (35) -> 61 (35) | 61 (35) -> 61 (35) |
+| RoPE of Q and K; the key features (widened, time-only, padded) | inherent | 76 (51) -> 74 (51) | 76 (51) -> 74 (51) |
+| The layer's B15 tables laid out (main, per-axis) | inherent: the layer's own tables | 13 (6) -> 13 (6) | 13 (6) -> 13 (6) |
+| Kernel calls: the global merge, the call, the second call for rows without file and rank, its row gathers and scatter | inherent, per call | 1,895 (1,049) -> 1,803 (957) | 89 (49) -> 85 (45) |
+| The global registers' rows (explicit scores) | inherent | 19 (13) -> 19 (13) | 19 (13) -> 19 (13) |
+| Block loop and bookkeeping | inherent | 59 (30) -> 56 (29) | 13 (7) -> 13 (7) |
+| Query features of the kernel rows | inherent; was repeated per query block | 399 (279) -> 96 (16) | 14 (9) -> 12 (7) |
+| Key and value heads per head group | was repeated per query block | 138 (138) -> 12 (12) | 0 -> 0 |
+| Found anew each layer: spatial-free rows and their gather indices, free rows, file/rank dims, uncovered registers, edge spans, head groups, row ranges, empty-row flags, mask constants, lookup sides | layer-independent, linear: **hoisted** | 583 (381) -> 0 | 41 (27) -> 0 |
+| The kernel's float mask (the bias where allowed, -inf elsewhere) | quadratic outside the kernel; the layer's bias | 390 (212) -> 304 (172) | 18 (10) -> 14 (8) |
+| B15's bias through the layer's table (main gather, per-axis term) | quadratic outside the kernel; the layer's table | 337 (169) -> 119 (95) | 24 (10) -> 8 (6) |
+| B15's entries: the class map at (tile, codes) | quadratic outside the kernel; layer-independent, not kept | 390 (222) -> 144 (120) | 32 (18) -> 12 (10) |
+| Masks: the role's rows over every key | quadratic outside the kernel; layer-independent, not kept | 203 (111) -> 176 (96) | 54 (30) -> 27 (15) |
+| Row and column selections | free (views) | 126 (0) -> 126 (0) | 4 (0) -> 4 (0) |
+| **A layer** | | **4,689 (2,696) -> 3,003 (1,602)** | **458 (265) -> 342 (203)** |
+
+Under the layer-shared arm the two B15 rows go to 0 after the first layer (default 4,676 -> 2,727,
+one-block 445 -> 309): the bias is assembled once. What remains per layer is, on the default path,
+the per-call work of 46 kernel calls (60% of a layer) and the per-pair tensors outside the kernel
+(25%) - masks, entries and biases built per query block over every key - and on the one-block path
+mostly the layer's own work. **The per-pair rows are the in-kernel score function's work** (§10.2,
+requirement 2): kept from layer to layer for every block they would be the (head, T, T) tensors
+B14 exists not to hold, so they are not hoisted; the layer-independent ones among them (masks,
+B15's entries) are the compact tensors a compiled kernel would read instead.
+
+**(c) The counted forward before and after** (16 layers, BF16; operators dispatched, compute in
+brackets; kernel calls and the operators outside the layers unchanged - context 245, 258 under the
+layer-shared arm):
+
+| Configuration | Boards, batch | Forward before -> after | Layer 0 | Layers 1-15, each | Sync | Kernel calls a layer |
+|---|---|---|---|---|---|---|
+| n2-default (block-sparse, as shipped) | 24, 1 | 46,123 (26,729) -> **30,876 (16,818)** | 3,324 -> 2,732 | 2,821 (1,627) -> 1,844 (999) | 914 -> 202 | 26 |
+| n2-default | 44, 1 | 76,443 (44,128) -> **50,071 (26,825)** | 5,624 -> 4,542 | 4,689 (2,696) -> 3,003 (1,602) | 1,517 -> 325 | 46 |
+| n2-default | 44, 2 | 79,866 (46,225) -> 53,344 (28,820) | 5,807 -> 4,710 | 4,905 (2,828) -> 3,210 (1,728) | 1,610 -> 418 | 46 |
+| n2-default-sdpa (one block) | 24 and 44, 1 | 7,812 (4,590) -> **6,055 (3,645)** | 458 -> 441 | 458 (265) -> 342 (203) | 147 -> 41 | 2 |
+| n2-default-sdpa | 44, 2 | 7,908 (4,686) -> 6,151 (3,741) | 464 -> 447 | 464 (271) -> 348 (209) | 147 -> 41 | 2 |
+| n2-default-chunked | 24, 1 | 24,372 (13,790) -> 17,690 (9,825) | 1,493 -> 1,351 | 1,493 (840) -> 1,057 (583) | 547 -> 211 | 12 |
+| n2-default-chunked | 44, 1 | 40,932 (22,990) -> 29,325 (16,005) | 2,528 -> 2,261 | 2,528 (1,415) -> 1,772 (963) | 947 -> 381 | 22 |
+| b15-layer-shared (block-sparse) | 24, 1 | 45,928 (26,639) -> 28,386 (14,853) | 3,311 -> 2,719 | 2,808 (1,621) -> 1,678 (868) | 914 -> 202 | 26 |
+| b15-layer-shared | 44, 1 | 76,248 (44,038) -> 45,931 (23,510) | 5,611 -> 4,529 | 4,676 (2,690) -> 2,727 (1,381) | 1,517 -> 325 | 46 |
+| b15-layer-shared-sdpa | 24 and 44, 1 | 7,617 (4,500) -> 5,560 (3,315) | 445 -> 428 | 445 (259) -> 309 (181) | 147 -> 41 | 2 |
+
+(`--config n2-default-sdpa n2-default b15-layer-shared b15-layer-shared-sdpa n2-default-chunked`;
+the B15 arms now have `bench.CONFIGS` names.) At 44 boards the as-shipped forward dispatches 35%
+fewer operators, 39% fewer compute operators and 79% fewer named host synchronisations; the
+one-block path 22% / 21% / 72%. The verdicts of the count above do not change: the one-block path
+is constant in N, the block paths are not (their kernel calls are per query block), and per layer
+the default is still 3,003 operators in 46 kernel calls at 44 boards against "a few tens".
+
+**What the hoist keeps, and the proof that it changes nothing.** The memos hold integers, booleans
+and Python values - never a tensor a gradient flows through - and under autograd every float
+operation runs as built (per query block), so gradients accumulate as before. The exception is the
+layer-shared arm at inference: its B15 rows, FP32 as built, are kept up to
+`structure.DISP_ONCE_BYTES` (2 GiB, an implementation choice), beyond which a selection is assembled per layer
+as before - measured, one position keeps 76.8 / 250.2 / 1,445.5 MiB at 24 / 44 / 112 boards on the
+block-sparse path and 78.1 / 260.2 / 1,674.8 MiB on the chunked path (the full (8, T, T) FP32);
+at 240 boards (7.5 GiB a position) about the first quarter is kept. Bit for bit against the tree
+before this work (`torch.equal` on every output; the state_dict's SHA-256 too):
+
+| Set | Cases | Result |
+|---|---|---|
+| Forwards, 2-3 layers: 6 implementations x {default FP32 and BF16, one position and a padded batch of three, two model seeds, the layer-shared arm, no far tables, no table, every N2 bias, every bias with the layer-shared arm, B17, the block-causal scope, no per-board / no global registers, B5 with the routing table, post-norm, G2's FP8 trunk}, and B9's head counts, `masked_head_registers="self"`, the dense fallback for every block, one-board blocks, A8, A5 (block-sparse and chunked), F2's 24 layers | 105 | all bitwise |
+| Forwards, 16 layers: default at 44 boards (BF16, FP32), at 24 + 17 boards (a batch), one-block and chunked at 24, the layer-shared arm at 24 + 10 boards (block-sparse) and 24 (one-block), default at 60 boards (2 layers) | 8 | all bitwise |
+| Gradients of every parameter, 2 layers: the three fast paths x {default, layer-shared, every bias, blocks kept}, BF16, explicit (1 thread) | 14 | all bitwise |
+| The cached path (`CachedEvaluator`, block-causal): default, layer-shared, typed + smolgen, routing table x FP32 / BF16 | 8 | all bitwise |
+| The same 105 forwards at `attn_pad_multiple=8` against the tree before (unpadded) | 105 | all bitwise |
+
+(Gradients compared with several threads differ between two runs of the *same* tree: B15's table
+gradient, accumulated by `index_put_` across threads, by up to 2.4e-7 - so they are compared on one
+thread.) `test_once_per_forward.py` holds the same within this tree: the inference forward against
+an as-built reference (autograd on, nothing memoised) on 4 paths x 12 arms.
+
+**Not hoisted, and why.** (1) The masks' rows and B15's entries of a query block (block x T
+integers and booleans, layer-independent): kept for every block they are (T, T) per role and
+per head group - requirement 2 forbids exactly that; the compiled score function computes them
+from the compact tensors. (2) The kernel's float mask and B15's bias rows under per-layer tables:
+the layer's own values. (3) The global merge computed for all rows at once and sliced: a matrix
+product over another number of rows may round differently - not provably bit for bit. (4) The
+layers' B15 tables laid out for all layers in the context (13 operators a layer): inherent (each
+layer's own parameters), and under autograd the gather's gradient accumulation order would change.
+(5) The cached path (`cache.py`, not this work's file): its frozen-board passes build a context of
+their own without the field, so they are not padded (their context's memo does carry across a
+board's layers); its live pass makes a fresh context per layer (`dataclasses.replace(ctx,
+scope=None)`), so only the structure's memo carries across its layers.
+
+**For the GPU session.** Measure the compiled path's launches and rate at 44 and 240 boards first
+(§10.2, §15.7), with and without `attn_pad_multiple=8` on the fused-kernel paths: on the AMD card
+the padding recovered 2.0-2.5x on the one-block path (the AMD attempt below, through a probe's
+wrapper); on CUDA the memory-efficient kernel's own alignment rules decide. The counted cost of
+padding is +4.3% of the forward at 44 boards and +6.2% at 240.
 
 ### G9's bounded AMD attempt - AMD-labelled, eager, indicative (2026-10-23; no threshold, no verdict)
 
@@ -1481,6 +1921,44 @@ Mutants (the review's plugin): one input scale per batch in the projections - "p
 "pow2" as unmutated, "absmax" 1.9-2.2e-2. So under "pow2" the granularity shows at one seed in
 six; the test's bounds are 1e-5 ("pow2", over all six seeds) and 1e-2 ("absmax"), and the
 granularity is checked directly elsewhere (issue 238(b)).
+
+### G12's merged forwards against a position alone - numerics (2026-11-22; no threshold, no verdict)
+
+**What it is.** How far an evaluation moves when its position shares a forward with other
+positions, as the self-play pool's token-budget batches make it (`python/t5d/engine/pool.py`,
+register G12) - the figure that conditions what "the same record" means for a pooled game. Not a
+speed and not the batching gain (a GPU figure, Gate 1 step 2). Machine `dev-r`; PyTorch 2.13.0+cpu,
+12 torch threads; `netplay.SMALL` (2 layers, d = 64, FP32 trunk), random weights at initialisation
+scale; window none. Numerics do not depend on the machine's load (other jobs were running).
+
+**One request through the planner** (`TokenBudgetEvaluator`, the placeholders as shipped: 65,536
+padded tokens, 64 positions, 25% padding): `tests/engine/test_pool.py`'s six positions -
+`synthetic_state(40 + i, N)` for N = 12, 2, 3, 7, 3, the third offering a submit, the second twice
+- planned as two forwards (808 + 478 tokens; 148 + 214 + 214 + 148). The largest difference of any
+head (policy, WDL, value and board logits, submit logit, error, moves-left) from the same position
+evaluated alone, model seeds 0 to 3: **4.2e-7, 3.9e-7, 1.0e-6, 7.2e-7**. Never zero; the test's
+bound is the network's FP32 batch-equivalence tolerance, 1e-5 (spec section 15.2's padded-batch
+row; `tests/net/test_invariance.py`). With merging off the evaluations are the inner evaluator's
+bit for bit.
+
+**Whole games in the pool** (`train.selfplay_pool.generate_games`; the tiny games of
+`tests/train/test_selfplay_pool.py`: its eight `CONFIGS` with the exact evaluator; with the network,
+model seed 0, its three `NETWORK_CONFIGS` - the ply split, the tree form, a flat game on Two
+Timelines, 8 playouts, turn cap 2). The ladder ran as built in every game:
+
+| Evaluator, batching | Runs | Pooled record = the game alone |
+|---|---|---|
+| exact per position (`DigestEvaluator`), merged across games (budget 512, held), 8 games | 65 | every game, every run, byte for byte |
+| the same, the shipped placeholders (greedy) on 3 workers; and merging off | 65 each | every game, every run |
+| the network, merging off, 3 games | 6 | every game, every run |
+| the network, merged (budget 4,096, 16 positions, held up to 2 s) | 8 (two probes of 4) | **no game in any run** |
+
+In the last row the records differed in the recorded raw outputs and in the search statistics
+computed from them: 54 to 92 fields a game in the first probe; raw logits by at most 4.5e-7 in the
+second, whose twelve pooled games nevertheless played the same moves as the games alone (the same
+5dpgn) and whose runs agreed with one another in one game of nine comparisons - which positions
+share a forward follows thread timing. That the moves stayed the same is an observation at this
+scale (random weights, 8 playouts), not a property: a last-bit difference can change a choice.
 
 ### The per-square labels and the pin and check relations - cost per state (indicative; no threshold, no verdict)
 

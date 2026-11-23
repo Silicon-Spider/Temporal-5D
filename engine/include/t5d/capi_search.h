@@ -80,7 +80,9 @@
  * ERRORS: T5D_ERR_ARGUMENT for the caller's error - an argument, or a call the
  * search's state does not allow (gather while a batch waits, deliver with none
  * waiting, max_leaves 0, set_epoch under a waiting batch); T5D_ERR_MEMORY when
- * an allocation fails (the search stays consistent: no batch left half-made);
+ * an allocation fails (the search stays consistent and may be used on: no batch
+ * left half-made, no re-root half-done; a flat-form node whose turn generator
+ * failed keeps the turns it had, its children incomplete - t5d/mcts.hpp);
  * T5D_ERR_UNSUPPORTED for a feature not built; T5D_ERR_INTERNAL for the
  * search's own failure (a broken invariant, a contradiction) - a bug to report.
  *
@@ -295,8 +297,8 @@ typedef struct t5d_search_params {
   double dirichlet_shaping_share; /* the shaped share of the total (0.5) */
   double dirichlet_shaping_cap;   /* the shaping's prior cap (0.01) */
   double root_policy_temperature; /* the root's softmax temperature, before the noise (1: off) */
-  /* D2's tree form (split T5D_SPLIT_TREE; read by no other split; refused with graph - spec
-     issue 301): its interaction gates and their readings, placeholders */
+  /* D2's tree form (split T5D_SPLIT_TREE; read by no other split; with graph only evaluated
+     nodes are graph nodes - spec 8.5): its interaction gates and their readings, placeholders */
   uint32_t tree_gates;            /* T5D_TREE_GATE_* mask (T5D_TREE_GATES_INTERACTION); 0: the
                                      network only at turn starts and the root */
   int32_t tree_still_to_move;     /* T5D_STILL_TO_MOVE_* */
@@ -643,9 +645,14 @@ T5D_API t5d_status t5d_search_advance(t5d_search* search, size_t index, char** e
 
 /* Re-roots on the turn start an action reaches - its moves, in a playable
  * order (each matched as t5d_game_apply matches one): the opponent's reply.
- * Atomic: the whole action is checked first, and on any error nothing has
- * changed. From a turn start the action has at least one move (count 0 is an
- * error there); from a state during an action, count 0 submits it. */
+ * The whole action is checked first: an action that cannot be played (an
+ * error of the caller's) changes nothing. Under the board-move split and the
+ * tree form the re-roots then go one decision at a time - each whole or not
+ * at all - so an error after the first (T5D_ERR_MEMORY) leaves the root on
+ * the last decision re-rooted on: read it back (t5d_search_root_game) and
+ * play the rest of the action from there. The flat form re-roots once. From
+ * a turn start the action has at least one move (count 0 is an error there);
+ * from a state during an action, count 0 submits it. */
 T5D_API t5d_status t5d_search_advance_action(t5d_search* search, const t5d_move* moves,
                                              size_t count, char** error);
 

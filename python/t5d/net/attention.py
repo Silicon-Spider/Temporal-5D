@@ -84,6 +84,15 @@ path does not compute it the reference's way):
     and K rotated on timeline/time alone.
   - Values are zero-padded to the query/key width: PyTorch's fast CPU kernels need
     equal widths (unequal widths fall back to a path about 3x slower).
+  - The kernel's widths (register G11; section 10.2, "Kernel-friendly widths"): as built
+    the widened features are 45 wide - 32 rotated dims, the 12 unrotated file/rank dims,
+    the merge's one - and 33 on the rows without file and rank; a masked fused kernel may
+    want a multiple of 8 (BUILD_LOG issue 521). ``AttnContext.pad_multiple``
+    (``NetConfig.attn_pad_multiple``; 1, the default in this build: as built) pads keys
+    and values with zero columns to that multiple where they are assembled
+    (``_KernelKeys.build``), and each call's queries follow the keys' width
+    (``_kernel``): 48 and 40 at 8. Exact - a zero feature adds zero to every score, and
+    the padded value columns are cut from the output.
 
 * ``"sdpa"``: the chunked computation in one block (N1's fast path). Without masks or
   biases it is one kernel call; with them it materialises ``(B, H, L, L)`` rows - small
@@ -134,7 +143,7 @@ widened and the register rows recomputed - by the per-call timings above, at 240
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 import torch
@@ -145,6 +154,7 @@ from torch.utils.checkpoint import checkpoint
 from .config import NetConfig
 from .quant import AttnQuant, QuantLinear
 from .rope import apply_rope
+from .structure import memoised
 
 if TYPE_CHECKING:
     from .scope import BlockCausalScope
@@ -194,6 +204,19 @@ class AttnContext:
     #: and V fake-quantised per token and head at the entry of every implementation
     #: (``quantised_operands``), so that each selects from the same quantised values.
     quant: AttnQuant | None = None
+    #: The multiple the kernel's feature widths are zero-padded to (register G11, section 10.2;
+    #: ``NetConfig.attn_pad_multiple``; 1: as built). A context made without it - the cached
+    #: path's frozen-board passes (``cache.py``) - pads nothing.
+    pad_multiple: int = 1
+    #: What no layer changes, built on first use and read by every later layer (register G11,
+    #: section 10.2, requirement 1: "Structure is computed once per forward, not once per layer";
+    #: ``structure.memoised``): which feature dims are file/rank ones, whether any token lacks
+    #: them, each query block's rows that do and their gather indices, each masked role's free
+    #: rows, the global registers' mask rows - integers, booleans and Python values, never a
+    #: tensor a gradient flows through. ``for_layer`` hands it to the layer's context (a layer
+    #: changes the structure's tables and B17's vectors, nothing the memo is built from); any
+    #: other copy (``dataclasses.replace``, ``densified``) starts an empty one.
+    memo: dict = field(default_factory=dict, init=False, repr=False, compare=False)
 
     @property
     def layer_dependent(self) -> bool:
@@ -204,20 +227,26 @@ class AttnContext:
         """The context of layer ``layer``, whose attention input is ``h`` ``(B, L, d)``
         (``trunk.Block.attn_input``): the structure's layer-dependent biases - board-pair
         smolgen's table generated from ``h`` (B12; only B12 needs ``h``), the layer's
-        displacement table (B15) and B16's when it is per layer - and B17's vectors of the layer."""
+        displacement table (B15) and B16's when it is per layer - and B17's vectors of the layer.
+        The per-forward memo goes with it."""
         changes: dict = {}
         if self.structure is not None and self.structure.layer_dependent:
             changes["structure"] = self.structure.for_layer(h, layer)
         if self.shaw is not None:
             changes["shaw"] = self.shaw.for_layer(layer)
-        return replace(self, **changes) if changes else self
+        if not changes:
+            return self
+        out = replace(self, **changes)
+        out.memo = self.memo
+        return out
 
     def densified(self) -> AttnContext:
         """The same attention with every mask and bias - padding, the caller's, the
         structure's and the scope's - materialised at ``(B, H, L, L)``: the reference, for
         small inputs. B17's term needs the queries, so it is kept beside the materialised rows
         and computed pair by pair (``shaw.direct_term``) - section 15.2's direct form."""
-        allowed, bias = _block_rows(self, 0, self.key_valid.shape[1])
+        length = self.key_valid.shape[1]
+        allowed, bias = _block_rows(self, 0, length, key=("rows", 0, length))
         shaw = None if self.shaw is None else replace(self.shaw, direct=True)
         return replace(self, mask=allowed, bias=bias, structure=None, scope=None, shaw=shaw)
 
@@ -229,15 +258,24 @@ def _as4d(t: torch.Tensor | None) -> torch.Tensor | None:
     return t.reshape((1,) * (4 - t.dim()) + tuple(t.shape))
 
 
-def _block_rows(ctx: AttnContext, start: int, stop: int) -> tuple[torch.Tensor, torch.Tensor | None]:
+def _block_rows(ctx: AttnContext, start: int, stop: int, key=None, keep_mask: bool = False) -> tuple[torch.Tensor, torch.Tensor | None]:
     """Allowed keys (bool) and additive bias (float or None) of query rows ``[start,
     stop)``, each broadcastable to ``(B, H, stop - start, L)``: padding, the caller's
     dense mask and bias, the scope's rows and the structure's masks and biases built for
-    these rows."""
-    allowed = _block_mask(ctx, start, stop)
+    these rows.
+
+    ``key``: the caller's name for these rows where it asks for them at every layer - the
+    structure then builds what no layer changes of their bias once (``AttnStructure.bias_rows``).
+    ``keep_mask``: keep the mask rows themselves in the context's memo under ``key`` - for the
+    global registers' rows only, ``O(G L)``: a query block's mask is ``O(block L)``, and kept for
+    every block it would be the ``(L, L)`` mask this path exists not to hold (B14)."""
+    if keep_mask and key is not None:
+        allowed = memoised(ctx.memo, ("mask", key), lambda: _block_mask(ctx, start, stop))
+    else:
+        allowed = _block_mask(ctx, start, stop)
     bias = None if ctx.bias is None else _rows(_as4d(ctx.bias), start, stop)
     if ctx.structure is not None:
-        s_bias = ctx.structure.bias_rows(start, stop)
+        s_bias = ctx.structure.bias_rows(start, stop, key=key)
         if s_bias is not None:
             bias = s_bias if bias is None else bias + s_bias
     return allowed, bias
@@ -271,8 +309,10 @@ def _span(rows: tuple[int, int], bsz: int, device) -> torch.Tensor:
 
 
 def _spatial_free(ctx: AttnContext) -> torch.Tensor | None:
+    """The tokens that lack file and rank, or None when the batch has none (looked at once per
+    forward: the answer is the batch's, not a layer's)."""
     sf = ctx.spatial_free
-    if sf is None or not bool(sf.any()):
+    if sf is None or not memoised(ctx.memo, "any_spatial_free", lambda: bool(sf.any())):
         return None
     if ctx.spatial_dims is None:
         raise ValueError("spatial_free needs spatial_dims")
@@ -281,8 +321,7 @@ def _spatial_free(ctx: AttnContext) -> torch.Tensor | None:
 
 def _time_rotated_one(ctx: AttnContext, x: torch.Tensor, xr: torch.Tensor) -> torch.Tensor:
     """``x`` rotated on timeline/time only: its file/rank dims left unrotated."""
-    file_rank = ctx.spatial_dims.to(xr.device)[None, :, None, :]
-    return torch.where(file_rank, x.float(), xr)
+    return torch.where(_file_rank(ctx, xr.device), x.float(), xr)
 
 
 def _time_rotated(ctx: AttnContext, q, k, qr, kr) -> tuple[torch.Tensor, torch.Tensor]:
@@ -417,7 +456,7 @@ def attention_explicit(
     step = max(1, ctx.chunk)
     for start in range(0, length, step):
         stop = min(length, start + step)
-        allowed, bias = _block_rows(ctx, start, stop)
+        allowed, bias = _block_rows(ctx, start, stop, key=("rows", start, stop))
         s = _scores(qr[:, :, start:stop], kr, scale, cd)
         if sf is not None:
             # A pair with a token that lacks file/rank: those dims unrotated on both sides.
@@ -486,11 +525,23 @@ def _pad_width(t: torch.Tensor, width: int) -> torch.Tensor:
     return t if t.shape[-1] == width else F.pad(t, (0, width - t.shape[-1]))
 
 
+def padded_width(width: int, multiple: int) -> int:
+    """``width`` rounded up to a multiple of ``multiple`` - the width the kernel's features are
+    zero-padded to (register G11, section 10.2: "Fused attention kernels want head widths in
+    multiples of 8"; ``NetConfig.attn_pad_multiple``). ``multiple`` 1 leaves it."""
+    return -(-width // multiple) * multiple
+
+
 @dataclass
 class _KernelKeys:
     """The key side of kernel calls, prepared once and shared by every query block: keys
     and values padded to one width and cast to the compute dtype, with the extra key that
-    carries the position-free global block appended when ``merged``."""
+    carries the position-free global block appended when ``merged``.
+
+    This is the one place the fast paths' kernel widths are set (register G11): ``build`` pads
+    keys and values with zero columns to their common width rounded up to ``multiple``
+    (``padded_width``), and ``_kernel`` pads each call's queries to the keys' width. A zero
+    column adds zero to every score, and the padded value columns are cut from the output."""
 
     k: torch.Tensor  # (B, H, Lk (+1), W)
     v: torch.Tensor  # (B, H, Lk (+1), W)
@@ -499,7 +550,7 @@ class _KernelKeys:
     merged: bool
 
     @classmethod
-    def build(cls, kk: torch.Tensor, vv: torch.Tensor, merged: bool, cd: torch.dtype) -> _KernelKeys:
+    def build(cls, kk: torch.Tensor, vv: torch.Tensor, merged: bool, cd: torch.dtype, multiple: int = 1) -> _KernelKeys:
         bsz, n_heads, lk, _ = kk.shape
         dv = vv.shape[-1]
         vv = vv.float()
@@ -512,7 +563,7 @@ class _KernelKeys:
             extra_v = vv.new_zeros(bsz, n_heads, 1, dv + 1)
             extra_v[..., -1] = 1.0
             vv = torch.cat([vv, extra_v], dim=2)
-        width = max(kk.shape[-1], vv.shape[-1])
+        width = padded_width(max(kk.shape[-1], vv.shape[-1]), multiple)
         return cls(_pad_width(kk, width).to(cd), _pad_width(vv, width).to(cd), lk, dv, merged)
 
     def heads(self, heads: torch.Tensor | None) -> _KernelKeys:
@@ -538,7 +589,20 @@ class _KernelKeys:
         return _KernelKeys(kk, vv, k, self.dv, merged)
 
 
-def _additive_mask(bias: torch.Tensor, allowed: torch.Tensor, extra: torch.Tensor | None, shape, cd: torch.dtype) -> torch.Tensor:
+def _mask_constant(value: float, cd: torch.dtype, device, memo: dict | None) -> torch.Tensor:
+    """``value`` (-inf: a masked key; 0: the allowed extra key) as a scalar tensor of the compute
+    dtype - what ``_additive_mask`` writes. With ``memo`` (the context's) it is made once per
+    forward, not once per kernel call: on a device each is a host-to-device copy."""
+
+    def make() -> torch.Tensor:
+        return torch.tensor(value, dtype=cd, device=device) if value else torch.zeros((), dtype=cd, device=device)
+
+    return make() if memo is None else memoised(memo, ("mask_constant", value, cd, device), make)
+
+
+def _additive_mask(
+    bias: torch.Tensor, allowed: torch.Tensor, extra: torch.Tensor | None, shape, cd: torch.dtype, memo: dict | None = None
+) -> torch.Tensor:
     """The kernel's float mask ``(B, H, Lq, Lk (+1))``: ``bias`` where ``allowed``, -inf
     elsewhere, with the extra key's column (0 where ``extra``, -inf elsewhere) appended
     when ``extra`` is given. Written in one pass into the final buffer when no gradient
@@ -551,37 +615,52 @@ def _additive_mask(bias: torch.Tensor, allowed: torch.Tensor, extra: torch.Tenso
         return torch.cat([body, extra_bias[..., None]], dim=-1).to(cd)
     bsz, n_heads, lq, lk = shape
     out = torch.empty(bsz, n_heads, lq, lk + (extra is not None), dtype=cd, device=bias.device)
-    neg_inf = torch.tensor(NEG_INF, dtype=cd, device=bias.device)
+    neg_inf = _mask_constant(NEG_INF, cd, bias.device, memo)
     torch.where(allowed, bias.to(cd), neg_inf, out=out[..., :lk])
     if extra is not None:
-        out[..., lk] = torch.where(extra, torch.zeros((), dtype=cd, device=bias.device), neg_inf)
+        out[..., lk] = torch.where(extra, _mask_constant(0.0, cd, bias.device, memo), neg_inf)
     return out
 
 
-def _kernel(qq, keys: _KernelKeys, allowed, bias, merge: _Merge | None, scale: float, cd: torch.dtype) -> torch.Tensor:
+def _kernel(
+    qq, keys: _KernelKeys, allowed, bias, merge: _Merge | None, scale: float, cd: torch.dtype, memo: dict | None = None, name=None
+) -> torch.Tensor:
     """The kernel over queries ``qq`` ``(B, H, Lq, D)`` and prepared keys (``Lk`` real
     keys); ``allowed``/``bias`` broadcast to ``(B, H, Lq, Lk)``. With ``merge``, plus the
-    extra key that carries the global block. A row with no allowed key outputs zeros."""
+    extra key that carries the global block. A row with no allowed key outputs zeros.
+
+    ``memo``: the context's per-forward memo, for the mask's constants (``_mask_constant``) and -
+    with ``name``, the caller's name for a call it makes with the same ``allowed`` at every layer
+    (a mask is the position's, never a layer's) - for which rows have an allowed key at all:
+    that reduction over the mask is then done once per forward, not once per layer."""
     if (merge is not None) != keys.merged:
         raise ValueError("the keys were prepared for a different global merge")
     bsz, n_heads, lq, _ = qq.shape
     lk, dv = keys.lk, keys.dv
-    rows_any = allowed.any(dim=-1)
+    kept = memo is not None and name is not None
+    rows_any = memoised(memo, ("rows_any", name), lambda: allowed.any(dim=-1)) if kept else allowed.any(dim=-1)
+
+    def rows_none() -> torch.Tensor:
+        return memoised(memo, ("rows_none", name), lambda: ~rows_any) if kept else ~rows_any
+
+    def every_row() -> bool:
+        return memoised(memo, ("rows_all", name), lambda: bool(rows_any.all())) if kept else bool(rows_any.all())
+
     empty = None
     if merge is None:
-        if allowed.shape[-2] == 1 and bool(rows_any.all()):
+        if allowed.shape[-2] == 1 and every_row():
             fixed = allowed
         else:
             # A row with nothing allowed attends everywhere (finite values and gradients)
             # and is zeroed below.
-            empty = ~rows_any
+            empty = rows_none()
             fixed = allowed | empty[..., None]
-        attn_mask = fixed if bias is None else _additive_mask(bias, fixed, None, (bsz, n_heads, lq, lk), cd)
+        attn_mask = fixed if bias is None else _additive_mask(bias, fixed, None, (bsz, n_heads, lq, lk), cd, memo)
     else:
         qq = torch.cat([qq.float(), (merge.lse / scale)[..., None]], dim=-1)
         # The extra key is allowed where some global key is, and for a row with no allowed
         # key at all, which then attends to it alone: u = 0 there, so it outputs zeros.
-        extra = merge.has | ~rows_any
+        extra = merge.has | rows_none()
         if bias is None and allowed.shape[-2] == 1 and bool(extra.all()):
             # Padding only: the mask stays a broadcast key mask.
             attn_mask = torch.cat([allowed, allowed.new_ones(*allowed.shape[:-1], 1)], dim=-1)
@@ -589,7 +668,7 @@ def _kernel(qq, keys: _KernelKeys, allowed, bias, merge: _Merge | None, scale: f
             if bias is None:
                 attn_mask = torch.cat([allowed.expand(bsz, n_heads, lq, lk), extra[..., None]], dim=-1)
             else:
-                attn_mask = _additive_mask(bias, allowed, extra, (bsz, n_heads, lq, lk), cd)
+                attn_mask = _additive_mask(bias, allowed, extra, (bsz, n_heads, lq, lk), cd, memo)
     o = F.scaled_dot_product_attention(_pad_width(qq, keys.k.shape[-1]).to(cd), keys.k, keys.v, attn_mask=attn_mask, scale=scale)
     if merge is not None:
         return o[..., :dv] + o[..., dv : dv + 1] * merge.u
@@ -597,9 +676,17 @@ def _kernel(qq, keys: _KernelKeys, allowed, bias, merge: _Merge | None, scale: f
     return o if empty is None else torch.where(empty[..., None], torch.zeros_like(o), o)
 
 
+def _file_rank(ctx: AttnContext, device) -> torch.Tensor:
+    """Each head's file/rank dims, ``(1, Hr, 1, d_head)`` bool - the model's, the same at every
+    layer and for every query block: laid out once per forward."""
+    return memoised(ctx.memo, ("file_rank", device), lambda: ctx.spatial_dims.to(device)[None, :, None, :])
+
+
 def _wide_selection(ctx: AttnContext, device) -> tuple[torch.Tensor, torch.Tensor]:
-    dims = ctx.spatial_dims.to(device)
-    return dims[None, :, None, :], torch.nonzero(dims.any(dim=0)).flatten()
+    """``(file_rank, sel)``: ``_file_rank``, and the dims some head rotates on file or rank - the
+    widened features' extra columns (found once per forward)."""
+    sel = memoised(ctx.memo, ("wide", device), lambda: torch.nonzero(ctx.spatial_dims.to(device).any(dim=0)).flatten())
+    return _file_rank(ctx, device), sel
 
 
 def _widened_q(ctx: AttnContext, q, qr) -> torch.Tensor:
@@ -623,11 +710,26 @@ def _widened(ctx: AttnContext, sf: torch.Tensor, q, k, qr, kr) -> tuple[torch.Te
     return _widened_q(ctx, q, qr), _widened_k(ctx, sf, k, kr)
 
 
-def _spatial_free_rows(sf_rows, out, qt, tkeys: _KernelKeys, allowed, bias, merge, scale: float, cd: torch.dtype) -> torch.Tensor:
+def _spatial_free_rows(
+    sf_rows,
+    out,
+    qt,
+    tkeys: _KernelKeys,
+    allowed,
+    bias,
+    merge,
+    scale: float,
+    cd: torch.dtype,
+    index=None,
+    memo: dict | None = None,
+    name=None,
+) -> torch.Tensor:
     """``out`` ``(B, H, Lq, dv)`` with the rows of queries that lack file/rank (``sf_rows``
     ``(B, Lq)``) recomputed from ``qt`` and ``tkeys`` (Q and K rotated on timeline/time
-    only)."""
-    index = _row_index(sf_rows)
+    only). ``index``: ``_row_index(sf_rows)`` where the caller already has it (the rows are a
+    query block's, the same at every layer); ``memo``, ``name``: ``_kernel``'s."""
+    if index is None:
+        index = _row_index(sf_rows)
     if index is None:
         return out
     take, put, _ = index
@@ -639,6 +741,8 @@ def _spatial_free_rows(sf_rows, out, qt, tkeys: _KernelKeys, allowed, bias, merg
         None if merge is None else merge.rows(take),
         scale,
         cd,
+        memo,
+        name,
     )
     return _scatter_rows(out, put, o_rows)
 
@@ -656,6 +760,13 @@ class _Keys:
         t = None if self.rotated_t is None else self.rotated_t.heads(heads)
         return _Keys(self.kernel.heads(heads), t, _heads(self.k_g, heads), _heads(self.v_g, heads))
 
+    def global_cast(self, cd: torch.dtype) -> _Keys:
+        """These keys with the global keys and values already in the compute dtype - what every
+        query block's merge casts them to (``_global_merge``), done once for the layer."""
+        if self.k_g is None:
+            return self
+        return _Keys(self.kernel, self.rotated_t, self.k_g.to(cd), self.v_g.to(cd))
+
     def select(self, idx: torch.Tensor, merge: bool = True) -> _Keys:
         """The kernel keys ``idx`` ``(B, K)``, and the global keys of the merge unchanged -
         or, without ``merge``, dropped with the extra key that carries them."""
@@ -664,17 +775,36 @@ class _Keys:
         return _Keys(self.kernel.select(idx, merge), t, self.k_g if merge else None, self.v_g if merge else None)
 
 
-def _attend_rows(qq, q_raw, qt, keys: _Keys, a_k, b_k, a_g, b_g, sf_rows, scale: float, cd: torch.dtype) -> torch.Tensor:
+def _attend_rows(
+    qq,
+    q_raw,
+    qt,
+    keys: _Keys,
+    a_k,
+    b_k,
+    a_g,
+    b_g,
+    sf_rows,
+    scale: float,
+    cd: torch.dtype,
+    sf_index=None,
+    memo: dict | None = None,
+    name=None,
+) -> torch.Tensor:
     """Query rows against the prepared keys: ``qq`` their kernel-query features, ``q_raw``
     their unrotated queries (for the global merge), ``qt`` their timeline/time-only
     rotation (None without spatial-free queries); ``a_k``/``b_k`` their allowed keys and
-    bias over the kernel keys, ``a_g``/``b_g`` over the position-free global keys."""
+    bias over the kernel keys, ``a_g``/``b_g`` over the position-free global keys;
+    ``sf_index``: the spatial-free rows' gather indices where already built; ``memo`` and
+    ``name`` (the caller's name for these rows, keys and heads, the same at every layer):
+    ``_kernel``'s - each of the two calls under its own name."""
     merge = None
     if keys.k_g is not None:
         merge = _global_merge(q_raw, keys.k_g, keys.v_g, a_g, b_g, scale, cd)
-    out = _kernel(qq, keys.kernel, a_k, b_k, merge, scale, cd)
+    out = _kernel(qq, keys.kernel, a_k, b_k, merge, scale, cd, memo, None if name is None else (name, "rows"))
     if sf_rows is not None:
-        out = _spatial_free_rows(sf_rows, out, qt, keys.rotated_t, a_k, b_k, merge, scale, cd)
+        sf_name = None if name is None else (name, "spatial-free rows")
+        out = _spatial_free_rows(sf_rows, out, qt, keys.rotated_t, a_k, b_k, merge, scale, cd, sf_index, memo, sf_name)
     return out
 
 
@@ -703,27 +833,73 @@ class _FastPath:
         rotated_t = None
         if sf is not None:
             k_t = _time_rotated_one(ctx, k[:, :, self.kern], kr[:, :, self.kern])
-            rotated_t = _KernelKeys.build(k_t, v[:, :, self.kern], merged, self.cd)
+            rotated_t = _KernelKeys.build(k_t, v[:, :, self.kern], merged, self.cd, ctx.pad_multiple)
         self.keys = _Keys(
-            _KernelKeys.build(k_feat, v[:, :, self.kern], merged, self.cd),
+            _KernelKeys.build(k_feat, v[:, :, self.kern], merged, self.cd, ctx.pad_multiple),
             rotated_t,
             k[:, :, self.rest] if merged else None,
             v[:, :, self.rest] if merged else None,
         )
+        #: At inference: the query side of every kernel row, made once for the layer
+        #: (``layer_queries``) - on every head, and per head group.
+        self._queries: tuple | None = None
+        self._group_queries: dict = {}
 
-    def query_side(self, rows, heads: torch.Tensor | None):
-        """Kernel features, unrotated queries, time-only rotation and spatial-free flags of
-        the query rows ``rows`` on ``heads``."""
+    def layer_queries(self, heads: torch.Tensor | None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        """``(qq, q, qt)`` of every kernel row ``[0, kl)`` on ``heads``: the kernel-query features,
+        the unrotated queries in the compute dtype (the global merge's operand) and the
+        timeline/time-only rotation (None when no token lacks file and rank). Made once for the
+        layer and sliced by every query block (register G11) - a selection of rows and heads of an
+        elementwise result is that result on the selection, bit for bit. Inference only: under
+        autograd each block makes its own, as built (``query_side``). ``heads`` are recognised
+        by identity: the structure's own index tensors (``AttnStructure.head_groups``)."""
+        if self._queries is None:
+            q_all, qr_all = self.q[:, :, self.kern], self.qr[:, :, self.kern]
+            qq = qr_all if self.sf is None else _widened_q(self.ctx, q_all, qr_all)
+            qt = None if self.sf is None else _time_rotated_one(self.ctx, q_all, qr_all)
+            self._queries = (qq, q_all.to(self.cd), qt)
+        if heads is None:
+            return self._queries
+        entry = self._group_queries.get(id(heads))
+        if entry is None or entry[0] is not heads:  # the entry holds ``heads``, so its id cannot be reused
+            entry = self._group_queries[id(heads)] = (heads, tuple(_heads(t, heads) for t in self._queries))
+        return entry[1]
+
+    def spatial_free_rows(self, rows, key=None):
+        """``(sf_rows, index)``: the flags ``(B, n)`` of the query rows ``rows`` that lack file
+        and rank - None when none of them does - and their gather indices (``_row_index``). Both
+        are the batch's, not a layer's: for a block ``(start, stop)``, and for rows the caller
+        names (``key``: the same rows under the same name at every layer), they are found once per
+        forward and kept in the context's memo (register G11)."""
+        if self.sf is None:
+            return None, None
+
+        def find():
+            sf_c = self.sf[:, rows[0] : rows[1]] if isinstance(rows, tuple) else self.sf.gather(1, rows)
+            return (sf_c, _row_index(sf_c)) if bool(sf_c.any()) else (None, None)
+
+        if isinstance(rows, tuple):
+            return memoised(self.ctx.memo, ("sf_rows", rows), find)
+        return find() if key is None else memoised(self.ctx.memo, ("sf_rows", key), find)
+
+    def query_side(self, rows, heads: torch.Tensor | None, key=None):
+        """Kernel features, unrotated queries, time-only rotation, spatial-free flags and their
+        gather indices (``spatial_free_rows``) of the query rows ``rows`` on ``heads``. At
+        inference they are rows of the layer's query side (``layer_queries``); under autograd they
+        are made for these rows, as built, so that the queries' gradients are accumulated as they
+        always were."""
+        sf_rows, sf_index = self.spatial_free_rows(rows, key)
+        if not torch.is_grad_enabled():
+            pick = (lambda t: t[:, :, rows[0] : rows[1]]) if isinstance(rows, tuple) else (lambda t: _rows_at(t, rows))
+            qq, q_c, qt = self.layer_queries(heads)
+            return pick(qq), pick(q_c), None if sf_rows is None else pick(qt), sf_rows, sf_index
         if isinstance(rows, tuple):
             q_c, qr_c = self.q[:, :, rows[0] : rows[1]], self.qr[:, :, rows[0] : rows[1]]
-            sf_c = None if self.sf is None else self.sf[:, rows[0] : rows[1]]
         else:
             q_c, qr_c = _rows_at(self.q, rows), _rows_at(self.qr, rows)
-            sf_c = None if self.sf is None else self.sf.gather(1, rows)
         qq = qr_c if self.sf is None else _widened_q(self.ctx, q_c, qr_c)
-        sf_rows = None if sf_c is None or not bool(sf_c.any()) else sf_c
         qt = None if sf_rows is None else _time_rotated_one(self.ctx, q_c, qr_c)
-        return _heads(qq, heads), _heads(q_c, heads), _heads(qt, heads), sf_rows
+        return _heads(qq, heads), _heads(q_c, heads), _heads(qt, heads), sf_rows, sf_index
 
     def caller_rows(self, rows, heads: torch.Tensor | None):
         """Allowed keys (padding, the caller's mask and the scope) and the caller's bias of
@@ -738,14 +914,19 @@ class _FastPath:
         bias = None if ctx.bias is None else _heads(pick(_as4d(ctx.bias)), heads)
         return allowed, bias
 
-    def attend(self, rows, heads, keys: _Keys, a_k, b_k, a_g, b_g) -> torch.Tensor:
-        qq, q_c, qt, sf_rows = self.query_side(rows, heads)
-        return _attend_rows(qq, q_c, qt, keys, a_k, b_k, a_g, b_g, sf_rows, self.scale, self.cd)
+    def attend(self, rows, heads, keys: _Keys, a_k, b_k, a_g, b_g, key=None) -> torch.Tensor:
+        """``key`` (hashable; None: nothing is kept): the caller's name for this call where it
+        makes it at every layer with the same rows, heads, keys and allowed keys - then what
+        only the position decides is found once per forward and kept in the context's memo: a
+        row tensor's spatial-free rows (``spatial_free_rows``) and which rows have an allowed
+        key at all (``_kernel``)."""
+        qq, q_c, qt, sf_rows, sf_index = self.query_side(rows, heads, key)
+        return _attend_rows(qq, q_c, qt, keys, a_k, b_k, a_g, b_g, sf_rows, self.scale, self.cd, sf_index, self.ctx.memo, key)
 
-    def full(self, rows, heads, keys: _Keys, allowed, bias) -> torch.Tensor:
-        """The rows against every key."""
+    def full(self, rows, heads, keys: _Keys, allowed, bias, key=None) -> torch.Tensor:
+        """The rows against every key (``key``: as ``attend``'s)."""
         a_k, b_k, a_g, b_g = _cols(allowed, self.kern), _cols(bias, self.kern), _cols(allowed, self.rest), _cols(bias, self.rest)
-        return self.attend(rows, heads, keys, a_k, b_k, a_g, b_g)
+        return self.attend(rows, heads, keys, a_k, b_k, a_g, b_g, key)
 
     def shaw_rows(self, rows, heads: torch.Tensor | None, cols: torch.Tensor | None = None) -> torch.Tensor | None:
         """B17's term ``(B, Hg, n, Lk)`` of the query rows ``rows`` - a block ``(start, stop)`` or
@@ -764,16 +945,21 @@ class _FastPath:
     def all_heads_block(self, start: int, stop: int) -> torch.Tensor:
         """Every head of the rows ``[start, stop)`` in one call (the chunked path with a
         bias or a caller's per-row mask, and the one-block paths)."""
-        allowed, bias = _block_rows(self.ctx, start, stop)
+        allowed, bias = _block_rows(self.ctx, start, stop, key=("rows", start, stop))
         bias = _plus(bias, self.shaw_rows((start, stop), None))
-        return self.full((start, stop), None, self.keys, allowed, bias)
+        return self.full((start, stop), None, self.keys, allowed, bias, key=("rows", start, stop))
 
-    def group_block(self, role: str, heads: torch.Tensor, start: int, stop: int, sparse: bool) -> torch.Tensor:
-        """The heads of one role over the rows ``[start, stop)``; ``sparse``: a masked
-        role reads only its block's key selection (``AttnStructure.block_plan``), unless
-        the plan is dense."""
+    def group_block(
+        self, role: str, heads: torch.Tensor, start: int, stop: int, sparse: bool, group_keys: _Keys | None = None
+    ) -> torch.Tensor:
+        """The heads of one role over the rows ``[start, stop)`` - ``heads`` are the role's
+        (``AttnStructure.head_groups``); ``sparse``: a masked role reads only its block's key
+        selection (``AttnStructure.block_plan``), unless the plan is dense. ``group_keys``:
+        ``self.keys.heads(heads)`` where the caller made them once for every block of the layer
+        (``attention_sdpa``, at inference)."""
         structure = self.ctx.structure
-        group_keys = self.keys.heads(heads)
+        if group_keys is None:
+            group_keys = self.keys.heads(heads)
         plan = None
         if sparse and role != "dense":
             plan = structure.block_plan(role, start, stop, self.kl, self.ctx.sparse_max_fraction)
@@ -781,11 +967,12 @@ class _FastPath:
         if plan is None or plan.index is None:
             if role != "dense":
                 allowed = allowed & (structure.role_rows(role, start, stop) & self.ctx.key_valid[:, None, :])[:, None]
-            s_bias = structure.bias_rows(start, stop, heads=heads)
+            name = ("group", role, start, stop)  # the role's heads on these rows over every key, at every layer
+            s_bias = structure.bias_rows(start, stop, heads=heads, key=name)
             if s_bias is not None:
                 bias = s_bias if bias is None else bias + s_bias
             bias = _plus(bias, self.shaw_rows((start, stop), heads))
-            return self.full((start, stop), heads, group_keys, allowed, bias)
+            return self.full((start, stop), heads, group_keys, allowed, bias, key=name)
         idx = plan.index
         if idx.shape[1] == 0:
             # Only free and padding queries: computed apart, or discarded.
@@ -794,38 +981,47 @@ class _FastPath:
         if self.ctx.mask is not None or self.ctx.scope is not None:
             a_k = a_k & _take_cols(_cols(allowed, self.kern), idx)
         b_k = _take_cols(_cols(bias, self.kern), idx)
-        s_bias = structure.bias_rows(start, stop, heads=heads, cols=idx, cols_valid=plan.valid)
+        plan_key = ("plan", role, start, stop, self.kl, self.ctx.sparse_max_fraction)  # the plan's own (``block_plan``)
+        s_bias = structure.bias_rows(start, stop, heads=heads, cols=idx, cols_valid=plan.valid, key=plan_key)
         if s_bias is not None:
             b_k = s_bias if b_k is None else b_k + s_bias
         b_k = _plus(b_k, self.shaw_rows((start, stop), heads, cols=idx))
         # No selecting query of a sparse plan reads a position-free global key, so the
         # selection drops the merge's extra key (the free and padding queries' outputs
         # here are replaced or discarded).
-        return self.attend((start, stop), heads, group_keys.select(idx, merge=False), a_k, b_k, None, None)
+        return self.attend((start, stop), heads, group_keys.select(idx, merge=False), a_k, b_k, None, None, key=plan_key)
 
-    def free_rows(self, role: str, heads: torch.Tensor, out: torch.Tensor, step: int) -> torch.Tensor:
+    def free_rows(self, role: str, heads: torch.Tensor, out: torch.Tensor, step: int, group_keys: _Keys | None = None) -> torch.Tensor:
         """``out`` with the role's free queries (``AttnStructure.free_rows``: they read every
-        valid key) recomputed against every key, ``step`` rows per call."""
-        free = self.ctx.structure.free_rows(role)
-        index = None if free is None else _row_index(free[:, : self.kl] & self.ctx.key_valid[:, : self.kl])
+        valid key) recomputed against every key, ``step`` rows per call. Which rows they are is
+        the batch's: their gather indices are found once per forward (the context's memo).
+        ``group_keys``: as ``group_block``'s."""
+        ctx = self.ctx
+
+        def find():
+            free = ctx.structure.free_rows(role)
+            return None if free is None else _row_index(free[:, : self.kl] & ctx.key_valid[:, : self.kl])
+
+        index = memoised(ctx.memo, ("free_index", role, self.kl), find)
         if index is None:
             return out
         take, put, real = index
-        group_keys = self.keys.heads(heads)
-        ctx = self.ctx
+        if group_keys is None:
+            group_keys = self.keys.heads(heads)
         row_free = ctx.mask is None and ctx.bias is None and ctx.scope is None and not ctx.structure.has_bias and ctx.shaw is None
         size = take.shape[1] if row_free else max(1, step)
         outs = []
         for a in range(0, take.shape[1], size):
             rows, rows_real = take[:, a : a + size], real[:, a : a + size]
+            name = ("free", role, self.kl, a, size)  # these rows, at every layer
 
-            def run(rows=rows, rows_real=rows_real) -> torch.Tensor:
+            def run(rows=rows, rows_real=rows_real, name=name) -> torch.Tensor:
                 allowed, bias = self.caller_rows(rows, heads)
-                s_bias = self.ctx.structure.bias_rows_at(rows, rows_real, heads=heads)
+                s_bias = self.ctx.structure.bias_rows_at(rows, rows_real, heads=heads, key=name)
                 if s_bias is not None:
                     bias = s_bias if bias is None else bias + s_bias
                 bias = _plus(bias, self.shaw_rows(rows, heads))
-                return self.full(rows, heads, group_keys, allowed, bias)
+                return self.full(rows, heads, group_keys, allowed, bias, key=name)
 
             outs.append(run() if row_free else _maybe_recompute(run, self.ctx.recompute))
         return _scatter_rows(out, put, torch.cat(outs, dim=2))
@@ -863,15 +1059,22 @@ def attention_sdpa(
             if role == "dense" and no_bias:
                 allowed = ctx.key_valid[:, None, None, :]
                 group_keys = fast.keys.heads(heads)
-                parts.append(fast.full((0, kl), heads, group_keys, allowed, None))
+                parts.append(fast.full((0, kl), heads, group_keys, allowed, None, key=("padding", role)))
             else:
+                # At inference the group's keys are taken once for the layer, not once per query
+                # block (register G11: the same heads of the same keys, block after block). Under
+                # autograd each block takes its own, as built, so that the keys' gradients are
+                # accumulated block by block as they always were.
+                gk = None if torch.is_grad_enabled() else fast.keys.heads(heads).global_cast(cd)
                 outs = [
-                    _maybe_recompute(lambda role=role, heads=heads, s=s, e=e: fast.group_block(role, heads, s, e, sparse), recompute)
+                    _maybe_recompute(
+                        lambda role=role, heads=heads, s=s, e=e, gk=gk: fast.group_block(role, heads, s, e, sparse, gk), recompute
+                    )
                     for s, e in blocks
                 ]
                 out_g = torch.cat(outs, dim=2)
                 if sparse and role != "dense":
-                    out_g = fast.free_rows(role, heads, out_g, step)
+                    out_g = fast.free_rows(role, heads, out_g, step, gk)
                 parts.append(out_g)
             order.append(heads)
         out = torch.cat(parts, dim=1)[:, torch.argsort(torch.cat(order))]
@@ -880,8 +1083,9 @@ def attention_sdpa(
         out = torch.cat(outs, dim=2)
     if kl == length:
         return out
-    # Position-free global queries: every key, unrotated (the fast path's operands).
-    allowed_g, bias_g = _block_rows(ctx, kl, length)
+    # Position-free global queries: every key, unrotated (the fast path's operands). Their mask
+    # rows - G rows, the same at every layer - are built once per forward (the context's memo).
+    allowed_g, bias_g = _block_rows(ctx, kl, length, key=("rows", kl, length), keep_mask=True)
     s_g = _scores(fast.q[:, :, fast.rest], fast.k, scale, cd)
     if bias_g is not None:
         s_g = s_g + bias_g.float()

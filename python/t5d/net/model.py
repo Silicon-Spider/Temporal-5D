@@ -37,8 +37,12 @@ Initialisation (implementation choice where the spec is silent):
   issue 208), drawn - like D8's parameters, below - from a generator of its own seeded from
   the model's seed (``b15_seed``), never from the global stream, after everything else: its
   no-table arm (ablation 2) has every other weight of the v1, bit for bit, and no flag
-  changes the table. B16's status table (a network of the cached configuration only)
-  ``N(0, status_bias_init_std)`` (a placeholder, spec issue 215) and B17's Shaw vectors (behind
+  changes the table. B6's two per-axis tables, which B15 keeps beyond its exact classes
+  (``NetConfig.disp_far_axis``, the v1 default since the 2026-11-15 review), are drawn the same
+  way from a second generator (``b15_far_seed``): the table's draw is the one it had before
+  them. Under ablation 2's layer-shared arm (``disp_layer_shared``) one table per head is drawn
+  for all layers, from the same two generators. B16's status table (a network of the cached
+  configuration only) ``N(0, status_bias_init_std)`` (a placeholder, spec issue 215) and B17's Shaw vectors (behind
   their flag) ``N(0, shaw_init_std)`` (spec issue 220) the same way, each from its own generator
   (``b16_seed``, ``b17_seed``).
 
@@ -432,6 +436,14 @@ class T5DNet(nn.Module):
                 b15 = torch.Generator(device="cpu").manual_seed(b15_seed(torch.initial_seed()))
                 table = self.displacement.table
                 table.copy_(torch.empty(table.shape).normal_(0.0, cfg.disp_init_std, generator=b15))
+                # B6's two per-axis tables beyond the exact classes (register B6, B15; the 2026-11-15
+                # review): from a second generator of their own, the time table then the timeline
+                # table - adding them moved no draw, the main table's included, and with
+                # ``disp_far_axis`` off B15 is the table above alone, as built before the review.
+                if self.displacement.far is not None:
+                    far = torch.Generator(device="cpu").manual_seed(b15_far_seed(torch.initial_seed()))
+                    for table in (self.displacement.far_time, self.displacement.far_timeline):
+                        table.copy_(torch.empty(table.shape).normal_(0.0, cfg.disp_init_std, generator=far))
             # B16 (with the cached configuration) likewise: switching it changes no other weight.
             if self.status is not None:
                 b16 = torch.Generator(device="cpu").manual_seed(b16_seed(torch.initial_seed()))
@@ -587,6 +599,7 @@ class T5DNet(nn.Module):
             scope=block_scope,
             shaw=shaw,
             quant=AttnQuant(cfg.trunk_quant_scale) if cfg.trunk_quant != "none" and cfg.trunk_quant_attention else None,
+            pad_multiple=cfg.attn_pad_multiple,  # G11: the kernel's widths (1: as built)
         )
 
     # -- G2's format --
@@ -804,6 +817,13 @@ def b15_seed(seed: int) -> int:
     return (int(seed) * 0x9E3779B97F4A7C15 + 0xB15) & 0xFFFFFFFFFFFFFFFF
 
 
+def b15_far_seed(seed: int) -> int:
+    """The seed of the generator of B15's two per-axis far tables (B6's, kept beyond the exact
+    classes - the 2026-11-15 review; ``T5DNet._init_weights``), from the model's: their own, so
+    that the main table keeps the draw it had before them."""
+    return (int(seed) * 0x9E3779B97F4A7C15 + 0xB15F) & 0xFFFFFFFFFFFFFFFF
+
+
 def b17_seed(seed: int) -> int:
     """The seed of B17's own generator (its vectors, ``T5DNet._init_weights``), from the model's."""
     return (int(seed) * 0x9E3779B97F4A7C15 + 0xB17) & 0xFFFFFFFFFFFFFFFF
@@ -835,6 +855,10 @@ def parameter_breakdown(model: T5DNet) -> dict[str, int]:
         return 0 if mod is None else sum(p.numel() for p in mod.parameters())
 
     blocks = model.trunk.blocks
+    disp = model.displacement
+    # B15's main table, and - under their own key, as section 4.1 states the two figures apart
+    # ("1,623,168 parameters ... before the per-axis terms") - B6's two per-axis far tables.
+    disp_far = 0 if disp is None or disp.far is None else disp.far_time.numel() + disp.far_timeline.numel()
     out = {
         "embeddings": count(model.embed) - count(model.embed.layout),
         "embed.layout": count(model.embed.layout),  # A8 (a prototype behind its flag)
@@ -843,7 +867,8 @@ def parameter_breakdown(model: T5DNet) -> dict[str, int]:
         "trunk.norms": sum(count(b.norm_attn) + count(b.norm_ffn) for b in blocks) + count(model.trunk.final_norm),
         "attn.typed_edges": count(model.typed_edges),
         "attn.smolgen": count(model.smolgen),
-        "attn.displacement": count(model.displacement),
+        "attn.displacement": count(disp) - disp_far,
+        "attn.displacement_far": disp_far,
         "attn.status": count(model.status),
         "attn.shaw": count(model.shaw),
         "head.policy": count(model.policy),

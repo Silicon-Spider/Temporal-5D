@@ -507,14 +507,15 @@ def test_the_mirror_with_the_board_layout_embedding(construction):
     channels at the mirrored token and, the acting colour equalised, the token embedding before
     the embedding's FFN (a network without it: the same draws) under either scope - with the FFN
     within 1e-6, the GEMM's rounding of rows in another order; and the outputs, mapped back, agree
-    (FP32 1e-5), in the dense scope and the block-causal one."""
-    for seed in (0, 1):
+    (FP32 1e-5), in the dense scope and the block-causal one. The third pass is ablation 6p's second
+    arm, the embedding's FFN at 1x (section 2.2, register A8; the 2026-11-15 review)."""
+    for seed, padding, ratio in ((0, "a1", 8), (1, "centre", 8), (2, "a1", 1)):
         s, m = _pair(construction, seed)
         bs, bm = collate([s]), collate([m])
         perm = torch.from_numpy(mirror_tokens(s.layout))
-        padding = ("a1", "centre")[seed]
         for scope in ("dense", "block_causal"):
-            model = _model(seed, scope, board_layout_embedding=True, layout_padding=padding, **_config_for(s))
+            flags = dict(board_layout_embedding=True, layout_padding=padding, layout_ffn_ratio=ratio)
+            model = _model(seed, scope, **flags, **_config_for(s))
             layer = model.embed.layout
             assert torch.equal(layer.layouts(bm), layer.layouts(bs)), scope
             assert torch.equal(layer.channels(bm)[0][perm], layer.channels(bs)[0]), scope

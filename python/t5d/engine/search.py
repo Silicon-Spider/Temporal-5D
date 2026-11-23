@@ -496,8 +496,12 @@ class Search:
         self._lib.call("t5d_search_advance", self._live(), c_size_t(int(index)), error=True)
 
     def advance_action(self, moves: Sequence[Move]) -> None:
-        """Re-root on the turn start an action reaches (the opponent's reply); atomic. From a
-        state during an action an empty ``moves`` submits it."""
+        """Re-root on the turn start an action reaches (the opponent's reply). The whole action
+        is checked first: one that cannot be played changes nothing. Under the board-move split
+        and the tree form the re-roots then go one decision at a time, so an error after the
+        first (``EngineMemoryError``) leaves the root on the last decision re-rooted on: read it
+        back with ``root_game()`` and play the rest of the action from there. From a state
+        during an action an empty ``moves`` submits it."""
         buf = (MoveRecord * max(1, len(moves)))()
         for i, m in enumerate(moves):
             buf[i] = m.to_c()

@@ -2,7 +2,8 @@
 // drives - gather leaves, read each leaf's expansion, deliver logits and the
 // value heads (D3) - checked against the C++ search it wraps (the same
 // evaluations give the same tree), its error handling (virtual loss released,
-// nothing backed up), and the results, choice and persistence calls.
+// nothing backed up; a search reused after T5D_ERR_MEMORY searching on), and
+// the results, choice and persistence calls.
 
 #include <algorithm>
 #include <array>
@@ -13,6 +14,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <new>
 #include <span>
 #include <string>
 #include <utility>
@@ -22,6 +24,7 @@
 #include "t5d/capi_search.h"
 #include "t5d/mcts.hpp"
 #include "t5d/variants.hpp"
+#include "test_alloc.hpp"
 #include "test_framework.hpp"
 
 namespace {
@@ -226,6 +229,42 @@ void drive_hashed(t5d_search* s, std::uint64_t playouts, std::size_t batch) {
   }
 }
 
+// The C++ evaluator's answers in the C API's layout, exactly: the logits, the
+// WDL and the categorical as probabilities (copied as given), the board logits
+// where given; no submit logit, error or moves-left (NaN in both). Built
+// before a delivery, so that a fault injected into it falls inside the call.
+struct Answers {
+  std::vector<float> logits;
+  std::vector<float> wdl;
+  std::vector<float> values;
+  std::vector<float> boards;
+
+  explicit Answers(const std::vector<t5d::mcts::Evaluation>& ev) {
+    for (const t5d::mcts::Evaluation& e : ev) {
+      logits.insert(logits.end(), e.logits.begin(), e.logits.end());
+      wdl.insert(wdl.end(), e.wdl.begin(), e.wdl.end());
+      REQUIRE(e.value.has_value());
+      values.insert(values.end(), e.value->begin(), e.value->end());
+      boards.insert(boards.end(), e.board_logits.begin(), e.board_logits.end());
+    }
+  }
+
+  t5d_evaluations batch() const {
+    t5d_evaluations b{};
+    b.logits = logits.empty() ? nullptr : logits.data();
+    b.logit_count = logits.size();
+    b.wdl = wdl.data();
+    b.wdl_count = wdl.size();
+    b.wdl_kind = T5D_VALUE_PROBABILITIES;
+    b.values = values.data();
+    b.value_count = values.size();
+    b.value_kind = T5D_VALUE_PROBABILITIES;
+    b.board_logits = boards.empty() ? nullptr : boards.data();
+    b.board_logit_count = boards.size();
+    return b;
+  }
+};
+
 }  // namespace
 
 TEST(capi_search_step_api_reproduces_the_cpp_search) {
@@ -240,7 +279,6 @@ TEST(capi_search_step_api_reproduces_the_cpp_search) {
   // read back through the C API field for field.
   for (const int32_t split : {T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_FLAT, T5D_SPLIT_TREE}) {
     for (const int32_t graph : {0, 1}) {
-      if (split == T5D_SPLIT_TREE && graph != 0) continue;  // refused (spec issue 301)
       const int32_t source = graph != 0 ? T5D_UNCERTAINTY_ERROR_HEAD : T5D_UNCERTAINTY_CATEGORICAL;
       const Game g = variant_game("Standard - Two Timelines");
       t5d_search_params p = quick_params();
@@ -614,12 +652,15 @@ TEST(capi_search_errors_release_the_batch) {
     t5d_search_destroy(bad);
     bad = nullptr;
   }
-  // D2's tree form: refused under graph search (spec issue 301); its gates a
-  // mask of the five bits; its readings named constants.
+  // D2's tree form: taken under graph search (§8.5: only evaluated nodes are
+  // graph nodes - spec issue 301, settled); its gates a mask of the five bits;
+  // its readings named constants.
   p = quick_params();
   p.split = T5D_SPLIT_TREE;
   p.graph = 1;
-  CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_OK);
+  t5d_search_destroy(bad);
+  bad = nullptr;
   p.graph = 0;
   p.tree_gates = 32;
   CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_ERR_ARGUMENT);
@@ -648,6 +689,430 @@ TEST(capi_search_errors_release_the_batch) {
   size_t index = 0;
   CHECK_EQ(t5d_search_choose(nullptr, &index, nullptr, nullptr), T5D_ERR_ARGUMENT);
   t5d_search_destroy(nullptr);
+}
+
+TEST(capi_search_a_search_reused_after_out_of_memory_stays_consistent) {
+  // T5D_ERR_MEMORY's promise (t5d/capi_search.h: "the search stays
+  // consistent"), which D2's flat form broke until build-log issue 535's fix:
+  // a flat-form search reused after an allocation failed inside it crashed in
+  // its turn generator. A fault injected at allocation k of t5d_search_gather
+  // - in a tree and a graph - and the same fault in a C++ search run alike
+  // beside it (the verification ladder off in both, so that they allocate
+  // alike): the C API answers T5D_ERR_MEMORY, "out of memory", exactly where
+  // the C++ search throws std::bad_alloc, the two stay bit-identical (H15's
+  // digest) while the C++ one keeps every invariant (check_invariants), and
+  // both search on alike. The same for t5d_search_advance (a re-root, issue
+  // 600). Then faults inside t5d_search_deliver_evaluations, whose C layer
+  // allocates before the search does: T5D_ERR_MEMORY, the batch released, the
+  // search searching on with its counts agreeing.
+  using t5d::mcts::Evaluation;
+  const std::unique_ptr<t5d::mcts::Evaluator> uniform =
+      t5d::mcts::make_evaluator(t5d::mcts::BuiltinEvaluator::Uniform);
+  const auto twins = [](t5d_search* c, const t5d::mcts::Search& cpp) {
+    std::uint64_t d = 0;
+    REQUIRE_EQ(t5d_search_digest(c, &d), T5D_OK);
+    return d == cpp.digest();
+  };
+  for (const char* variant : {"Standard - Two Timelines", "Standard"}) {
+    const Game g = variant_game(variant);
+    const t5d::GameState start = t5d::variant_start(*t5d::find_variant(variant));
+    const bool wide = std::string(variant) != "Standard";
+    for (const int32_t graph : {0, 1}) {
+      t5d_search_params p = quick_params();
+      p.split = T5D_SPLIT_FLAT;
+      p.graph = graph;
+      p.batch_size = 8;
+      p.hunt = 0;
+      p.settling = 0;
+      p.asset_map = 0;
+      t5d::mcts::SearchParams q;
+      q.split = t5d::mcts::TurnSplit::Flat;
+      q.graph = graph != 0;
+      q.batch_size = 8;
+      q.hunt = false;
+      q.settling = false;
+      q.asset_map = false;
+      q.expand.square_features = t5d::SquareFeatures::None;
+      if (wide) {
+        // Gathers: Two Timelines, whose generators are large (the audit's position).
+        const SearchHandle s = new_search(g.get(), p);
+        t5d::mcts::Search twin(start, q);
+        REQUIRE_EQ(t5d_search_run(s.get(), T5D_EVALUATOR_UNIFORM, 0, 40, nullptr), T5D_OK);
+        twin.run(*uniform, t5d::mcts::Limits{40});
+        REQUIRE(twins(s.get(), twin));
+        std::size_t faults = 0;
+        for (long long k = 0; k < 12000; k += 61) {
+          std::size_t n = 0;
+          char* error = nullptr;
+          t5d_status st = T5D_OK;
+          {
+            const t5d_test::alloc::FailAfter fault(k);
+            st = t5d_search_gather(s.get(), 8, T5D_NO_LIMIT, &n, &error);
+            CHECK(st != T5D_OK || t5d_test::alloc::fail_countdown >= 0);  // a fault that fired is reported (review finding L8)
+          }
+          bool threw = false;
+          std::size_t m = 0;
+          {
+            const t5d_test::alloc::FailAfter fault(k);
+            try {
+              m = twin.gather(8);
+            } catch (const std::bad_alloc&) {
+              threw = true;
+            }
+            CHECK(threw || t5d_test::alloc::fail_countdown >= 0);
+          }
+          REQUIRE_EQ(st, threw ? T5D_ERR_MEMORY : T5D_OK);
+          if (threw) {
+            ++faults;
+            CHECK(error != nullptr && std::string(error) == "out of memory");
+          }
+          t5d_free(error);
+          if (!threw && m > 0) {
+            REQUIRE_EQ(n, m);
+            std::vector<Evaluation> ev(m);
+            uniform->evaluate(twin.requests(), ev);
+            const Answers answers(ev);
+            const t5d_evaluations b = answers.batch();
+            REQUIRE_EQ(t5d_search_deliver_evaluations(s.get(), &b, nullptr), T5D_OK);
+            twin.deliver(ev);
+          }
+          CHECK_NOTHROW(twin.check_invariants());
+          CHECK(twins(s.get(), twin));
+          // ... and both search on alike.
+          REQUIRE_EQ(t5d_search_run(s.get(), T5D_EVALUATOR_UNIFORM, 0, 4, nullptr), T5D_OK);
+          twin.run(*uniform, t5d::mcts::Limits{4});
+          CHECK_NOTHROW(twin.check_invariants());
+          CHECK(twins(s.get(), twin));
+        }
+        CHECK(faults > 10);
+        continue;
+      }
+      {
+        // A re-root (Standard, cheaper): every allocation of t5d_search_advance
+        // until one goes through - a failed one leaves the search as it was.
+        std::size_t faults = 0;
+        for (long long k = 0;; ++k) {
+          const SearchHandle s = new_search(g.get(), p);
+          t5d::mcts::Search twin(start, q);
+          REQUIRE_EQ(t5d_search_run(s.get(), T5D_EVALUATOR_UNIFORM, 0, 40, nullptr), T5D_OK);
+          twin.run(*uniform, t5d::mcts::Limits{40});
+          const std::size_t index = twin.choose().index;
+          char* error = nullptr;
+          t5d_status st = T5D_OK;
+          {
+            const t5d_test::alloc::FailAfter fault(k);
+            st = t5d_search_advance(s.get(), index, &error);
+            CHECK(st != T5D_OK || t5d_test::alloc::fail_countdown >= 0);
+          }
+          bool threw = false;
+          {
+            const t5d_test::alloc::FailAfter fault(k);
+            try {
+              twin.advance(index);
+            } catch (const std::bad_alloc&) {
+              threw = true;
+            }
+            CHECK(threw || t5d_test::alloc::fail_countdown >= 0);
+          }
+          REQUIRE_EQ(st, threw ? T5D_ERR_MEMORY : T5D_OK);
+          t5d_free(error);
+          CHECK_NOTHROW(twin.check_invariants());
+          CHECK(twins(s.get(), twin));
+          REQUIRE_EQ(t5d_search_run(s.get(), T5D_EVALUATOR_UNIFORM, 0, 10, nullptr), T5D_OK);
+          twin.run(*uniform, t5d::mcts::Limits{10});
+          CHECK_NOTHROW(twin.check_invariants());
+          CHECK(twins(s.get(), twin));
+          if (!threw) break;
+          ++faults;
+        }
+        CHECK(faults > 2);
+      }
+      {
+        // Deliveries: T5D_ERR_MEMORY, the batch released (the next gather is
+        // accepted), and the search searching on, every playout backed up once.
+        const SearchHandle s = new_search(g.get(), p);
+        REQUIRE_EQ(t5d_search_run(s.get(), T5D_EVALUATOR_UNIFORM, 0, 40, nullptr), T5D_OK);
+        std::size_t faults = 0;
+        for (long long k = 0; k < 6000; k += 23) {
+          std::size_t n = 0;
+          REQUIRE_EQ(t5d_search_gather(s.get(), 8, T5D_NO_LIMIT, &n, nullptr), T5D_OK);
+          if (n == 0) continue;
+          std::vector<Evaluation> ev(n);
+          for (std::size_t i = 0; i < n; ++i) {
+            t5d_leaf leaf;
+            REQUIRE_EQ(t5d_search_leaf(s.get(), i, &leaf, nullptr), T5D_OK);
+            ev[i].logits.assign(leaf.expansion.move_count, 0.0f);
+            ev[i].wdl = {1.0f, 1.0f, 1.0f};
+            ev[i].value = t5d::mcts::two_hot(0.0);
+            ev[i].board_logits.assign(leaf.expansion.board_count, 0.0f);
+          }
+          const Answers answers(ev);
+          const t5d_evaluations b = answers.batch();
+          char* error = nullptr;
+          t5d_status st = T5D_OK;
+          {
+            const t5d_test::alloc::FailAfter fault(k);
+            st = t5d_search_deliver_evaluations(s.get(), &b, &error);
+            CHECK(st != T5D_OK || t5d_test::alloc::fail_countdown >= 0);
+          }
+          if (st != T5D_OK) {
+            ++faults;
+            CHECK_EQ(st, T5D_ERR_MEMORY);
+            CHECK(error != nullptr && std::string(error) == "out of memory");
+          }
+          t5d_free(error);
+          t5d_search_summary info;
+          REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
+          CHECK_EQ(std::uint64_t{info.root_visits}, info.playouts);
+        }
+        CHECK(faults > 10);
+        REQUIRE_EQ(t5d_search_run(s.get(), T5D_EVALUATOR_UNIFORM, 0, 40, nullptr), T5D_OK);
+        t5d_search_summary info;
+        REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
+        CHECK_EQ(std::uint64_t{info.root_visits}, info.playouts);
+        std::uint64_t below = 0;
+        for (std::size_t i = 0; i < info.root_children; ++i) {
+          t5d_root_child c;
+          REQUIRE_EQ(t5d_search_child(s.get(), i, &c, nullptr, 0, nullptr), T5D_OK);
+          below += c.visits;
+        }
+        CHECK(below > 0);
+        CHECK(below <= info.playouts);
+      }
+    }
+  }
+}
+
+TEST(capi_search_a_batch_whose_requests_or_buffers_fail_is_abandoned) {
+  // Review finding M1 through the C API: a failure while gather listed its
+  // requests, or while run sized its evaluation buffers, left the batch
+  // waiting - T5D_ERR_MEMORY, then T5D_ERR_ARGUMENT ("a batch is waiting") from
+  // every t5d_search_gather and t5d_search_run until t5d_search_abandon. Every
+  // allocation of a fresh search's first gather, of its second, and of
+  // t5d_search_run(16), each on a fresh search beside a C++ twin given the same
+  // fault (run makes its evaluator first: the twin's fault one allocation
+  // earlier): T5D_ERR_MEMORY exactly where the twin throws, the two
+  // bit-identical, the twin keeping every invariant, and the next gather or run
+  // T5D_OK - with no abandon.
+  const std::unique_ptr<t5d::mcts::Evaluator> uniform =
+      t5d::mcts::make_evaluator(t5d::mcts::BuiltinEvaluator::Uniform);
+  const auto twins = [](t5d_search* c, const t5d::mcts::Search& cpp) {
+    std::uint64_t d = 0;
+    REQUIRE_EQ(t5d_search_digest(c, &d), T5D_OK);
+    return d == cpp.digest();
+  };
+  struct Arm {
+    int32_t split;
+    int32_t graph;
+    const char* variant;
+  };
+  for (const Arm& arm : {Arm{T5D_SPLIT_BOARD_MOVE, 0, "Standard - Two Timelines"}, Arm{T5D_SPLIT_FLAT, 0, "Standard"},
+                         Arm{T5D_SPLIT_FLAT, 1, "Standard"}}) {
+    const Game g = variant_game(arm.variant);
+    const t5d::GameState start = t5d::variant_start(*t5d::find_variant(arm.variant));
+    t5d_search_params p = quick_params();
+    p.split = arm.split;
+    p.graph = arm.graph;
+    p.batch_size = 8;
+    p.hunt = 0;
+    p.settling = 0;
+    p.asset_map = 0;
+    t5d::mcts::SearchParams q;
+    q.split = arm.split == T5D_SPLIT_FLAT ? t5d::mcts::TurnSplit::Flat : t5d::mcts::TurnSplit::BoardMove;
+    q.graph = arm.graph != 0;
+    q.batch_size = 8;
+    q.hunt = false;
+    q.settling = false;
+    q.asset_map = false;
+    q.expand.square_features = t5d::SquareFeatures::None;
+    const auto deliver_twins = [&](t5d_search* c, t5d::mcts::Search& cpp) {
+      std::vector<t5d::mcts::Evaluation> ev(cpp.requests().size());
+      if (ev.empty()) return;
+      uniform->evaluate(cpp.requests(), ev);
+      const Answers answers(ev);
+      const t5d_evaluations b = answers.batch();
+      REQUIRE_EQ(t5d_search_deliver_evaluations(c, &b, nullptr), T5D_OK);
+      cpp.deliver(ev);
+    };
+    std::size_t faults[3] = {0, 0, 0};
+    for (int phase = 0; phase < 3; ++phase) {
+      long long total = 0;
+      {
+        t5d::mcts::Search s(start, q);
+        if (phase == 1) {
+          (void)s.gather(8);
+          std::vector<t5d::mcts::Evaluation> ev(s.requests().size());
+          uniform->evaluate(s.requests(), ev);
+          s.deliver(ev);
+        }
+        constexpr long long kFar = std::numeric_limits<long long>::max();
+        const t5d_test::alloc::FailAfter far(kFar);
+        if (phase == 2) {
+          s.run(*uniform, t5d::mcts::Limits{16});
+        } else {
+          (void)s.gather(8);
+        }
+        total = kFar - t5d_test::alloc::fail_countdown + (phase == 2 ? 1 : 0);  // run's evaluator too
+      }
+      for (long long k = 0; k < total; ++k) {
+        const SearchHandle s = new_search(g.get(), p);
+        t5d::mcts::Search twin(start, q);
+        if (phase == 1) {
+          std::size_t n = 0;
+          REQUIRE_EQ(t5d_search_gather(s.get(), 8, T5D_NO_LIMIT, &n, nullptr), T5D_OK);
+          (void)twin.gather(8);
+          deliver_twins(s.get(), twin);
+        }
+        t5d_status st = T5D_OK;
+        std::size_t n = 0;
+        {
+          const t5d_test::alloc::FailAfter fault(k);
+          st = phase == 2 ? t5d_search_run(s.get(), T5D_EVALUATOR_UNIFORM, 0, 16, nullptr)
+                          : t5d_search_gather(s.get(), 8, T5D_NO_LIMIT, &n, nullptr);
+          CHECK(st != T5D_OK || t5d_test::alloc::fail_countdown >= 0);
+        }
+        bool threw = false;
+        if (phase != 2 || k > 0) {
+          const t5d_test::alloc::FailAfter fault(phase == 2 ? k - 1 : k);
+          try {
+            if (phase == 2) {
+              twin.run(*uniform, t5d::mcts::Limits{16});
+            } else {
+              (void)twin.gather(8);
+            }
+          } catch (const std::bad_alloc&) {
+            threw = true;
+          }
+          CHECK(threw || t5d_test::alloc::fail_countdown >= 0);
+        } else {
+          threw = true;  // run's evaluator itself failed: nothing reached the search
+        }
+        REQUIRE_EQ(st, threw ? T5D_ERR_MEMORY : T5D_OK);
+        if (!threw) {
+          if (phase != 2) {  // a batch gathered: delivered to both
+            deliver_twins(s.get(), twin);
+          }
+          continue;
+        }
+        ++faults[phase];
+        CHECK_NOTHROW(twin.check_invariants());
+        CHECK(twins(s.get(), twin));
+        // The next call goes through, with no abandon.
+        if (phase == 2) {
+          CHECK_EQ(t5d_search_run(s.get(), T5D_EVALUATOR_UNIFORM, 0, 16, nullptr), T5D_OK);
+          twin.run(*uniform, t5d::mcts::Limits{16});
+        } else {
+          REQUIRE_EQ(t5d_search_gather(s.get(), 8, T5D_NO_LIMIT, &n, nullptr), T5D_OK);
+          (void)twin.gather(8);
+          deliver_twins(s.get(), twin);
+        }
+        CHECK_NOTHROW(twin.check_invariants());
+        CHECK(twins(s.get(), twin));
+      }
+    }
+    std::printf("  %s %s: first gather %zu faults, second %zu, run(16) %zu - each T5D_ERR_MEMORY, then on\n",
+                arm.split == T5D_SPLIT_FLAT ? "flat" : "ply", arm.graph != 0 ? "graph" : "tree", faults[0], faults[1],
+                faults[2]);
+    CHECK(faults[0] > 0);
+    CHECK(faults[1] > 0);
+    CHECK(faults[2] > 0);
+  }
+}
+
+TEST(capi_search_a_delivery_that_moves_the_principal_line_keeps_its_counts) {
+  // Review finding L2: backup counted a simulation's path and then recorded the
+  // principal line's change (note_root_visit, which allocates) before counting
+  // the playout, so a failure there left root_visits one ahead of playouts for
+  // good, the change unrecorded. A fresh search through the C API (its root
+  // expanded by one playout), its next batch of root children answered with
+  // Hashed's varied values, so that the root's most visited child is set; every
+  // allocation of that delivery, each on a fresh search: after T5D_ERR_MEMORY
+  // root_visits == playouts, the next run goes through, and they agree after
+  // it.
+  struct Arm {
+    int32_t split;
+    const char* variant;
+  };
+  for (const Arm& arm : {Arm{T5D_SPLIT_BOARD_MOVE, "Standard - Two Timelines"}, Arm{T5D_SPLIT_FLAT, "Standard"}}) {
+    const Game g = variant_game(arm.variant);
+    t5d_search_params p = quick_params();
+    p.split = arm.split;
+    p.batch_size = 8;
+    p.hunt = 0;
+    p.settling = 0;
+    p.asset_map = 0;
+    // The next batch, gathered, and its answers (Hashed's, by leaf key) in the C layout.
+    struct Batch {
+      std::vector<float> logits, submits, wdl, values, boards;
+      t5d_evaluations b{};
+    };
+    const auto prepared = [&](Batch& out) {
+      SearchHandle s = new_search(g.get(), p);
+      REQUIRE_EQ(t5d_search_run(s.get(), T5D_EVALUATOR_UNIFORM, 0, 1, nullptr), T5D_OK);
+      std::size_t n = 0;
+      REQUIRE_EQ(t5d_search_gather(s.get(), 8, T5D_NO_LIMIT, &n, nullptr), T5D_OK);
+      REQUIRE(n > 1);
+      out = Batch{};
+      out.wdl.resize(n * T5D_WDL);
+      out.values.resize(n * T5D_VALUE_BINS);
+      for (std::size_t i = 0; i < n; ++i) {
+        t5d_leaf leaf;
+        REQUIRE_EQ(t5d_search_leaf(s.get(), i, &leaf, nullptr), T5D_OK);
+        for (std::size_t m = 0; m < leaf.expansion.move_count; ++m) out.logits.push_back(logit_of(leaf.key, m));
+        out.submits.push_back(leaf.submit_possible ? submit_of(leaf.key) : std::nanf(""));
+        wdl_of_key(leaf.key, out.wdl.data() + i * T5D_WDL);
+        value_of(leaf.key, out.values.data() + i * T5D_VALUE_BINS);
+        for (std::size_t b = 0; b < leaf.expansion.board_count; ++b) out.boards.push_back(board_of(leaf.key, b));
+      }
+      out.b.logits = out.logits.empty() ? nullptr : out.logits.data();
+      out.b.logit_count = out.logits.size();
+      out.b.submit_logits = out.submits.data();
+      out.b.submit_count = out.submits.size();
+      out.b.wdl = out.wdl.data();
+      out.b.wdl_count = out.wdl.size();
+      out.b.wdl_kind = T5D_VALUE_PROBABILITIES;
+      out.b.values = out.values.data();
+      out.b.value_count = out.values.size();
+      out.b.value_kind = T5D_VALUE_PROBABILITIES;
+      out.b.board_logits = out.boards.data();
+      out.b.board_logit_count = out.boards.size();
+      return s;
+    };
+    long long total = 0;
+    {
+      Batch batch;
+      const SearchHandle s = prepared(batch);
+      constexpr long long kFar = std::numeric_limits<long long>::max();
+      const t5d_test::alloc::FailAfter far(kFar);
+      REQUIRE_EQ(t5d_search_deliver_evaluations(s.get(), &batch.b, nullptr), T5D_OK);
+      total = kFar - t5d_test::alloc::fail_countdown;
+    }
+    std::size_t faults = 0;
+    std::size_t off = 0;
+    for (long long k = 0; k < total; ++k) {
+      Batch batch;
+      const SearchHandle s = prepared(batch);
+      t5d_status st = T5D_OK;
+      {
+        const t5d_test::alloc::FailAfter fault(k);
+        st = t5d_search_deliver_evaluations(s.get(), &batch.b, nullptr);
+        CHECK(st != T5D_OK || t5d_test::alloc::fail_countdown >= 0);
+      }
+      if (st == T5D_OK) continue;
+      REQUIRE_EQ(st, T5D_ERR_MEMORY);
+      ++faults;
+      t5d_search_summary info;
+      REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
+      if (std::uint64_t{info.root_visits} != info.playouts) ++off;
+      REQUIRE_EQ(t5d_search_run(s.get(), T5D_EVALUATOR_UNIFORM, 0, 8, nullptr), T5D_OK);
+      REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
+      if (std::uint64_t{info.root_visits} != info.playouts) ++off;
+    }
+    std::printf("  %s: a delivery of %lld allocations, %zu faults, %zu with root visits and playouts apart\n",
+                arm.split == T5D_SPLIT_FLAT ? "flat" : "ply", total, faults, off);
+    CHECK(faults > 0);
+    CHECK_EQ(off, std::size_t{0});
+  }
 }
 
 TEST(capi_search_choose_advance_and_reply) {

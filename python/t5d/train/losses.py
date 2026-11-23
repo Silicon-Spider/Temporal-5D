@@ -49,6 +49,25 @@ I15), not this module's.
   cannot drop it silently). Under ``"sum"`` a flat row weighs about its number of playable boards
   times a ply-split row. A flat row carries no ply-split policy target, and the soft policy, D9's
   optimistic policy and the reply prototype skip it (issue 242).
+* **I21's completed-Q arm (section 12.2; a PROTOTYPE, off)**: where the batch carries the
+  completed-Q target (``Targets.completed_q``, ``completed_q_submit``: Gumbel AlphaZero's
+  ``softmax(logit + sigma(completed q))`` - Danihelka, Guez, Schrittwieser and Silver, "Policy
+  improvement by planning with Gumbel", ICLR 2022 - built by ``train.targets`` behind
+  ``TargetConfig.completed_q``), ``losses["completed_q"]`` is the **main policy head's own**
+  cross-entropy against it - the same action logits the policy loss reads - averaged with equal
+  weight over every row whose target has mass, full and cheap searches alike (section 12.5:
+  "Cheap searches may emit policy targets after all"; the weighting between the two classes a
+  PLACEHOLDER, 6l's to tune). It is a cross-entropy, as the policy loss is; the paper's KL differs
+  from it by the target's entropy, which carries no gradient. A row with no completed-Q target - a
+  flat decision (it keeps its per-board loss above), a search the builder's switch leaves out - is
+  skipped. Its weight is 0 by default (``weights["completed_q"]``), so ``"total"`` is as it was;
+  ``completed_q_arm`` is the arm: the policy's weight moved onto it, the policy's own set to 0, so
+  the main policy head trains on the completed-Q target and on nothing else. **Everything else stays
+  on the pruned-visit target under the arm**: the soft policy, D9's optimistic policy and the flat
+  form's per-board policy here, and the sampler's surprise weights and the recorded divergence
+  upstream - an arm changes one thing (which of them should follow an adopted target is M24's to
+  ask, after the ranking). A non-zero weight on a batch with no completed-Q target is refused, so
+  the arm cannot train the policy head on nothing silently.
 * **D4's soft policy** (section 12.4, CHECKPOINT 7): its own head's actions
   (``NetOutput.soft_action_logits``) against the policy target "raised to the power 1/4 and
   renormalised" (``soft_policy_target``; the power ``LossConfig.soft_policy_power``), "at eight
@@ -92,7 +111,7 @@ from the learned verifier's estimates.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import torch
 import torch.nn.functional as F
@@ -140,6 +159,12 @@ class Targets:
     flat_option: torch.Tensor | None = None
     flat_group: torch.Tensor | None = None
     flat_target: torch.Tensor | None = None
+    #: I21's completed-Q policy target (a PROTOTYPE arm; ``train.completed_q``), beside ``policy``:
+    #: ``(B, M)`` over the supplied moves and ``(B,)`` its mass on the submit action - together one
+    #: distribution over the decision's actions (D8); an all-zero row has no target (a flat decision,
+    #: a search the builder's switch leaves out). None: none anywhere (the switch off).
+    completed_q: torch.Tensor | None = None
+    completed_q_submit: torch.Tensor | None = None
 
 
 @dataclass
@@ -159,6 +184,7 @@ class LossConfig:
             "board": 1.0,
             "square": 1.0,
             "effort": 1.0,
+            "completed_q": 0.0,  # I21's arm (a prototype): off - ``completed_q_arm`` moves the policy's weight here
         }
     )
     board_reduction: str = "mean"  # D6: "mean" or "sum" over a position's boards
@@ -185,6 +211,21 @@ class LossConfig:
     optimistic_centre: float = 1.5
     optimistic_scale: float = 3.0
     optimistic_eps: float = 1e-4
+
+
+def completed_q_arm(cfg: LossConfig | None = None) -> LossConfig:
+    """Register I21's loss arm (a PROTOTYPE; module docstring): ``cfg`` with the policy's weight
+    moved onto the completed-Q loss - added to whatever it had, so applying the arm twice is
+    applying it once - and the policy's own set to 0, so the main policy head trains on the
+    completed-Q target alone. Every other weight is kept - the soft policy, D9's optimistic policy
+    and the flat form's per-board policy stay on the pruned-visit target. The weight is the policy's
+    (1 by default): a placeholder like every loss weight (6j). The batch needs the target
+    (``TargetConfig.completed_q``)."""
+    cfg = LossConfig() if cfg is None else cfg
+    weights = dict(cfg.weights)
+    weights["completed_q"] = weights.get("completed_q", 0.0) + weights.get("policy", 0.0)
+    weights["policy"] = 0.0
+    return replace(cfg, weights=weights)
 
 
 def categorical_ce(logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -336,6 +377,18 @@ def compute_losses(out: NetOutput, tgt: Targets, cfg: LossConfig | None = None) 
     losses["policy"] = masked_ce(out.action_logits()[ply], out.action_valid()[ply], action_target[ply])
     if tgt.flat_rows is not None and bool(flat.any()):
         losses["flat_policy"] = flat_policy_ce(out, tgt, full & flat, cfg.flat_board_reduction)
+    # I21's arm (a PROTOTYPE; module docstring): the policy head's own action logits against the
+    # completed-Q target, over every row whose target has mass - cheap searches too, equal weight
+    # per row (not gated on ``full_search``); a row with none (a flat decision's) is skipped.
+    if tgt.completed_q is not None:
+        cq_submit = tgt.completed_q.new_zeros(bsz) if tgt.completed_q_submit is None else tgt.completed_q_submit.to(tgt.completed_q.dtype)
+        cq_target = torch.cat([tgt.completed_q, cq_submit[:, None]], dim=-1).to(out.policy_logits.device)
+        losses["completed_q"] = distribution_ce(out.action_logits(), out.action_valid(), cq_target)
+    elif cfg.weights.get("completed_q", 0.0) != 0.0:
+        raise ValueError(
+            "the completed-Q loss arm (LossConfig.weights['completed_q']) needs its target: "
+            "build the batch's targets under TargetConfig.completed_q (register I21)"
+        )
 
     # D3 (section 8.3).
     wt = wdl_target(tgt, cfg.q_ratio).to(out.wdl_logits.device)

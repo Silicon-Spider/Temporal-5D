@@ -14,12 +14,25 @@ the dense-mask arm of ablation 6. B14's FlexAttention score function (``"flex"``
 in-kernel formulation exact on small positions; compiled kernels and their speed need a
 GPU (G9, M19).
 
+Register G11 (a committed requirement; section 10.2, the 2026-11-15 review) binds the inference
+path to its kernels. Its fourth clause - "query and key widths zero-padded to a multiple of 8"
+(review decision 15, settling BUILD_LOG issue 521) - is ``attn_pad_multiple``: the multiple the
+fused kernel's feature widths are padded to. THE DEFAULT IN THIS BUILD IS 1, the widths as built
+(45 and 33 at the v1's dimensions) - the user's ruling of 2026-11-23 (BUILD_LOG spec issue 732):
+the padding buys nothing a CPU can measure and moves every counted cost (``cost.kernel_widths``;
+``docs/MEASUREMENTS.md``, "G11"). NOTE FOR THE GPU SESSION: on the compiled GPU kernel path set
+``attn_pad_multiple=8`` (48 and 40) - the same ruling.
+
 The build rules (spec section 15.1) decide what else appears here:
 
 * **B15, the 4D displacement bias** (provisional, the v1 default; CHECKPOINT 6, section
   4.1; ``displacement.py``) is on: ``displacement_bias``, whose off position is ablation 2's
   no-table arm. Its unstated details are placeholders (below). It supersedes B6's binned
-  Delta-time/Delta-timeline biases, which are removed (register B6, M20).
+  Delta-time/Delta-timeline biases (register B6, M20) and keeps B6's two per-axis tables for the
+  pairs beyond its exact classes (the 2026-11-15 review, decision 1; ``disp_far_axis``, on - the v1
+  default: 3,456 parameters; off is the network as built before the review, bit for bit), so that
+  B6 is its special case that ignores file and rank. Ablation 2's layer-shared arm - one table per
+  head for every layer, the per-axis tables with it - is ``disp_layer_shared`` (off).
 * **Provisional and prototype items** are behind flags, all default off: per-head
   positional specialisation (B5, provisional), the fixed routing table (B10, prototype),
   typed edge biases (B11, provisional), board-pair smolgen (B12, prototype), the key-side
@@ -51,8 +64,10 @@ The build rules (spec section 15.1) decide what else appears here:
 * **A8's board-layout embedding** (prototype, gate 6p; section 2.2; ``layout.py``) is behind its
   flag, off: ``board_layout_embedding`` gives every square its board's flattened one-hot layout
   (64 cells x 24 owner-and-piece states, in A7's canonical order) projected to
-  ``layout_channels`` (16), added to the token input, then an FFN. Its unstated details - the
-  FFN's width (``layout_ffn_ratio``) and form, where a smaller board sits in the 8 x 8 frame
+  ``layout_channels`` (16), added to the token input, then an FFN. The FFN's width is part of the
+  arm (section 2.2, register A8; 2026-11-15 review): ``layout_ffn_ratio`` 8 is the placeholder
+  and 1 ablation 6p's second arm - the named presets ``"6p-layout-ff8"`` and ``"6p-layout-ff1"``.
+  Its other unstated details - the FFN's form, where a smaller board sits in the 8 x 8 frame
   (``layout_padding``) - are placeholders (spec issue 240); it is never quantised (G2).
 * **Stage N3** adds the attention scope (``attn_scope``): ``"dense"`` (C1, the default -
   build dense first) or ``"block_causal"`` (C17 and C19, committed rows of a deferred
@@ -155,12 +170,18 @@ from dataclasses import dataclass
 
 from .quant import SCALE_RULES, TRUNK_QUANT_FORMATS, WEIGHT_SCALES
 
-#: Named capacity presets (section 9.2's ladder). "F1" is the committed v1 network;
-#: "L24-ff12" is F2's larger arm (provisional; section 9.2's ~44M with heads is the count
-#: without B15's table - 46,903,315 as built with it, spec issue 210).
+#: Named presets. Section 9.2's capacity ladder: "F1" is the committed v1 network; "L24-ff12" is
+#: F2's larger arm (provisional; its "ff12" is the trunk's ``ffn_ratio``; section 9.2's ~44M with
+#: heads is the count without B15's tables - 46,900,275 as built with them, spec issue 210). And
+#: ablation 6p's two board-layout arms (register A8, section 2.2; 2026-11-15 review: "the FFN's
+#: width is part of the arm"): A8 on with its own FFN - ``layout_ffn_ratio``, not the trunk's - at
+#: the placeholder's 8x ("6p-layout-ff8", which states its ratio so that it stays the 8x arm if the
+#: placeholder default ever moves) and at 1x ("6p-layout-ff1"). Neither is a default: F1 has no A8.
 PRESETS: dict[str, dict] = {
     "F1": {},
     "L24-ff12": {"n_layers": 24, "ffn_ratio": 12},
+    "6p-layout-ff8": {"board_layout_embedding": True, "layout_ffn_ratio": 8},
+    "6p-layout-ff1": {"board_layout_embedding": True, "layout_ffn_ratio": 1},
 }
 
 #: Per-head positional roles for B5, in head order, following section 6's routing table
@@ -316,6 +337,33 @@ class NetConfig:
     #: 24% of the key boards on average (implementation choice; 1.0 gathers every block).
     attn_sparse_max_fraction: float = 0.5
 
+    # --- G11: the kernel-bound inference path (a committed requirement; section 10.2, the 2026-11-15 review) ---
+    #: The multiple to which the attention kernel's feature widths are zero-padded. Section 10.2,
+    #: "Kernel-friendly widths" (review decision 15, settling BUILD_LOG issue 521): "Fused attention
+    #: kernels want head widths in multiples of 8. On the AMD card a masked call at width 45 or 33 -
+    #: the v1's widened query and key features - fell back to the unfused path ... Zero-padding Q
+    #: and K is exact - a zero feature adds zero to every score - so the v1 is to pad them". The
+    #: fast paths ("block_sparse", "chunked", "sdpa") hand the kernel queries and keys widened by
+    #: B8's pair rule and the global merge - 45 wide, and 33 on the rows without file and rank, at
+    #: the v1's dimensions - with the values padded to the same width; at 8 they are 48 and 40
+    #: (``cost.kernel_widths``; padded where the features are assembled, ``attention._KernelKeys``).
+    #: "flex" pads its score function's queries and keys the same way (76, 64 and 32 wide: 80, 64
+    #: and 32). "explicit" and "dense" call no kernel and are not padded.
+    #:   1 - the widths as built: the network bit for bit as before the field existed;
+    #:   8 - the ruling's: every kernel call at a width that is a multiple of 8. The same function
+    #:       in exact arithmetic; in floating point the kernel's sums run over another width, so
+    #:       an output may differ in its last bits (measured: ``tests/net/test_kernel_pad.py``,
+    #:       ``docs/MEASUREMENTS.md``), and the kernel does - and ``cost.count_flops`` counts - the
+    #:       padded width's work.
+    #: THE DEFAULT IS 1 - ruled by the user on 2026-11-23 (BUILD_LOG spec issue 732): the gain is
+    #: the compiled GPU kernel's, which nothing in the untrained build can measure (G9, M19), and 8
+    #: would move every counted cost figure of section 15.3.
+    #: NOTE FOR THE GPU SESSION (the same ruling): on the compiled GPU kernel path set this to 8 -
+    #: ``NetConfig(attn_pad_multiple=8)``; ``bench.CONFIGS`` has "g11-pad8" and "g11-pad8-sdpa" -
+    #: and re-take the counted costs with it. The cached path's frozen-board passes build a context
+    #: of their own (``cache.py``) and stay at 1 until that module passes the field on.
+    attn_pad_multiple: int = 1
+
     # --- F5: normalisation and biases (committed; section 9.3, CHECKPOINT 6; trunk.py) ---
     #: Where each sublayer's norm sits (``NORM_PLACEMENTS``). Register F5: "pre-norm for v1,
     #: Lc0's post-norm with DeepNet initialisation as the arm" (ablation 6y; the placement is
@@ -380,11 +428,13 @@ class NetConfig:
     board_layout_embedding: bool = False
     #: Channels per square (section 2.2: "at 16 channels per square that is about 1.6M parameters").
     layout_channels: int = 16
-    #: The width of "an FFN after the embedding", ``layout_ffn_ratio * d_model``: COMMITTED-CLASS
-    #: SILENCE (spec issue 240(b)) - placeholder default, not a decision: 8, the trunk's ratio. Its
-    #: form - one pre-norm residual block, RMSNorm (F5), Mish (F6), on every valid token - is fixed in
-    #: code (``layout.py``). 0 drops the FFN: not the register's A8, the "without the FFN" probe of
-    #: section 15.3's cost row.
+    #: The width of "an FFN after the embedding", ``layout_ffn_ratio * d_model``. The width is part
+    #: of the arm (section 2.2 and section 16's A8 entry, register A8; 2026-11-15 review: "at width
+    #: 8d as the placeholder and 1d as 6p's arm"): 8, the trunk's ratio, is the PLACEHOLDER default
+    #: (spec issue 240(b)) - not a decision - and 1 is ablation 6p's second arm (preset
+    #: "6p-layout-ff1"; "6p-layout-ff8" names the placeholder's). Its form - one pre-norm residual
+    #: block, RMSNorm (F5), Mish (F6), on every valid token - is fixed in code (``layout.py``). 0
+    #: drops the FFN: not the register's A8, the "without the FFN" probe of section 15.3's cost row.
     layout_ffn_ratio: int = 8
     #: Where a board smaller than 8 x 8 sits in the layout's frame (section 2.2: "boards smaller
     #: than 8 x 8 are padded"; ``LAYOUT_PADDINGS``). COMMITTED-CLASS SILENCE (spec issue 240(d)) -
@@ -568,9 +618,9 @@ class NetConfig:
     #: with the 45 exact ones gives section 4.1's ~1.6M parameters. The first edge is 3. Only
     #: the edges are a setting: the form - one distance D, crossed with Delta-time's sign,
     #: Delta-timeline's sign dropped - is fixed in code (``displacement.board_class``), and a
-    #: per-axis or timeline-signed form would be a code change. Under this form B6 is not
-    #: B15's special case, as section 4.1 says it is: no far class keeps B6's separate
-    #: Delta-time and Delta-timeline buckets (issue 205, put to the user).
+    #: timeline-signed form would be a code change. No far class of this form keeps B6's separate
+    #: Delta-time and Delta-timeline buckets (issue 205): the two per-axis tables below
+    #: (``disp_far_axis``) add them back, which is what makes B6 B15's special case.
     disp_far_edges: tuple[int, ...] = (3, 5, 9)
     #: A line along the board axes only (timelines and turns, the square fixed) beyond the
     #: exact classes has an entry per direction and step k = 3 .. ``disp_line_max``, the last
@@ -594,6 +644,39 @@ class NetConfig:
     #: 15.2: realistic scale, never zeros). COMMITTED-CLASS SILENCE (spec issue 208) -
     #: placeholder, not a decision: 0.1, the scale of the other learned bias tables (B11).
     disp_init_std: float = 0.1
+    #: B6's two per-axis tables, kept beyond the exact classes (register B6 and B15, section 4.1;
+    #: the 2026-11-15 review, decision 1 - the v1 default): a pair of board tokens - squares or
+    #: per-board registers, a line pair included - whose boards lie outside the exact classes adds
+    #: two learned scalars to its entry above, one for its Delta-time bucket and one for its
+    #: |Delta-timeline| bucket, per head per layer: (19 + 8) x 8 x 16 = 3,456 parameters, drawn
+    #: ``N(0, disp_init_std)`` from a generator of their own (``model.b15_far_seed``), so no other
+    #: parameter's draw moved. A pair with a global register, and padding, gets none. ``False`` is
+    #: B15 as built before the review, bit for bit - no named ablation has that arm; it keeps the
+    #: pre-review network reproducible. Two readings are built where section 4.1's words leave room:
+    #: the terms go on every pair of board tokens on far boards, not on far-slice cells only (so
+    #: that B6 is "exactly its special case that ignores file and rank" - B6 biased by board pair,
+    #: whatever the tokens), and the tables are per head per layer (the only form that gives
+    #: section 4.1's 3,456; B6 itself was "bins x heads"). Both are fixed in code, not settings.
+    disp_far_axis: bool = True
+    #: The two tables' buckets (``displacement.FarAxes``), B6's as it was built (issue 205): an
+    #: offset's size is its own bucket below ``*_exact``, then log2-spaced up to ``*_max``, then
+    #: clamped (every larger offset shares the last bucket - B6's extrapolation guard, on each axis
+    #: separately). Delta-time is signed, in half-turns - exact below 4, then 4-7, 8-15, ..., 64-127,
+    #: 128+: 19 buckets; Delta-timeline is not - exact below 4, then 4-7, 8-15, 16-31, 32+: 8.
+    #: Section 4.1's 3,456 parameters pin the two counts; the settings exist so that the tests can
+    #: move them.
+    disp_far_time_exact: int = 4
+    disp_far_time_max: int = 128
+    disp_far_timeline_exact: int = 4
+    disp_far_timeline_max: int = 32
+    #: Ablation 2's layer-shared arm (section 4.1 and 10.2, register B15; the 2026-11-15 review):
+    #: one table per head for every layer - the main table and the two per-axis tables alike - "a
+    #: sixteenth of the parameters and a bias that can be assembled once per forward" (8 x 12,681 +
+    #: 8 x 27 = 101,664 at the v1's dimensions). Off: one table per head per layer, the v1. The arm
+    #: shares the function and the count, and at inference its bias is assembled once per forward
+    #: (register G11; ``structure.AttnStructure.disp_rows``, within ``structure.DISP_ONCE_BYTES``) -
+    #: the same rows, bit for bit, as assembling them at every layer.
+    disp_layer_shared: bool = False
 
     # --- B17: the key-side Shaw term (prototype; default off; section 4.1; shaw.py) ---
     #: Each query (unrotated) dotted with a learned vector for its pair's class in a compact set,
@@ -872,7 +955,8 @@ class NetConfig:
 
     @classmethod
     def preset(cls, name: str, **overrides) -> NetConfig:
-        """A named preset: "F1" (default) or "L24-ff12" (F2's larger arm)."""
+        """A named preset (``PRESETS``): "F1" (default), "L24-ff12" (F2's larger arm), or one of
+        ablation 6p's two board-layout arms, "6p-layout-ff8" and "6p-layout-ff1" (register A8)."""
         if name not in PRESETS:
             raise ValueError(f"unknown preset {name!r}; known: {sorted(PRESETS)}")
         return cls(**{**PRESETS[name], **overrides})
@@ -953,6 +1037,12 @@ class NetConfig:
             raise ValueError(f"attn_impl must be one of {ATTN_IMPLS}")
         if self.attn_chunk < 1 or self.attn_block_boards < 1:
             raise ValueError("attn_chunk and attn_block_boards must be positive")
+        pad = self.attn_pad_multiple
+        if isinstance(pad, bool) or not isinstance(pad, int) or pad < 1:
+            raise ValueError(
+                "attn_pad_multiple must be a positive integer: the multiple the attention kernel's feature widths are "
+                "zero-padded to (1: as built, the default; 8 on the compiled GPU kernel path - register G11)"
+            )
         if self.dt_hidden < 1 or self.turn_state_hidden < 1 or not self.dt_scale > 0 or not self.turn_state_scale > 0:
             raise ValueError("dt_hidden, turn_state_hidden, dt_scale and turn_state_scale must be positive")
         if self.layout_channels < 1 or self.layout_ffn_ratio < 0:
@@ -1000,6 +1090,10 @@ class NetConfig:
             raise ValueError(f"disp_register_pairs must be one of {DISP_REGISTER_PAIRS}")
         if not (math.isfinite(self.disp_init_std) and self.disp_init_std >= 0):
             raise ValueError("disp_init_std must be finite and non-negative")
+        if self.disp_far_time_exact < 1 or self.disp_far_timeline_exact < 1:
+            raise ValueError("disp_far_time_exact and disp_far_timeline_exact must be positive (B15's per-axis buckets, B6's)")
+        if self.disp_far_time_max < self.disp_far_time_exact or self.disp_far_timeline_max < self.disp_far_timeline_exact:
+            raise ValueError("disp_far_time_max and disp_far_timeline_max must not be below their *_exact (B15's per-axis buckets)")
         if self.shaw_key_term and not self.displacement_bias:
             raise ValueError("shaw_key_term (B17) is on top of B15: it needs displacement_bias (its classes are B15's)")
         if not 0 <= self.shaw_near <= 7:

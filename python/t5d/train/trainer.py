@@ -23,6 +23,17 @@ this build.
   forward, every head's loss (``losses.compute_losses``), backward, a finite check, one optimiser
   step, then SWA's update (I17). ``step_on(rows)`` does the same on given rows (a fixed batch);
   ``losses_on(rows)`` the forward half alone.
+* **How a step's rows are drawn, and the two flags on it - both off, the line above is then the
+  whole of it.** ``draw_rows(n)`` is the one place rows leave the window: uniformly, or - register
+  I22's board-count floors, ``SamplerConfig.range_floors`` (provisional) - a range first, by the
+  floored shares of the training compute, then a row uniformly inside it (``train.sampler``).
+  ``next_batch()`` groups them into a step: ``batch_size`` rows, or - register I23's recipe,
+  ``TrainerConfig.recipe`` (``train.recipe``; the pilot's is the preset ``PILOT_RECIPE``, placeholders)
+  - a pool of ``pool_rows`` drawn the same way and cut into batches under a token budget within a
+  board-count range (``SamplerConfig.floor_ranges``), served in a shuffled order, every drawn row
+  trained once; batches not yet served may lag the window by one pool. The recipe also sets each
+  step's rate (``recipe.lr_factor``: a warm-up into steps, counted in this trainer's steps; 1 by
+  default, the constant rate). ``step_log`` records each step's rate, rows and tokens.
 * ``Trainer.publish()`` - the network self-play receives: SWA's average (I17), carrying its
   snapshot count (``swa_snapshots``) into the records' network condition.
 * **G8's QAT hook, behind its flag, off** (register G8: "QAT prepared, not adopted: fake-quantisation
@@ -66,8 +77,9 @@ from ..net.model import T5DNet
 from ..net.quant import TRUNK_QUANT_FIELDS, TRUNK_QUANT_FORMATS
 from ..net.state import PositionState
 from .losses import LossConfig, compute_losses
+from .recipe import RecipeConfig, assemble_batches, lr_factor, range_index, row_boards, row_tokens
 from .records import CANDIDATE_TURN, RECORD_VERSION, Children, DecisionRecord, GameRecord
-from .sampler import BucketTracker, SamplerConfig, copies, row_weights
+from .sampler import BucketTracker, SamplerConfig, copies, range_draw, row_cost, row_weights
 from .selfplay import replay_positions
 from .smoke import MAX_STEPS, check_step, record_step
 from .swa import SWA, SWAConfig
@@ -95,8 +107,11 @@ class TrainerConfig:
     window: WindowConfig = field(default_factory=WindowConfig)
     swa: SWAConfig = field(default_factory=SWAConfig)
     loss: LossConfig = field(default_factory=LossConfig)
+    recipe: RecipeConfig = field(default_factory=RecipeConfig)  # I23 (``train.recipe``): the default is the smoke test's recipe
 
     def validate(self) -> None:
+        self.sampler.validate()  # I22: floors that sum past the whole are refused here
+        self.recipe.validate()
         if self.optimiser not in OPTIMISERS:
             raise ValueError(f"optimiser must be one of {OPTIMISERS}")
         if self.batch_size < 1 or self.lr <= 0 or self.weight_decay < 0:
@@ -146,6 +161,9 @@ class Trainer:
         self.target_cfg = self.cfg.target or TargetConfig(short_term_horizons=tuple(net_cfg.short_term_horizons))
         if tuple(self.target_cfg.short_term_horizons) != tuple(net_cfg.short_term_horizons):
             raise ValueError("the targets' short-term horizons are the network's (D3)")
+        if self.cfg.loss.weights.get("completed_q", 0.0) != 0.0 and self.target_cfg.completed_q == "off":
+            # I21's loss arm (``losses.completed_q_arm``) with no target built would train the policy head on nothing.
+            raise ValueError("the completed_q loss weight needs its target: set TargetConfig.completed_q (register I21)")
         self.model = apply_qat(model, self.cfg) if self.cfg.qat else model
         if self.cfg.qat:
             # The network's format is now QAT's: the configuration the trainer hands on (the
@@ -162,6 +180,8 @@ class Trainer:
         self.rng = np.random.default_rng(self.cfg.seed)
         self.steps = 0
         self.history: list[dict[str, float]] = []
+        self._pending: list[list[Row]] = []  # I23: the current pool's batches not yet served (``next_batch``)
+        self.step_log: list[dict[str, float]] = []  # per step: its index, rate, rows, tokens, padded tokens, largest board count
 
     # -- data --
 
@@ -185,8 +205,12 @@ class Trainer:
         weights = row_weights(record, targets, self.cfg.sampler, self.tracker)
         n = copies(weights, int(record.header.get("seed", 0) or 0))
         synthetic = bool(record.header.get("synthetic", False))
+        ranges = self.cfg.sampler.floor_ranges
         for i, p in enumerate(positions):
-            self.window.add(Row(getattr(p, "state", p), targets, i, synthetic), int(n[i]))
+            st = getattr(p, "state", p)
+            # I22: with its board-count range and training compute, so the window reads per range (floors on or off).
+            where = dict(stratum=range_index(st.n_boards, ranges), cost=row_cost(st, self.net_cfg))
+            self.window.add(Row(st, targets, i, synthetic), int(n[i]), **where)
         return int(n.sum())
 
     # -- steps --
@@ -200,9 +224,32 @@ class Trainer:
             losses = compute_losses(self.model(batch), tgt, self.cfg.loss)
         return {k: float(v) for k, v in losses.items()}
 
+    def draw_rows(self, n: int) -> list[Row]:
+        """``n`` rows drawn from the window - the one place rows are drawn: uniformly, as built, or
+        under register I22's floors (``SamplerConfig.range_floors``) a board-count range first, then
+        a row uniformly inside it (``sampler.range_draw``)."""
+        if not self.cfg.sampler.range_floors:
+            return self.window.sample(n, self.rng)
+        return self.window.sample_stratified(n, self.rng, range_draw(self.window.strata(), self.cfg.sampler))
+
+    def next_batch(self) -> list[Row]:
+        """The next step's rows: ``batch_size`` drawn rows, as built; under register I23's token
+        budget (``RecipeConfig.token_budget``) the next batch of a pool of ``pool_rows`` drawn rows,
+        cut within the board-count ranges and served in a shuffled order (``recipe.assemble_batches``)
+        - every drawn row trained once."""
+        recipe = self.cfg.recipe
+        if recipe.token_budget is None:
+            return self.draw_rows(self.cfg.batch_size)
+        if not self._pending:
+            rows = self.draw_rows(recipe.pool_rows)
+            tokens = [row_tokens(r, self.net_cfg) for r in rows]
+            cut = assemble_batches(tokens, [row_boards(r) for r in rows], recipe.token_budget, self.cfg.sampler.floor_ranges)
+            self._pending = [[rows[i] for i in cut[int(j)]] for j in self.rng.permutation(len(cut))]
+        return self._pending.pop()
+
     def step(self) -> dict[str, float]:
-        """One optimiser step on a batch drawn from the window."""
-        return self.step_on(self.window.sample(self.cfg.batch_size, self.rng))
+        """One optimiser step on a batch drawn from the window (``next_batch``)."""
+        return self.step_on(self.next_batch())
 
     def step_on(self, rows: Sequence[Row]) -> dict[str, float]:
         """One optimiser step on ``rows`` - refused past ``max_steps`` of this trainer or
@@ -227,11 +274,16 @@ class Trainer:
         for name, p in self.model.named_parameters():
             if p.grad is not None and not torch.isfinite(p.grad).all():
                 raise FloatingPointError(f"non-finite gradient in {name}")
+        lr = self.cfg.lr * lr_factor(self.steps, self.cfg.recipe)  # I23's warm-up and schedule: x 1.0 by default
+        for group in self.opt.param_groups:
+            group["lr"] = lr
         self.opt.step()
         record_step(self.model)
         self.steps += 1
         self.swa.update(self.model, self.steps)
         self.history.append(values)
+        sizes = dict(rows=len(rows), tokens=int(batch.valid.sum()), padded_tokens=batch.valid.numel(), boards=int(batch.n_boards.max()))
+        self.step_log.append({"step": self.steps - 1, "lr": lr, **sizes})
         return values
 
     def publish(self) -> T5DNet:
