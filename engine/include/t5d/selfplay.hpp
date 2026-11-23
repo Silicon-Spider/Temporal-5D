@@ -58,10 +58,11 @@
 // (the chosen move verified within what it leaves, the most visited child
 // known legal played where that is cut) but for two exceptions: a root with no
 // visited child searches on until one has a visit, and where no child is known
-// legal (nor the turn-start verdict's witness continues) the children are
-// verified in visit order against the side's remaining clock, within the game
-// loop's node budget - none shown legal with time left: unscored
-// (Unsettled::Choice), never a throw. The turn-start verdict is charged to
+// legal the children are verified in visit order against the side's remaining
+// clock, within the game loop's node budget - none shown legal with time left:
+// the turn-start verdict's witness, if the moves played continue it (the E11
+// review's S7: after the clock's search), else unscored (Unsettled::Choice),
+// never a throw. The turn-start verdict is charged to
 // neither side (issue 456). Self-play never runs a clock: its budgets are
 // PCR's (§12.5).
 //

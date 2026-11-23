@@ -1394,6 +1394,7 @@ threads reach at least one thread's sum (one retry on a shared machine).
 | 2026-11-23 | the review's code round into main (the tree form under graph search, G11's network side; the main loop's check) | main d760019 + the round, the working tree before its commit | dev-r, 24 logical; the engine lane's and search lane's checks running | 32 | 293 / 289 / 291 | 301 / 303 / 304 | none | pass x3 |
 | 2026-11-23 | main 032db11 into lane/search (`mcts.cpp` combined: issue 535's fix and the tree form under graph search beside E11's deadline) | lane/search eb7353b (the merge 8903439 and the cited-ids update), inside its checks after the whole `--werror --test` run | dev-r, 24 logical; the engine lane's checks running; load 99-100% before and after | 32 | 293 / 293 / 293 | 315 / 314 / 313 | none | pass x3 |
 | 2026-11-24 | main d4c7fb9 into lane/search and phase 2 of E11's review (`mcts.cpp`: one deadline mechanism, `run()`'s scope; no scanner or search.* file) | lane/search b75209a, inside its checks after the whole `--werror --test` run | dev-r, 24 logical; quiet - load 11 / 21 / 6% before, 16 / 9 / 26% after | 32 | 293 / 293 / 293 | 316 / 314 / 316 | none | pass x3 |
+| 2026-11-24 | main b18a7b3 into lane/search and round 2 of E11's review (`mcts.cpp`: S4's root-listing lift, S5's re-check of a deadline-cut turn start, L4's count; no scanner or search.* file) | lane/search 941af12, inside its checks after the whole `--werror --test` run | dev-r, 24 logical; quiet - load 21 / 4 / 9% before, 16 / 12 / 5% after | 32 | 293 / 293 / 293 | 315 / 318 / 317 | none | pass x3 |
 | 2026-11-23 | The review round's final tree (issue 411's truth sources; main af0c19b merged) | lane/engine e79ea70 | dev-r, 24 logical; load 26% before, 18% after | 32 | 293 / 293 / 293 | 318 / 317 / 318 | none | pass x3 |
 | 2026-11-23 | the engine lane into main (issue 411's truth sources, issue 412; the main loop's merge battery) | main 4e9267e + lane/engine 76501de, merged tree before the commit | dev-r, 24 logical; the net lane's fixer running | 32 | 293 | 317 / 315 / 315 | none | pass x3 |
 
@@ -12076,3 +12077,23 @@ entry changes in the same edit as its code, which the standing rule defers to up
     (the synchronous ladder not local); netplay's wall-clock no-visit rounds bounded by the clock;
     the README's stale proof-hook refusal gone; Guard's scan capped by the bound; `hunt_suggest`
     refused outside match play (issue 477, the H43 row).
+  - **The survivors and the checks.** The 26 survivors and L02 re-run with the mutation pass's
+    runner on a fresh copy of 941af12: 27 of 27 KILLED by named tests (the table is in CHANGELOG;
+    Y03 re-expressed, its fault gone with S4). Checks on 941af12 (the round's final code; the verification commit after it changes one comment
+    in `selfplay.hpp`, the clock note brought to S7's order): engine 872 of 872 (`--werror`);
+    long_detectors 2 of 2; the Lazy SMP test x3 (1 thread 293 each run, 5 threads 315 / 318 / 317; a
+    quiet machine - the build log's table); ruff "All checks passed!", "143 files already formatted";
+    pytest - the whole `tests/engine` directory and the train files that play or read games
+    (test_generator_budget, test_unscored, test_mechanics, test_records, test_seeded_starts,
+    test_selfplay_pool, test_steering, test_targets, test_trainer, test_completed_q_arm,
+    test_target_arms, test_qat) - 808 passed, 1 skipped (test_records' opt-in T5D_RECORDS run) in 27
+    minutes, T5D_REQUIRE_ENGINE=1; verify ok (exit 0; it notes 17 problems in the required sets of the
+    tiers that can enable the proof channel, which verify itself does not fail on - nothing under
+    `oracles/` touched here); gate commit "oracle layer
+    [commit]: ok", SMOKE TEST - PASSED (baseline 41 compared, 0 declined), proof channel DISABLED.
+    The nightly gate, owed (`legal.cpp`, a truth source, changed with S8's statistic): "oracle layer
+    [nightly]: ok", engine differential PASSED (baseline 41 compared, 0 declined; Standard - Half
+    Reflected and Standard - Reversed Royalty gated, as before), proof channel DISABLED.
+    **For the main loop:** the clocked no-child order (S7: the clock's search before decision 13's
+    witness) to confirm; issue 481 (the proof channel's solved root, and the unclocked loop's
+    throw with no visited child) open; issues 480 and 482 are placeholders.

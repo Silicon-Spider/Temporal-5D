@@ -10,6 +10,37 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - E11 review round 2, verified: the survivors re-run and the round's checks
+
+The review's 26 survivors and the lane's L02, re-run with the mutation pass's runner
+(`rv-search2/mutation/mutcheck.py`, copied; a mutant's own pytest `-k`) on a fresh `git archive`
+of 941af12, each mutant re-expressed against the code as it now stands: **27 of 27 KILLED**, each
+by its named test. A05 (the forced slice's root listing lifted to none), A08 (the bound set
+without the steady-clock guard), A09, B04 and B15 (`DecisionClock`), B05, B07, B10 and B11
+(`cannot_move`), B16, B17, B19, C01-C03, D03 and D06 (`proof_gap`), L02 (S8's statistic) in C++;
+Y01, Y03, Y07, Y09, Y10, Y12, Y15, Y17 and Y25 in Python, run on a pristine library (rebuilt
+after the C++ mutants; the baseline of both test files passing on it first). Y03's own fault - the
+bound re-set from now after the forced slice - no longer exists: since S4 the bound is set once
+and only the root's listing is lifted and dropped; it was re-expressed as the lift never dropped.
+
+Checks on 941af12 (the round's final code; the verification commit after it changes one comment
+in `selfplay.hpp`, the clock note brought to S7's order): engine 872 of 872 (`--werror`);
+long_detectors 2 of 2; the Lazy SMP test x3 (1 thread 293 each run, 5 threads 315 / 318 / 317; a
+quiet machine - the build log's table); ruff "All checks passed!", "143 files already formatted";
+pytest - the whole `tests/engine` directory and the train files that play or read games
+(test_generator_budget, test_unscored, test_mechanics, test_records, test_seeded_starts,
+test_selfplay_pool, test_steering, test_targets, test_trainer, test_completed_q_arm,
+test_target_arms, test_qat) - 808 passed, 1 skipped (test_records' opt-in T5D_RECORDS run) in 27
+minutes, T5D_REQUIRE_ENGINE=1; verify ok (exit 0; it notes 17 problems in the required sets of the
+tiers that can enable the proof channel, which verify itself does not fail on - nothing under
+`oracles/` touched here); gate commit "oracle layer
+[commit]: ok", SMOKE TEST - PASSED (baseline 41 compared, 0 declined), proof channel DISABLED.
+The nightly gate, owed (`legal.cpp`, a truth source, changed with S8's statistic): "oracle layer
+[nightly]: ok", engine differential PASSED (baseline 41 compared, 0 declined; Standard - Half
+Reflected and Standard - Reversed Royalty gated, as before), proof channel DISABLED.
+
+Spec: none - tests and their record. No proposed edit; no measured figure.
+
 ### 2026-11-24 - E11 review round 2, the LOW findings L1-L9
 
 The review's nine LOW findings, each as the main loop decided.
