@@ -15,7 +15,9 @@ the 51-bin categorical over the root search value, the error head's output and m
   model's forward, ``max_batch`` at a time; positions of different board counts and sizes
   share a batch (padding is masked).
 * ``CachedNetworkEvaluator`` - the cached path (C2, ``net/cache.py``): one position at a time
-  against the per-board K/V store, in the epoch of the current search (``start(root)``).
+  against the per-board K/V store, in the epoch of the current search (``start(root)``) - or,
+  under C26's phase form (``CacheConfig.phase_form``, off) in a search rooted under N* boards, the
+  dense path itself (``NetworkEvaluator`` with the dense scope), batch for batch.
 * ``SearchDriver`` - what the search side provides: ``collect`` a batch of leaves,
   ``deliver`` their evaluations, ``finished``. ``serve`` runs the loop and checks every
   evaluation against its leaf.
@@ -58,7 +60,7 @@ from typing import Protocol, runtime_checkable
 import numpy as np
 import torch
 
-from ..net.cache import CachedEvaluator, Epoch, state_digest
+from ..net.cache import CachedEvaluator, Epoch, input_digest
 from ..net.model import NetOutput, T5DNet
 from ..net.state import PositionState, collate, relayout, to_piece_centric
 from .capi import T5D_SPLIT_FLAT, T5D_TIME_STOP_NONE, T5D_TIME_STOP_SEARCH, T5D_VALUE_LOGITS, T5D_VALUE_PROBABILITIES
@@ -256,6 +258,16 @@ def _check_policy(model: T5DNet, policy: str) -> None:
         raise ValueError("an optimistic evaluator needs a network with D9's head (NetConfig.optimistic_policy)")
 
 
+def _refuse_ladder(cached: CachedEvaluator) -> None:
+    """The engine path refuses the refresh ladder (BUILD_LOG issue 271): see ``CachedNetworkEvaluator``."""
+    if cached.config.node_refresh or cached.config.complexity_refresh:
+        raise NotImplementedError(
+            "the engine's search has no refresh ladder: it opens one epoch per search and refreshes no node, so "
+            "CacheConfig.node_refresh (C3a rung 1) and complexity_refresh (C24) would be ignored on this path - they run "
+            "in the search-tree fixture (net/tree.py) only (BUILD_LOG issue 271)"
+        )
+
+
 def policy_source(evaluator) -> str:
     """The prior an evaluator delivers (``POLICY_SOURCES``): its ``policy``, or ``"normal"`` for
     one that names none."""
@@ -321,15 +333,43 @@ class CachedNetworkEvaluator:
     frozen boards' K/V from the store, computed once per digest - in the epoch of the
     current search. ``start(root)`` opens a search (``CachedEvaluator.root_epoch``: a root
     refresh under ``CacheConfig.root_refresh``, else the causal epoch). ``policy``: as
-    ``NetworkEvaluator``'s."""
+    ``NetworkEvaluator``'s.
 
-    def __init__(self, cached: CachedEvaluator, *, policy: str = "normal") -> None:
+    **C26's phase form** (``CacheConfig.phase_form``, off; section 7.10): ``start`` picks the
+    search's mode by its root's board count - at or above N* the root refresh, as above; under
+    it the cached evaluator's one dense epoch, and every batch of the search goes to ``dense``,
+    a ``NetworkEvaluator`` over the same network with the dense scope, this prior and
+    ``max_batch``: the dense path itself, so a search rooted under N* is the dense search node
+    for node, bit for bit (the dense pass's last bits depend on grad mode and on how the
+    positions are batched - BUILD_LOG issue 262). ``positions_by_mode`` counts the positions
+    evaluated in each mode.
+
+    The engine's search opens one epoch per search and never refreshes a node, so a cached
+    evaluator configured for C3a's node refreshes (``CacheConfig.node_refresh``) or C24's
+    (``complexity_refresh``) is refused here - at construction and again at every ``start``, which
+    also refuses a cached evaluator swapped in afterwards: the refresh ladder runs in the
+    search-tree fixture (``net/tree.py``) only (BUILD_LOG issue 271).
+
+    ``start`` reuses the current epoch only for a root whose whole network input is the epoch's
+    anchor's - its moves and edges included (``input_digest``; BUILD_LOG issue 274) - and, when it
+    opens a new one, has the cached evaluator drop the root refresh the new search replaces
+    (``CachedEvaluator.release``: only one it made), so the store holds the live search's epoch and
+    the causal one, never every past search's (issue 273)."""
+
+    def __init__(self, cached: CachedEvaluator, *, policy: str = "normal", max_batch: int = 32) -> None:
         if cached.model.cfg.piece_centric:
             raise NotImplementedError("the cached path refuses a piece-centric network (A5; BUILD_LOG issue 252)")
         _check_policy(cached.model, policy)
+        _refuse_ladder(cached)
         self.policy = policy
         self.cached = cached
         self.epoch: Epoch | None = None
+        #: ``input_digest`` of the position the current epoch was opened at (``start``'s shortcut).
+        self._started: str | None = None
+        #: C26's dense mode: the dense path itself (see the class docstring).
+        self.dense = NetworkEvaluator(cached.model, max_batch=max_batch, scope="dense", policy=policy)
+        #: Positions evaluated in each mode (C26): "dense" (a search rooted under N*) and "cached".
+        self.positions_by_mode = {"dense": 0, "cached": 0}
 
     @property
     def model(self) -> T5DNet:
@@ -342,24 +382,39 @@ class CachedNetworkEvaluator:
         return state
 
     def start(self, root: PositionLike) -> Epoch:
-        """Open a search at ``root``: its epoch (the current one again when ``root`` is the
-        current epoch's anchor - the same search continuing)."""
+        """Open a search at ``root``: its epoch - the current one again when ``root``'s network
+        input is the one the current epoch was opened at, moves and edges included (the same search
+        continuing; BUILD_LOG issue 274); else a new one, and the root refresh it replaces dropped
+        from the store (``CachedEvaluator.release``; issue 273). Under C26's phase form a root under
+        N* boards gets the dense epoch - one object, with no anchor, so this asks the cached
+        evaluator again, at no cost."""
+        _refuse_ladder(self.cached)
         state = self._fit(state_of(root))
-        if self.epoch is not None and self.epoch.anchor == state_digest(state):
+        started = input_digest(state)
+        if self.epoch is not None and self.epoch.anchor is not None and self._started == started:
             return self.epoch
         with torch.no_grad():
-            self.epoch = self.cached.root_epoch(state)
-        return self.epoch
+            epoch = self.cached.root_epoch(state)
+        old, self.epoch, self._started = self.epoch, epoch, started
+        if old is not None and old is not epoch:
+            self.cached.release(old)
+        return epoch
 
     def __call__(self, positions: Sequence[PositionLike]) -> list[Evaluation]:
         if self.epoch is None:
             raise RuntimeError("no search is open: call start(root) first")
+        if self.epoch.mode == "dense":  # C26: a search rooted under N* is the dense search
+            self.cached._check_format()  # as every cached epoch and evaluation does (G8's switch in place)
+            results = self.dense(positions)
+            self.positions_by_mode["dense"] += len(positions)
+            return results
         results = []
         with torch.no_grad():
             for p in positions:
                 state = self._fit(state_of(p))
                 out = self.cached.evaluate(state, self.epoch)
                 results.extend(_split(out, [state], self.policy))
+        self.positions_by_mode["cached"] += len(positions)
         return results
 
 
@@ -685,7 +740,11 @@ def engine_epoch(epoch: Epoch) -> int:
     """The engine's 64-bit epoch number for a cached-path epoch (its key, hashed): the search
     caches evaluations per (state, moves made in its action, epoch) (register A6), so
     evaluations made under different refresh conditioning are never served for one another;
-    the shared causal epoch maps to one number."""
+    the shared causal epoch maps to one number. So does C26's dense epoch (its key "dense"):
+    every search rooted under N* carries it, so the engine's shared evaluation cache (C14) serves
+    dense evaluations across those searches and never to a cached search, or the reverse; it is
+    never 0 - the epoch of a search whose evaluator has no ``start`` - nor a cached epoch's
+    number (BUILD_LOG issue 261)."""
     return int.from_bytes(hashlib.blake2b(epoch.key.encode("utf-8"), digest_size=8).digest(), "little")
 
 
@@ -695,15 +754,31 @@ def start_epoch(search: Search, evaluator: Evaluator, *, regs_per_board: int = 2
     refresh; ``CachedNetworkEvaluator``), so that a search sharing another's evaluation cache
     (C14) never reuses evaluations made under another refresh. The engine epoch set, or None
     for an evaluator without ``start`` (its evaluations are a function of the leaf's input alone:
-    the epoch stays as it is). The root's position is the root state's own expansion with the
-    search's expansion options."""
+    the epoch stays as it is). The root's position is the root leaf's input: the root state
+    expanded as the search expands its leaves - the search's expansion options, and its candidate
+    moves under the search's legality policy (``legal_moves_only`` with the budget
+    ``legality_checks``, ``legality_nodes``) - so that C3's root refresh, a dense pass over this
+    position, reads what the root leaf's own evaluation reads (section 7.9: at the root the
+    two-level mask reduces to the dense pass). The moves decide the move graph and the typed
+    relations, which the dense pass reads; anchored on the pseudo-legal expansion, a root whose
+    pseudo-legal and legal moves differ would have refreshed history the root leaf's dense pass
+    never computes (BUILD_LOG issue 259)."""
     start = getattr(evaluator, "start", None)
     if not callable(start):
         return None
-    opts = search.params.expand
+    params = search.params
+    opts = params.expand
     relations = [rid for rid in range(32) if (int(opts.relations) >> rid) & 1]
     with search.root_game() as root:
-        position = root.position(regs_per_board=regs_per_board, global_regs=global_regs, relations=relations, window_k=int(opts.window_k))
+        position = root.position(
+            regs_per_board=regs_per_board,
+            global_regs=global_regs,
+            relations=relations,
+            window_k=int(opts.window_k),
+            legal_moves=bool(params.legal_moves_only),
+            legality_checks=int(params.legality_checks),
+            legality_nodes=int(params.legality_nodes),
+        )
     number = engine_epoch(start(position))
     if search.info().epoch != number:
         search.set_epoch(number)

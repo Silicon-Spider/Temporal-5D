@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <span>
 #include <sstream>
@@ -1849,6 +1850,41 @@ TEST(timeman_no_child_known_legal_searches_against_the_clock_and_never_throws) {
     CHECK(g.clock_remaining[1] <= 0);
     CHECK(g.actions.empty());
     CHECK(g.final_state == g.start);
+  }
+}
+
+TEST(timeman_a_clocked_turn_start_verdict_is_uncharged_within_the_node_budget) {
+  // H1 part 5 (decision 13's budget, H22): on a match clock the turn start's
+  // verdict is the referee's - within PlayParams::terminal_nodes and charged
+  // to neither side. The mated start within one node (its proof needs 15) is
+  // unsettled: the game ends unscored with both clocks untouched; exactly, it
+  // is checkmate. The clock moves at every read, so a read would show.
+  const GameState s = game({"[8/8/8/8/8/5k2/6q1/7K:0:1:w]"}, BoardSize{8, 8});
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  for (const std::uint64_t nodes : {std::uint64_t{1}, std::numeric_limits<std::uint64_t>::max()}) {
+    ManualClock clock;
+    clock.step = 1.0;
+    PlayParams p;
+    p.search = quiet_params();
+    p.match_play = true;
+    p.clock.enabled = true;
+    p.clock.clock = &clock;
+    p.clock.base_seconds = 60;
+    p.terminal_nodes = nodes;
+    const GameRecord g = play_game(s, *uniform, p);
+    if (nodes == 1) {
+      CHECK(g.end == GameEnd::Unknown);
+      CHECK(g.unsettled == Unsettled::Verdict);
+      CHECK_EQ(g.result(), std::string("*"));
+    } else {
+      CHECK(g.end == GameEnd::Checkmate);
+      CHECK_EQ(g.winner, 1);
+    }
+    CHECK(g.actions.empty());
+    CHECK_EQ(g.timed_decisions, std::uint64_t{0});
+    CHECK_EQ(clock.reads, std::uint64_t{0});
+    CHECK_EQ(g.clock_remaining[0], 60.0);
+    CHECK_EQ(g.clock_remaining[1], 60.0);
   }
 }
 

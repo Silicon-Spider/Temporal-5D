@@ -9,7 +9,7 @@
 //            [--no-widening] [--e2] [--e3] [--proof-channel] [--batch N] [--synchronous]
 //            [--match] [--final visits|lcb] [--temperature T] [--temperature-decisions N]
 //            [--noise | --no-noise] [--cap-turns N] [--cap-boards N] [--max-actions N]
-//            [--mate-nodes N] [--max-seconds S] [--seed S]
+//            [--mate-nodes N] [--terminal-nodes N] [--max-seconds S] [--seed S]
 //            [--no-hunt] [--no-settling] [--no-assets] [--hunt-suggest] [--hunt-ms MS]
 //            [--settling-ms MS] [--verification-threads N] [--guard-final]
 //            [--decision-log FILE] [--time BASE [--increment INC]
@@ -53,10 +53,19 @@
 // --allocator (the moves-left integral by default), --no-signals (the
 // stop/extend table off); --model-clock prices each decision's work by the
 // cost model instead of the wall clock (deterministic). A side whose clock runs
-// out loses on time ("flag", result "*"). Self-play takes no clock.
+// out loses on time ("flag", result "*"); a side whose search cannot produce a
+// move with time left ends the game unscored ("unknown (search)"). The turn
+// starts' verdicts are the referee's: uncharged, within --terminal-nodes.
+// Self-play takes no clock.
 // --difficulty-weighting switches E8 on (a prototype, off): the plan weighted by
 // the root's predicted effort - inert here, as the built-in evaluators predict
 // none (only a driver with the network's effort head gives one).
+// --terminal-nodes N is the game loop's node budget (H22; 2,000,000, a
+// placeholder - kTerminalNodes; 18446744073709551615: exact) for each turn
+// start's verdict and a chosen move's verification: a verdict it does not
+// reach, or no move shown legal within it, ends the game unscored ("unknown",
+// "*"; the Termination header says which; never a mate). --mate-nodes is the
+// searches' own budget for the turn starts in their trees.
 // --max-seconds stops a long game (a safety stop, "*": checked before every
 // decision; each search's deadline, and the deadline of each turn start's
 // verdict and of a chosen move's exact verification - what it stops is
@@ -107,7 +116,7 @@ void usage(std::FILE* to) {
       "                [--match] [--final visits|lcb] [--temperature T]\n"
       "                [--temperature-decisions N] [--noise | --no-noise] [--cap-turns N]\n"
       "                [--cap-boards N]\n"
-      "                [--max-actions N] [--mate-nodes N]\n"
+      "                [--max-actions N] [--mate-nodes N] [--terminal-nodes N]\n"
       "                [--max-seconds S] [--seed S]\n"
       "                [--no-hunt] [--no-settling] [--no-assets] [--hunt-suggest] [--hunt-ms MS]\n"
       "                [--settling-ms MS] [--verification-threads N] [--guard-final]\n"
@@ -298,6 +307,8 @@ int main(int argc, char** argv) {
         params.max_actions = static_cast<std::uint32_t>(number_in(a, value(), 1, kU32));
       } else if (std::strcmp(a, "--mate-nodes") == 0) {
         params.search.mate_nodes = number_in(a, value(), 1, kAny);
+      } else if (std::strcmp(a, "--terminal-nodes") == 0) {
+        params.terminal_nodes = number_in(a, value(), 1, kAny);  // H22: UINT64_MAX exact
       } else if (std::strcmp(a, "--max-seconds") == 0) {
         params.max_seconds = real(a, value());
       } else if (std::strcmp(a, "--seed") == 0) {
@@ -429,6 +440,9 @@ int main(int argc, char** argv) {
                                         std::to_string(params.turn_cap.boards));
     }
     if (rules.encode() != 0) extra.emplace_back("Rules", tools::ruleset_text(rules));
+    if (params.terminal_nodes != kTerminalNodes) {  // H22: a non-default budget is named (the review of decision 13, L5)
+      extra.emplace_back("TerminalNodes", std::to_string(params.terminal_nodes));
+    }
     const std::string record = tools::play_record(g, v->name, extra);
     std::fputs(record.c_str(), stdout);
     std::fflush(stdout);
@@ -440,10 +454,13 @@ int main(int argc, char** argv) {
       f << audit::log_text(log);
       std::fprintf(stderr, "t5d-play: decision log %s - %zu events\n", decision_log.c_str(), log.events.size());
     }
+    // The end, an unscored one with its question (H22; the review of decision 13, L5).
+    const std::string end_text = std::string(game_end_name(g.end)) +
+                                 (g.unsettled == Unsettled::None ? "" : std::string(" (") + unsettled_name(g.unsettled) + ")");
     std::fprintf(stderr,
                  "t5d-play: %zu actions, %s, result %s, %llu decisions, %llu playouts, %llu "
                  "evaluations, %llu nodes, %.2f s, turn cap %s (capped positions met in search: %llu)\n",
-                 g.actions.size(), game_end_name(g.end), g.result().c_str(),
+                 g.actions.size(), end_text.c_str(), g.result().c_str(),
                  static_cast<unsigned long long>(g.decisions),
                  static_cast<unsigned long long>(g.playouts),
                  static_cast<unsigned long long>(g.evaluations),

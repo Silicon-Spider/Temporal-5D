@@ -51,7 +51,9 @@ weights; ``config`` - the ``NetConfig``; ``seed``; ``swa_snapshots``), ``value_s
 (``"wdl"``: the search backs up W - L of the network's WDL, D3 since engine ABI round 2a),
 ``search`` (every ``t5d_search_params`` field of the full and the cheap searches, the expand
 options and legality budget included - ``params_dict``), ``expand`` (the input's window and
-typed relations, the register counts), ``generator_config``, ``seed``, ``result`` (``end``,
+typed relations, the register counts), ``generator_config`` (its ``terminal_nodes``: the game
+loop's node budget, register H22; a record written before it lacks the key), ``seed``, ``result``
+(``end`` - ``"unknown"`` for a game ended unscored, H22, its outcome targets masked -
 ``winner``, ``result``, ``actions``, ``final_boards``, ``final_fingerprint``,
 ``final_active_timelines``), ``pgn`` (the game's 5dpgn), ``resign`` (``enabled`` and the
 would-resign events, I18), ``proof_refs`` (solved-store references: always empty - no proof
@@ -59,6 +61,11 @@ enters a store before the H23/H41 sign-off), ``target_config`` (the target build
 configuration that ``prior_to_target_kl`` was measured under - the builder's defaults when the
 generator was given none). A synthetic record (``trainer.synthetic_record``, never the
 generator's) also says ``synthetic``: the only rows the untrained build steps on.
+
+A game ended **unscored on an unsettled question** (register H22; ``end`` "unknown") also carries
+``unsettled`` - "verdict" (a turn start the game loop's node budget did not settle) or "choice" (no
+move shown legal within it, the verdict's witness left) - an optional key, present in no other
+record, so the version stays 2 (the review of decision 13, L5); the 5dpgn's Termination says the same.
 
 A **seeded game** (register I22, section 12: a game begun from a stored position;
 ``selfplay.SeededStartConfig``, off by default) also carries ``seeded_start`` - an optional key, as
@@ -107,8 +114,10 @@ CANDIDATE_TURN = -2
 #: (terminal or solved), no simulation possible, or I20's KL-adaptive rule.
 STOP_CODES: tuple[str, ...] = ("playouts", "finished", "exhausted", "kl")
 #: How the played child was chosen (``DecisionRecord.choice``): sampled from the visits at the
-#: move temperature, the most visited (temperature 0), the most visited child known legal after
-#: the chosen one stayed unknown under verification, or none played (the mover resigned, I18).
+#: move temperature, the most visited (temperature 0), a child known legal played after the chosen
+#: one stayed unknown under verification - the most visited one, or with none known the next step
+#: of the turn-start verdict's witness (H22; review decision 13's X2) - or none played (the mover
+#: resigned, I18).
 CHOICE_CODES: tuple[str, ...] = ("sampled", "most_visited", "verified_fallback", "resigned")
 
 #: Each decision's scalar fields: name -> dtype (``d_<name>`` in the file).
@@ -378,6 +387,11 @@ class GameRecord:
     @property
     def n_actions(self) -> int:
         return int(self.header["result"]["actions"])
+
+    @property
+    def unsettled(self) -> str:
+        """An "unknown" end's question (register H22; module docstring): "verdict", "choice" or ""."""
+        return str(self.header.get("unsettled", ""))
 
     @property
     def seeded_start(self) -> dict | None:

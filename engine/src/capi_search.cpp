@@ -34,6 +34,10 @@ static_assert(static_cast<int>(t5d::MoveLegality::Legal) == T5D_LEGALITY_LEGAL);
 static_assert(static_cast<int>(t5d::MoveLegality::Illegal) == T5D_LEGALITY_ILLEGAL);
 static_assert(static_cast<int>(t5d::MoveLegality::Unknown) == T5D_LEGALITY_UNKNOWN);
 static_assert(sizeof(t5d::MoveLegality) == sizeof(uint8_t));
+static_assert(static_cast<int>(t5d::Outcome::Unknown) == T5D_VERDICT_UNKNOWN);
+static_assert(static_cast<int>(t5d::Outcome::Ongoing) == T5D_VERDICT_ONGOING);
+static_assert(static_cast<int>(t5d::Outcome::Checkmate) == T5D_VERDICT_CHECKMATE);
+static_assert(static_cast<int>(t5d::Outcome::Stalemate) == T5D_VERDICT_STALEMATE);
 static_assert(T5D_VALUE_BINS == t5d::mcts::kValueBins);
 static_assert(T5D_WDL == t5d::mcts::kWdl);
 static_assert(static_cast<int>(t5d::mcts::UncertaintySource::Categorical) == T5D_UNCERTAINTY_CATEGORICAL);
@@ -1455,14 +1459,53 @@ t5d_status t5d_search_verify(t5d_search* search, size_t index, int32_t* legality
   });
 }
 
-t5d_status t5d_search_verify_within(t5d_search* search, size_t index, double seconds, int32_t* legality,
-                                    char** error) {
+t5d_status t5d_search_verify_within(t5d_search* search, size_t index, uint64_t checks, uint64_t nodes,
+                                    double seconds, int32_t* legality, char** error) {
   return guarded(error, [&]() -> t5d_status {
     if (search == nullptr || legality == nullptr) throw std::invalid_argument("search or legality is NULL");
-    t5d::LegalityOptions exact = t5d::LegalityOptions::exact();
+    t5d::LegalityOptions exact = legality_of(checks, nodes);  // T5D_NO_LIMIT both: exact (H22's budget)
     exact.max_bytes = search->search.params().mate_bytes;
+    exact.detector = search->search.params().detector;
     exact.deadline = t5d::mcts::deadline_after(std::chrono::steady_clock::now(), seconds, "seconds");
     *legality = static_cast<int32_t>(search->search.verify(index, exact));
+    return T5D_OK;
+  });
+}
+
+t5d_status t5d_search_verify_budgeted(t5d_search* search, size_t index, uint64_t checks, uint64_t nodes,
+                                      int32_t* legality, char** error) {
+  return guarded(error, [&]() -> t5d_status {
+    if (search == nullptr || legality == nullptr) throw std::invalid_argument("search or legality is NULL");
+    t5d::LegalityOptions o = legality_of(checks, nodes);  // T5D_NO_LIMIT both: exact (H22's budget, §11.0)
+    o.max_bytes = search->search.params().mate_bytes;
+    o.detector = search->search.params().detector;  // the verdict's (review of decision 13, L8)
+    *legality = static_cast<int32_t>(search->search.verify(index, o));
+    return T5D_OK;
+  });
+}
+
+t5d_status t5d_game_verdict(const t5d_game* game, uint64_t nodes, uint64_t bytes, int32_t* verdict,
+                            t5d_move* witness, size_t capacity, size_t* count, char** error) {
+  return guarded(error, [&]() -> t5d_status {
+    if (game == nullptr || verdict == nullptr || count == nullptr) {
+      throw std::invalid_argument("game, verdict or count is NULL");
+    }
+    if (witness == nullptr && capacity > 0) throw std::invalid_argument("witness is NULL with a capacity");
+    if (t5d::capi_internal::game_moves_in_action(*game) != 0) {
+      throw std::invalid_argument("t5d_game_verdict: the game is in mid-action, not at a turn start");
+    }
+    const t5d::GameState& s = t5d::capi_internal::game_state(*game);
+    t5d::SearchBudget budget = t5d::SearchBudget::nodes(nodes);
+    budget.max_bytes = bytes >= std::numeric_limits<std::size_t>::max() ? std::numeric_limits<std::size_t>::max()
+                                                                       : static_cast<std::size_t>(bytes);
+    const t5d::MateResult r = t5d::detect_mate(s, t5d::mcts::SearchParams{}.detector, budget);
+    *verdict = static_cast<int32_t>(r.verdict);
+    *count = r.witness.size();
+    t5d::GameState at = s;  // each move recorded in the state it is made in
+    for (std::size_t i = 0; i < r.witness.size() && i < capacity; ++i) {
+      witness[i] = record_of(r.witness[i], at.multiverse());
+      at.apply(r.witness[i]);
+    }
     return T5D_OK;
   });
 }

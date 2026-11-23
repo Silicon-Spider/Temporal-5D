@@ -512,16 +512,43 @@ class Search:
         self._lib.call("t5d_search_choose_by_visits", self._live(), c_double(temperature), c_double(random), byref(index), error=True)
         return int(index.value)
 
-    def verify(self, index: int, seconds: float = 0.0) -> int:
-        """Classify root child ``index``'s move exactly (``T5D_LEGALITY_*``); an illegal child
-        is removed and the children's indices change. ``seconds`` (stage E11, the review's H1): a
-        deadline from now - past it the classification answers ``T5D_LEGALITY_UNKNOWN`` and the
-        child stays; 0 (or 1e9 or more): none; a budget already spent: a tiny positive value."""
+    def verify(self, index: int, seconds: float = 0.0, *, checks: int = T5D_NO_LIMIT, nodes: int = T5D_NO_LIMIT) -> int:
+        """Classify root child ``index``'s move (``T5D_LEGALITY_*``) within ``checks`` (tier 2's)
+        and ``nodes`` (tier 3's search nodes in all) - ``T5D_NO_LIMIT`` both, the default: exactly
+        (``t5d_search_verify``). The game loops pass their node budget (register H22, section 11.0:
+        the terminal test's budget covers the chosen move's verification too); a move it leaves
+        undecided is ``T5D_LEGALITY_UNKNOWN`` and stays a child. An illegal child is removed and
+        the children's indices change. Deterministic (``t5d_search_verify_budgeted``) - unless
+        ``seconds`` (stage E11, the E11 review's H1): a deadline from now as well
+        (``t5d_search_verify_within``), past which the classification answers
+        ``T5D_LEGALITY_UNKNOWN``; 0 (or 1e9 or more): none; a time already spent: a tiny positive
+        value. A budget outside 0 to ``T5D_NO_LIMIT`` is refused (``ValueError``), never wrapped
+        into the C type (the review of decision 13, L3: -1 read as exact, 2**64 as 0)."""
+        for name, value in (("checks", checks), ("nodes", nodes)):
+            if not 0 <= int(value) <= T5D_NO_LIMIT:
+                raise ValueError(f"{name}: 0 to T5D_NO_LIMIT, not {value}")
         out = c_int32()
         if seconds:
-            self._lib.call("t5d_search_verify_within", self._live(), c_size_t(int(index)), c_double(float(seconds)), byref(out), error=True)
+            self._lib.call(
+                "t5d_search_verify_within",
+                self._live(),
+                c_size_t(int(index)),
+                c_uint64(int(checks)),
+                c_uint64(int(nodes)),
+                c_double(float(seconds)),
+                byref(out),
+                error=True,
+            )
         else:
-            self._lib.call("t5d_search_verify", self._live(), c_size_t(int(index)), byref(out), error=True)
+            self._lib.call(
+                "t5d_search_verify_budgeted",
+                self._live(),
+                c_size_t(int(index)),
+                c_uint64(int(checks)),
+                c_uint64(int(nodes)),
+                byref(out),
+                error=True,
+            )
         return int(out.value)
 
     def advance(self, index: int) -> None:

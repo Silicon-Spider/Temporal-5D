@@ -319,6 +319,34 @@ def test_a_flag_ends_the_game_at_the_actions_start(nets):
     assert res.hard_overruns == 1
 
 
+@pytest.mark.parametrize("model", [False, True])
+def test_a_clocked_turn_start_verdict_is_uncharged_within_the_node_budget(nets, model):
+    """H1 part 5 (decision 13's budget, H22): on a match clock the turn start's verdict is the
+    referee's - within ``terminal_nodes`` and charged to neither side. The mated start within one
+    node (its proof needs 15) is unsettled: the game ends unscored, both clocks untouched (on the
+    wall clock a charge would show); exactly, it is checkmate, the clocks untouched too."""
+    cfg, evaluators = nets
+    base = PlayConfig(
+        start_fen=("[8/8/8/8/8/5k2/6q1/7K:0:1:w]",),
+        mode="match",
+        batch_size=4,
+        cap_turns=0,
+        cap_boards=0,
+        hunt=False,
+        settling=False,
+        time=60.0,
+        model_clock=model,
+    )
+    with torch.no_grad():
+        tiny = play_game(evaluators, replace(base, terminal_nodes=1), net_cfg=cfg)
+        exact = play_game(evaluators, base, net_cfg=cfg)
+    assert (tiny.end, tiny.unsettled, tiny.result, tiny.actions) == ("unknown", "verdict", "*", [])
+    assert (exact.end, exact.winner, exact.actions) == ("checkmate", 1, [])
+    for res in (tiny, exact):
+        assert res.timed_decisions == 0 and res.decisions == 0
+        assert res.clock_remaining == [60.0, 60.0]
+
+
 def _clocked_game(nets, **kw):
     """A match game on the model clock (the reviewers' probe configuration)."""
     cfg, evaluators = nets
@@ -487,7 +515,7 @@ def test_netplay_choice_follows_the_clocked_policy():
     try:
         assert not any(c.legality == T5D_LEGALITY_LEGAL for c in s.children())  # the premise
         spent = _DecisionClock(d0=time.perf_counter() - 10.0, hard=1.0, remaining=600.0, model=False)
-        pick = _choose(s, cfg, res, ServeStats(), UniformEvaluator(), {}, None, spent)
+        pick = _choose(s, cfg, res, ServeStats(), UniformEvaluator(), {}, None, clock=spent)
         assert s.child(pick).legality == T5D_LEGALITY_LEGAL
         assert res.verified_choices >= 2  # the cut verification, then the search
     finally:
@@ -497,7 +525,7 @@ def test_netplay_choice_follows_the_clocked_policy():
     try:
         out = _DecisionClock(d0=time.perf_counter() - 10.0, hard=1.0, remaining=5.0, model=False)
         with pytest.raises(_OutOfClock):
-            _choose(s, cfg, res, ServeStats(), UniformEvaluator(), {}, None, out)
+            _choose(s, cfg, res, ServeStats(), UniformEvaluator(), {}, None, clock=out)
     finally:
         s.close()
         g.close()

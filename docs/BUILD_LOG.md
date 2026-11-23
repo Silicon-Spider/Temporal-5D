@@ -81,10 +81,18 @@ where the spec is silent; each has its spec issue below.
 | 8 | Under graph search, a move that fires no gate makes its own path-local inherited node even where another ordering's gated move made an evaluated node of the same state; a path-local node a re-root makes the root joins the table | 729 |
 | 9 | Decision 13 masks an unscored game's outcome-derived targets with no exception, retiring issue 235(g)'s whole-blend reading to an arm | 731 |
 | 10 | The values are padded with the queries and keys (the CPU fast kernels need one width); the layer-shared bias is kept FP32 (bitwise) under a 2 GiB cap | 733 |
+| 11 | An unsettled choice's action under way is dropped from the record - its decisions, positions and resignation events - the game put back at that action's turn start (format version 2 holds whole actions) | 413 (b), 414 |
+| 12 | The rules come before the cap: a capped turn start the game loop's budget cannot settle ends the game unknown, not a drawn cap (Standard - Two Timelines at 256 nodes ends unknown where 4,096 nodes ends turn_cap) | 413 (c), 414 |
+| 13 | Match play's interim reading: until E11's clock, the engine's own turn takes the same budgeted verdict as self-play and ends unknown where it cannot settle (the ruling: "the engine's own turn needs no verdict") | 413 (f), 414 |
+| 14 | The verdict's witness (X2): a step the root had not instantiated is played as a child of its own, unvisited and known legal, recorded under the existing "verified_fallback" code; netplay's match play then drops its carried search | 414 |
+| 15 | An optional `unsettled` header key in an unscored generator record, without a record-version bump (as row 7's keys) | 414 |
 
 **For the user** (beside the review's own list, next section; four of these were answered the same
 day - "The user's answers", below):
 
+- **Decision 13's budget: keep the 2,000,000-node placeholder, or have the pilot run measure the
+  games ended unscored by board count and set it from that?** One test game ended unscored at 88
+  boards under it, near the generator's 80-board cap (issues 413, 414; MEASUREMENTS).
 - **May the human games seed self-play?** `data/t0database/README.md` and `PROVENANCE.md` call
   them measurement data only; registers I22 and I24 name them as a source of stored positions. The
   code takes any 5dpgn and reads none by default; the two documents were not touched.
@@ -297,7 +305,7 @@ build. *(2026-11-23: they carry them now.)*
   evaluator (G12); the unscored ending in records and targets (decision 13).
 - **Search and engine lanes.** The tree form under MCGS, merging at evaluated nodes only, and
   section 15.2's tree-form row under the graph (decision 10); a node budget for the terminal test
-  in Python's play loops and the training generator (decision 13); on/off switches for the asset
+  in Python's play loops and the training generator (decision 13 - *built on `lane/engine`, 2026-11-24: issue 413*); on/off switches for the asset
   map and Hunt's suggested lines for 6e's match tests; Gumbel root search behind a flag (E10),
   after I21's ranking; MLH steering in Lc0's form once the moves-left head is trained.
 - **Gate lane.** Nothing new. H48 waits for the user.
@@ -757,10 +765,12 @@ pushed after every commit, taking main by merge, never rebase (re-check with `gi
 - `lane/engine` - merged 2026-11-23: MT-01, MT-02's record tool and MT-03 with their first review's
   fixes; issue 406 (exact legality's cost; a deadline reaching the rules engine's calls) with its
   review's fixes (H1 the cache's candidate digest, H2 issue 411 under Q3, M1-M5, L1-L8) and issue
-  412 found at the merge; the flat-form docs (issues 400-412, edits 300-305). Next, handed over
-  from the review's code round: decision 13 (the game loop's node-budgeted terminal test with
-  the unscored ending, `t5d_search_verify_budgeted`, both Python loops; with issue 408,
-  coordinated with `lane/search`'s turn-start verdict). MT-02's records into the corpus wait for
+  412 found at the merge; the flat-form docs (issues 400-412, edits 300-305). Since then, on
+  the lane: decision 13 built (issue 413, settling issue 408: the game loop's node-budgeted
+  terminal test and the unscored ending in the C++ loop, netplay and the generator,
+  `t5d_search_verify_budgeted`; edits 306-308) and its review fixed (issue 414: the verdict's
+  witness played where no child is known legal, `t5d_game_verdict`; the missing tests; edits
+  309-311) - to merge after the review round's report. MT-02's records into the corpus wait for
   the user (issue 405).
 - `lane/search` (from main 2b752ba, 2026-10-23) - E10 redone and merged (Hunt under 100
   boards, the settling scans under 50, the asset map - off in self-play until I2's steered
@@ -772,8 +782,17 @@ pushed after every commit, taking main by merge, never rebase (re-check with `gi
 - `lane/fix535` (from main d8a54d3, 2026-11-02) - issue 535 resolved by issue 600 and merged (2026-11-09, with its review round: no HIGH; 3 MEDIUM and 14 LOW fixed, all 24 surviving mutants killed, the normal path bit-identical to 03eca7a on the review's three twins): the flat form, a node's creation and a re-root exception-safe under an allocation failure, gather's request list and run's buffer inside their rollbacks, the tree form's inheritance and re-evaluation rolled back, the ladder's verdict take and the asset map's lookup safe under `std::bad_alloc`. Issues 603 (this machine's g++ 16.2 breaks `std::deque`'s exception safety under its default `-fassume-sane-operators-new-delete`) and 604 (a `std::bad_alloc` in a synchronous ladder job reported as a contradiction) are the main loop's, in the quiet-machine block. The lane is idle.
 - `lane/net` - A5 (piece-centric tokens, dense scope only, behind its flag, off) merged with
   its review fixes (2026-11-02; issues 244-258, edits 190-199): no 2x flag stands under
-  CHECKPOINT 9's phase form. Next: C26/C27 (low priority, the cached path behind its flag),
-  then the v1 re-run of §15.2's network rows (the audit's list).
+  CHECKPOINT 9's phase form. **C26/C27 merged 2026-11-24** with their review fixes: the root
+  refresh anchored at the root leaf's input (issue 259), the phase form behind its flag, refresh
+  and supersession inside a turn in the search-tree fixture, the engine path refusing node
+  refreshes, the K/V store dropping past root refreshes (issue 273 resolved), the start shortcut
+  keyed on the whole input (issue 274) - issues 259-275, edits 380-385 (380-384 applied upstream by
+  the 2026-11-15 review). **For the user: issue 264** - a carried graph search crossing N\* links a
+  cached path to a carried dense-made node (probed: 3 of 6 searches), against section 7.10's
+  "transpositions never mix a dense and a cached evaluation of one state": (a) section 8.7's
+  carry covers it, or (b) the strict reading, and the engine drops or re-evaluates the carried
+  nodes' table entries at the crossing. Issue 269 stays the user's question. Next: the v1
+  re-run of §15.2's network rows (the audit's list).
 - G9, the bounded AMD attempt - done (`lane/gate`, merged 2026-10-23): it partly works -
   the network on the RX 9070 XT (ROCm 10.1.0, torch 2.14.0, `build/venv-rocm`) matches the
   CPU and drives the search through the C API; torch.compile does not run (no Windows
@@ -2144,7 +2163,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | H17 | built in part | (6f, 2026-10-23: the prover's five threads sharing a 1-entry TT give no false proof and every certificate E4 confirms - `prover_threads_survive_tt_churn`; issue 402; its counts clock-budgeted, 73-74 confirmed and 35-36 certificates - MT-03's review, issue 409.) Lazy SMP in the scanner (E5c): same-root threads, a shared TT and a concurrent solved store; in-game decay and rung helpers wait for the search; no help for exhaustive refutations (measured on Guard, now in the register). **The shared stores' data race on Windows - fixed 2026-10-22** (`lane/engine`; found at E-A6's review, where `scanner_lazy_smp_store_refuses_contradictions` segfaulted in 11 of 600 runs on the development machine - MSYS2 ucrt64 g++ 16.2, Release; gdb: `same_position` under `ConcurrentSolvedStore::put`). The cause, confirmed in winpthreads' source and by experiment: libstdc++'s `std::shared_mutex` is a `pthread_rwlock_t` with the static initialiser; winpthreads initialises it on its first call and returns `EINVAL` to the threads that lose that race (8 threads on 64 fresh locks: 149,878 and 156,542 of 1,024,000 `pthread_rwlock_wrlock` calls, in two runs; `pthread_mutex_lock` never failed); libstdc++ ignores the error - so a losing thread ran its critical section without the lock, then unlocked a lock it did not hold. Every store the scanner's and the prover's threads share is first taken by all of them at once (a scanner's own; Guard's and Hunt's, built per call; the disproof stores). Fixed by construction: both stores' shards are behind `ShardLock` (`t5d/scanner.hpp`), a `std::mutex` - libstdc++'s `lock()` throws on any error the platform reports, never returning without the lock. A warm-up (each shard's lock taken once at construction; 0 crashes in 600 runs at E-A6's review) was not chosen: it rests on winpthreads' internals, not on the lock's contract, and keeps the slow lock. The audit: no other `std::shared_mutex`, `shared_lock` or `shared_timed_mutex` in `engine/`; the TTs are lockless; MCGS and the evaluation cache have no lock and are single-threaded (H15) - `t5d_search_new_sharing`, `EvalCache` and the Python `Search` now say that searches sharing a cache are used one at a time. Tests (`test_shared_stores.cpp`): `shared_store_lock_excludes_at_first_concurrent_use` and `shared_stores_hold_at_first_concurrent_use` - built with the old lock (`3f04f8e` with the new test file, in a scratch copy) each failed in every run - 120 of 120 on 2026-10-17, 50 of 50 on 2026-10-22 (the lock test with 136-1,003 overlaps a run over 2026-10-17 and 2026-10-22, the store test by crashing) - and with `ShardLock` neither failed in 500 (2026-10-17) or 300 (2026-10-22) runs; `scanner_lazy_smp_store_refuses_contradictions` failed with the old stores in 14 of 600 runs on 2026-10-17 (10 crashes, 3 stores holding a position twice, 1 lost distance) and 85 of 600 on 2026-10-22 (58 crashes), and with the new in 0 of 1,000 each day. The cost, indicative (a shared machine; not in MEASUREMENTS): winpthreads' reader-writer lock takes about 1.4 µs a call and a process-wide spinlock, so the mutex is far faster here - store operations about 25× as many at 1 thread and 450-1,000× as many at 5 and 12; at 5 threads Hunt 1.45-1.69×, Guard 2.71-2.90× and the scanner 1.22-1.34× the nodes per second (two days; at 1 thread 0.94-1.07×, noise, and the same nodes and proofs as the old build). `scanner.hpp`, `scanner.cpp`, `prover.hpp` and `prover.cpp` are truth sources: the code signature changes, no verdict logic (M17's row; issue 147). Linux (glibc) not yet run: the engine job (ubuntu-24.04, g++ 13/14) runs the tests on every push, but no GitHub Actions job has started on any branch since 2026-10-17 09:56 UTC, the nightly of 2026-10-22 included ("recent account payments have failed or your spending limit needs to be increased") - re-run the engine workflow once billing is fixed. Issue 146, edit 120; the old lock also leaked Windows handles (about 2.75 per lock used; review of 8d6849f) |
 | H18 | built, tested | 5D Zobrist: coordinate-free content hash per board, multiply-rotate with (timeline, half-turn), addition across boards, ruleset ID, player to move, parity, creators, board size; incremental equals from-scratch; duplicated boards never cancel (engine E1, E2) |
 | H19 | built, tested | Proofs export to the solved store at once; the TT holds estimates only; class-relative disproofs live in their own store, never the solved store (E8, E9 - now in the register). **Under TT churn (6f, MT-03, 2026-10-23, `lane/engine`)**: with a 1- or 2-entry TT, settling as the scans run it (full df-pn, external stores) answers as the default TT does wherever both decide, every proof and disproof is in its store at return and a fresh prover answers from the stores with no expansion, at 1 and 5 threads; Hunt's mates are found under the same churn, certified, its disproof store untouched (`prover_proofs_survive_tt_churn_h19`, `prover_threads_survive_tt_churn`, `hunt_finds_its_mates_under_tt_churn`, `long_` twins). Through the settling wrapper: after E10's merge (issue 402); Hunt observed through `hunt_prover_options` (issue 403). **Review correction (2026-11-01, MT-03's review; fixed 2026-11-02, issue 409):** the churn barely moved those searches (a 1-entry TT changed the expansions at 66 of 2,034 random roots, never a status) and the disproof check was vacuous (any solved-store entry but a Win passed; a stored Draw could not fail). Now: the TT keeps estimates only by construction - it refuses a proven or disproven entry, tested (`prover_tt_keeps_estimates_never_facts`); workloads where churn carries weight (`prover_churn_takes_effect_where_the_tt_carries_weight`: 63 of 248 roots' searches change, statuses never; Hunt's: 13 of 54); a disproof in its store at class and depth or its stored fact checked (a Loss the game tree confirms after each of E4's listed actions, a stalemate by E4); a stored proof never read beyond its depth (re-asked shallower). Edit 301 |
-| H22 | built, tested | All five items of §11.0 (E1, E2, E4); the register's wording now matches what is built (proposed edit 40, applied upstream) |
+| H22 | built, tested | All five items of §11.0 (E1, E2, E4); the register's wording now matches what is built (proposed edit 40, applied upstream); the game loop's terminal test within a node budget and the unscored ending (review decision 13): built 2026-11-24 in the C++ loop, netplay and the training generator (issue 413; edits 306-308) - match play's reading waits on E11 |
 | H23 | built, tested | The gate, oracle and engine sides. The engine is configured in `gate.toml` (`./build/engine/t5d-gate`, full mode, 2026-10-17; the root's build on every platform, with a time limit of its own, `[engine] timeout_s`) and compared in every tier: commit, a smoke test (H47), PASSED, locally and in CI (run 39009070712); nightly PASSED locally (2026-10-17, under the two-oracle rule), gating Standard - Half Reflected and Standard - Reversed Royalty; Standard - Turn Zero, gated since H51, has one oracle behind cwmtt/tesseractMageOChicken and is not - not yet run in CI with the engine (step 2). Since CHECKPOINT 8 (H47, built 2026-10-17) a ruleset is gated only when two oracles stand behind each of its records, and the commit tier holds the engine to its baseline (spec issues 131-133). The release tier, the one that can enable the proof channel, is not yet run with it: its oracle layer fails on H48's 17 notes until the re-recording. The proof channel stays disabled (H23, H41). Kairos (H52, CHECKPOINT 9) is pinned and its query surface confirmed (`lane/gate`, 2026-10-23); its two sources join the nightly and release tiers once the quiet-machine block records their golden files. CHECKPOINT 10: Kairos is in ftxi's lineage - the two-oracle bar counts lineages (H47) - and the sign-off run leaves it out |
 | H24, H26, H28 | built, tested | The generator and the 5dpgn/5DFEN parser are in-house (`engine/`), written from `docs/rules/README.md` and the notation spec's text (551 engine tests on `lane/gate` after H51's review); boundary clean. H28's one exception - the export-form record converted by the harness (CHECKPOINT 3) - is now in the register. Where the specification says when to write a token and not how to read one that disagrees, the reader reads leniently: the capture mark since H51 (2026-10-17, rulebook R11; `PgnOptions::capture_marks`), as the annotations (T15) and turn numbers before it - the move read as its squares define it, the mismatch a warning (`PgnReplay::warnings()`). H26 since CHECKPOINT 9: Kairos is the fifth submodule (pinned 2026-10-23, `lane/gate`), harness only; its NOTICE says parts of it derive from ftxi - ruled at CHECKPOINT 10: one lineage with ftxi; the reuse rule binds between oracles too, and every oracle's NOTICE, credits and pinned code are read at each pin bump |
 | H27 | built, tested | The oracle harness, committed 2026-10-01. Tiered CI as H47 reads it since CHECKPOINT 8 (built 2026-10-17): ftxi per commit as a smoke test that gates nothing - two oracles are needed to gate a ruleset - and fails an engine that declines a record it read on the last green run, or reads none; cwmtt and Chess in 5D nightly and before releases; a run restricted to chosen sources or records is never a tier result. Upstream reports (CHECKPOINT 8: defects as bug reports, disagreements with a documented rule as questions citing the source; drafted by the agent, filed by the owner), in `docs/checkpoints/upstream/`: the two defects of R7 as bug reports (2026-10-01), ftxi's reading of the check test as a question (2026-10-17, spec issue 126: five representative positions, one per rule question RQ1-RQ4; the 147 R1 entries' `upstream` names it), and three notation-reader gaps (2026-11-08, issue 579: ftxi's signed timeline labels, KD-0054, and 5d-chess-js's signed `(>Lx)` token as bug reports; ftxi's refusal of an empty last sub-turn as a question) - none filed yet. CHECKPOINT 9: Kairos pinned under `oracles/third_party/kairos` (lock tier nightly) - wired as sources `kairos` and `kairos:naive`, enabled in no tier until its golden files are recorded (issue 530) |
@@ -2193,9 +2212,10 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | C17, C19, C20 | built, tested | Network N3: the block-causal scope (`attn_scope = "block_causal"`), the live set fully bidirectional, supersession recomputed once under the state-defined mask - both of C20's readings built (`supersession_scope`; 6c decides, now in the register); the causal past is the ruled ancestry (`causal_past = "lineage"`, C23) |
 | C2 | built (for §15.2/§15.3) | Network N3's cached path; the decision itself stays deferred (6c, §7.7), now re-weighed against the pilot run's game sizes (M18). The path absorbs B15, B16, A6 and A7 as they land - A7 is in (`lane/net` N-A7: frozen K/V keyed by the acting player, the root's history built from both sides, a refresh's dense pass run from each - issue 303, tested with §15.2's A7 row through the cached path); B15 is in (`lane/net`: a frozen board's bias rows built per layer, cached = one full pass with it on), and B16 (`lane/net`: the live pass adds the status biases from the node's present; frozen rows and entries never carry them; none at a refreshed epoch's anchor, and below it on every frozen key, history boards included - both halves tested against an oracle of their own); B17 runs through it too (a frozen board's rows get the Shaw term from its own queries; tested through root and node refreshes). Cached = dense on every variant the engine sets up (MT-04, `lane/gate`, `tests/engine/test_cached_variants.py`): random play on all 16, both C20 readings, the v1 and step-1 configurations (A8 on), the C step API in tree and graph mode with and without the root refresh (transpositions bitwise), the N2 switches with every typed relation, F1 in BF16 - green, gaps in `docs/MEASUREMENTS.md` |
 | C10 | not built (rule) | Lazy K/V for boards entering E: deferred with the window (M16) |
-| C3, C3a (rung 1) | built, tested | Root refresh and the travel-triggered, visit-gated rung-1 fork (copy-on-write epochs), behind flags. C3's conditioning-offset training hook is parked with the deferred cached configuration ("Parked", below) |
+| C3, C3a (rung 1) | built, tested | Root refresh and the travel-triggered, visit-gated rung-1 fork (copy-on-write epochs), behind flags. C3's conditioning-offset training hook is parked with the deferred cached configuration ("Parked", below). Rung 1 runs in the search-tree fixture only: the engine's search has no node refresh, and its evaluator refuses the flag (issue 271, 2026-11-09); under C27 it is checked only at evaluated nodes, reading the segment since the nearest one (issue 268). C3's root refresh is anchored at the root leaf's input (issue 259) |
 | C3a (rungs 2-3), C18, C22 | not built (rule) | Held open (M5 for rungs 2-3) |
-| C26, C27 | not built (planned, low priority) | CHECKPOINT 9 - Committed if C2 adopts the cache: the phase form (C26: dense below N\*, cached with the root refresh at or above it, the search root's board count choosing for the whole search; N\* default 50) and refresh inside a turn (C27: the ladder's triggers only at nodes the network evaluates; a board our submoves supersede mid-turn recomputed when the network next runs, once per board and epoch), each with its new section 15.2 row - in the cached path behind its flag, after each lane's current order (`lane/net`, after A5). The conditioning-offset hook stays parked with C3; when built, it applies C26's rule to the conditioning root |
+| C26 | built behind its flag (the cached path), tested; not adopted | CHECKPOINT 9 - Committed if C2 adopts the cache: the phase form, built in the cached path behind `CacheConfig.phase_form` (off; `lane/net`, 2026-11-08): `CacheConfig.mode` is the one predicate (dense when the root's board count is under N\* = `phase_boards`, placeholder 50 = `token_counts.N_STAR`); `root_epoch` applies it to the search root - under N\* the evaluator's one dense epoch (no anchor, history or store; its engine number hash("dense"), shared below N\*, never 0), at or above it the root refresh, which the phase form requires (issue 260); `CachedNetworkEvaluator` hands a dense epoch's batches to the dense evaluator itself, so a search rooted under N\* is the dense search bit for bit (issue 262). Section 15.2's row green through the C step API (`tests/engine/test_phase_form.py`, `tests/net/test_phase_form.py`): every split, the cache on and off, a per-node-switch mutant killed, the boundary, one evaluator and one shared cache across the crossing, a carried search and whole games crossing it. Issue 259's anchor fix first. The conditioning-offset hook stays parked with C3; when built, it applies `CacheConfig.mode` to the conditioning root. Issues 259-266, 272-275; edits 380-382 |
+| C27 | built behind the fixture's tree form (the cached path), tested; not adopted | CHECKPOINT 9 - Committed if C2 adopts the cache: refresh inside a turn, built in the search-tree fixture (`net/tree.py`, `lane/net`, 2026-11-09): `SearchTree(evaluates=...)` marks the tree form's inner submove nodes (`Node.inner`) - never evaluated or refreshed, no trigger checked at them; rung 1 at an evaluated node reads its whole segment since the nearest evaluated node (`segment_branched`, per path - issue 268); C24's travel counts inner travel and its effort is the nearest evaluated ancestor's (issue 269). The deferred recompute is the cached path's own: a board an inner move supersedes is computed when the network next runs, once per board, perspective and epoch (issue 267) - exact by construction (content-addressed entries under the state-defined mask), and section 15.2's row green against recompute at supersession on the fixture (every geometry, both C20 readings, the lineage and two-parent readings, causal, root and node epochs) and on real actions of every engine variant, and through the step API's tree form (every leaf its reference; bitwise against the every-gate search's leaves). The engine's search has no ladder (issue 271), so the triggers run only in the fixture. Issues 267-271; edits 383-384 |
 | C5, C7 | not built (rule) | The window: killed, provisionally (M16, CHECKPOINT 5); re-checked by the pilot self-play run (M18) |
 | C6 | step 1 done | The \|E\| curve measured (M7); the head-to-head is Ablation 1, halted with the window until the pilot run (M18) |
 | C8 | honoured | C24's add-only rule (and rung 1's) - refreshes are only ever added |
@@ -2240,7 +2260,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | G12 | built, tested (2026-11-22); the gain GPU-deferred | Self-play as a pool of concurrent games behind one evaluator (section 7.8): `python/t5d/engine/pool.py` (the padded-token planner, `SharedEvaluator` with one service thread, `GamePool` with game threads; shutdown and failures reach every caller) and `python/t5d/train/selfplay_pool.py` (`python -m t5d.train.selfplay_pool`; records plus a `pool.json` of the batching conditions). Placeholders: 65,536 padded tokens, 64 positions, 25% padding, 32 games (command line: 8 games, 2 leaves). Records unchanged (version 2): a pooled game writes the alone game's record byte for byte with an exact evaluator or merging off (tested); under merged forwards of a network, to tolerance (issue 723). Refused: the cached and phase-form evaluators. Not built: match play's batch cap and prefetch; worker processes; the gain (Gate 1 step 2, M19). Issues 723, 724, 728 |
 | I1 | not started (rule) | Self-play training: no training runs in the untrained build (the brief); the pilot run (M18) comes after §15.5 |
 | I2 | built, tested (engine round 2c, E10; targets M21 commit 2) | Targets from the pruned visits - the search-value targets too (CHECKPOINT 7). The engine side (engine ABI round 2c, issue 153): per root child its visits, priors with and without the noise, q, value variance, E3's factor, `boost`, `steered_visits`, `forced_visits`, and the root's effective cPUCT; search-side forced playouts not built. **The steering counts are real since E10 (2026-10-23)**: `boost` = the noise-free prior less the unsteered one (`prior_unsteered`, appended), `steered_visits` the root visits PUCT would have given another child with the unsteered priors (`steered_rule`, issue 179); a self-play game through Python's generator records non-zero steered visits and the targets exclude them (`python/tests/train/test_steering.py`). **The E10 review measured the counterfactual definition failing** - with exclusion the boosted moves' share of the target fell to 0.032 where the unsteered search gave 0.499 (issue 179(a)): the definition is unvalidated, **self-play runs without the asset map** until one is (issue 450, put to the user), and the targets' replica now unsteers the noised prior by (1 - ε) x the boost (179(c)). The targets (`python/t5d/train/targets.py`): KataGo's forced-playout pruning at target construction against a replica of the root's PUCT, a one-visit remainder dropped; steered visits excluded (`policy_mode="exclusion"`, the placeholder) or kept at a weight (`"provenance"`) - open, 6e; the replica's prior without the boost; the policy, soft-policy, categorical, short-term and deblundering values and the q_ratio blend's root WDL all from the pruned visits. Placeholders: issue 235 |
-| I3 | built in part | Match play as I3 configures it: root noise off, the final rule (LCB), the tree carried (`t5d-play --match`, E6a; netplay's `mode="match"`, N5). The mature regime is training-time. In the untrained build: the curriculum hooks as interfaces only (H44, step 2) and I18's resignation rule (built: M21 commit 3, `lane/net` - off until the value head is calibrated); MLH steering and early adjudication parked (issue 300; "Parked", below) |
+| I3 | built in part | Match play as I3 configures it: root noise off, the final rule (LCB), the tree carried (`t5d-play --match`, E6a; netplay's `mode="match"`, N5). The mature regime is training-time. In the untrained build: the curriculum hooks as interfaces only (H44, step 2) and I18's resignation rule (built: M21 commit 3, `lane/net` - off until the value head is calibrated); MLH steering and early adjudication parked (issue 300; "Parked", below); the unscored ending of H22 built (issue 413) |
 | I4 | principle | Confidence-family mechanisms never scale down the confidence-independent layer - followed: C24 is add-only; E8 (not started) to follow |
 | I5 | built, tested (M21 commit 3, `lane/net`) | PCR in the training generator (`train/selfplay.py`, `PCRConfig`): each decision full with probability 0.25 (KataGo's), drawn from the game's seed and the decision's index, else cheap at the full cap / 8 without root noise (placeholders, issue 236); only full searches emit policy, soft-policy, categorical and effort targets (`train/targets.py`). Difficulty-biasing only as a mixture: `difficulty_mix` < 1 enforced, > 0 not built (the root's effort output is not delivered - issue 236). `engine/netplay.py` and `t5d-play` unchanged (no PCR: they write no training records) |
 | I6 | built behind its arm, tested (M21 commit 3, `lane/net`) | A prototype: its epistemic triggers as 6u's sampler arms (`train/sampler.py`): the persistent bucket (`BucketTracker`: a (board-count range, phase) bucket's realised error above a threshold at each of the last checkpoints boosts its rows) and raw variance; its realised-error arm superseded by I12 (not an arm). Constants placeholders (issue 236) |
@@ -2277,7 +2297,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | M24 | not started (rule) | Ablations on a shared dataset - after the pilot run; what the untrained build owes it is I15's record completeness `train/target_arms.py` (2026-11-22) holds the target arms' configurations, the record-level comparison and the held-out yardstick that ranking will be read by (I21) |
 | M1-M6, M10 | applied | The plan's process rows: the build follows them (this log) |
 | M17 | measured | 6b″ on a quiet machine (f3d36c9): Guard 65.1 / 15.8 / 5.2 / 0.0% - adopted in no range; Hunt 69.0 / 63.6 / 35.0 / 0.0% (200+: one truth mate, too few to read) - adopted under 100 boards; every refutation and mate confirmed by E4. Measured with the stores' old lock (H17's row): the verdicts' soundness stands - every refutation and mate counted was confirmed by E4 alone, and no verdict logic has changed since (the truth's sources have, three times: README, "The truth's sources since M17") - but its 5-thread rates may understate Guard and Hunt (indicatively 2.7-2.9× and 1.45-1.7× the nodes per second with the fixed lock). Whether 6b″ is re-run on a quiet machine is the main loop's call (issue 147) |
-| C24 | built, tested | The refresh ladder's complexity trigger behind a flag (`CacheConfig.complexity_refresh`, off; prototype, gated like rung 1 on 6c's existence test); add-only over rung 1 for every signal; every number a placeholder (spec issues 75-79) |
+| C24 | built, tested | The refresh ladder's complexity trigger behind a flag (`CacheConfig.complexity_refresh`, off; prototype, gated like rung 1 on 6c's existence test); add-only over rung 1 for every signal; every number a placeholder (spec issues 75-79). The search-tree fixture's only: the engine path refuses the flag (issue 271); under C27 checked only at evaluated nodes, its effort the nearest evaluated ancestor's (issue 269) |
 | C25 | not built (rule) | Held open |
 | M7 | measured; killed, provisionally (M16, CHECKPOINT 5) | On real games (t0database, 716 games, max 186 boards): on at k = 8 from 50 to 186 boards, off under 50, and the kill clause kills it under the human-game weighting (on-phases 18-38% of compute); confirmed by the user; above 186 provisional (MEASUREMENTS) |
 | M8 | measured - STOP | 6b re-run (M12): root scan 76.7% / 31.4% / 24.7% / 2.4% by range (< 50 / 50-99 / 100-199 / 200+); rung 1 and quiet-leaf reach fail everywhere; stand-pat valid |
@@ -2376,8 +2396,8 @@ The protocol (section 15.2) asks for:
 | 3 | Lazy K/V = eager recompute | C10 | deferred with the window | - |
 | 4 | Supersession recompute = from scratch | C20 | green | - |
 | 5 | A refresh fork leaves sibling subtrees unchanged | C3a | green, short | No refresh fork on an engine variant, a 3x3, 4x4, 6x6 or 7x7 board, or a T0 board; a root-refreshed parent on one seed only |
-| 6 | Phase form: under N\* node for node dense; at or above it every node cached | C26 | waiting (low priority, CHECKPOINT 9) | Build C26 in the cached path behind its flag, with the row (`lane/net`, after A5) |
-| 7 | Tree form, cached: supersession recompute at the next evaluated node = recompute at supersession | C27 | waiting (low priority) | The same, with the tree form's cached work |
+| 6 | Phase form: under N\* node for node dense; at or above it every node cached | C26 | green on `lane/net` (2026-11-08; C26 behind its flag) | - (on main once merged) |
+| 7 | Tree form, cached: supersession recompute at the next evaluated node = recompute at supersession | C27 | green on `lane/net` (2026-11-09; C27 in the fixture's tree form) | - (on main once merged) |
 | 8 | Same state + epoch -> same evaluation; MCGS transposition hits identical | C19-C21 | green | - |
 | 9 | Incremental Zobrist = from scratch, duplicated boards | H18 | green (short of every variant before the audit's test) | - |
 | 10 | ~~NNUE accumulator = recompute~~ | F4 | void: the NNUE is retired (CHECKPOINT 9) | - |
@@ -2392,12 +2412,14 @@ The protocol (section 15.2) asks for:
 | 19 | Turn-state counts = a brute-force recount | A6 | green (short of every variant before the audit's test) | - |
 
 **Count.** 19 rows:
-- green: 14 rows (1, 4, 5, 8, 9 and 11-19). Of these, five are short of the protocol as named:
+- green: 14 rows (1, 4, 5, 8, 9 and 11-19), and rows 6 and 7 on `lane/net` (2026-11-08/09). Of
+  these, five are short of the protocol as named:
   1, 5, 11, 15 and 16. That count holds once `lane/audit`'s tests (3364c95) are merged; on main
   today rows 9, 17 and 19 are short as well, giving 1, 5, 9, 11, 15, 16, 17 and 19.
 - deferred: 2 rows (2, 3).
 - void: 1 row (10).
-- waiting: 2 rows (6, 7). Both are low priority by the user's CHECKPOINT 9 brief, and both
+- waiting: 2 rows (6, 7) - both built on `lane/net` since. Both are low priority by the user's
+  CHECKPOINT 9 brief, and both
   committed only if C2 adopts the cache (issue 536).
 
 **Row by row:**
@@ -2462,14 +2484,45 @@ The protocol (section 15.2) asks for:
    - **Still short** (corrected 2026-11-02):
      - no refresh-fork test runs on an engine variant. The geometries are 8x8, plus a 5x5
        small board and an even start - no 3x3, 4x4, 6x6 or 7x7 board, and no T0 board;
-     - MT-04's step-API test uses the root refresh only, and its 16 playouts never reach the
-       node refresh's visit gate;
+     - MT-04's step-API test uses the root refresh only - the engine's search has no node refresh
+       at all (corrected 2026-11-09: "its 16 playouts never reach the node refresh's visit gate"
+       said otherwise; issue 271 - the step API's evaluator now refuses the flags);
      - the audit's test root-refreshes the parent epoch for seed 1 only
        (`root_refresh = bool(seed % 2)`).
-6. **Phase form (C26)** and 7. **refresh inside a turn (C27)**: not built anywhere (main and
-   every lane, 2026-11-01). Plan (CHECKPOINT 9 brief): low priority, in the cached path behind
-   its flag, `lane/net` after A5's review fixes; the engine side if the tree form needs it.
-   C27 is class R in the register; C26 is class C.
+6. **Phase form (C26).** Built on `lane/net` (2026-11-08) in the cached path behind
+   `CacheConfig.phase_form`, with the row's tests (the 2026-11-01 note "not built anywhere" is
+   superseded):
+   - through the C step API, `python/tests/engine/test_phase_form.py`: rooted under N\* the search is
+     the dense search node for node - H15's digest, its counts and every evaluation bit for bit - on
+     three variants x two seeds x the ply split (tree and graph), the tree form (natural gates, none)
+     and the flat form, the evaluation cache on and off, batched and synchronous, and on all 16
+     variants under the ply split and the tree form; a per-node-switch mutant builds another search
+     on every arm; rooted at or above N\* every node is the cached path's (the two-level reference,
+     the root leaf the dense pass); the boundary at the root's board count (a mid-action root, Turn
+     Zero's T0 board counted), one evaluator and one shared evaluation cache across the crossing
+     (C14), a carried search crossing it (C12), whole games crossing it, replayed by the gate;
+   - without the engine, `python/tests/net/test_phase_form.py`: the predicate at its boundary, the
+     dense epoch, the fixture tree under a dense root (every node the dense pass bit for bit,
+     nodes at N\* or above included; nothing refreshes) and at N\* (the cached path's, rung 1 as
+     before).
+   C26 is class C in the register. Issues 259-266, 272-275.
+7. **Refresh inside a turn (C27).** Built on `lane/net` (2026-11-09), with the row's tests:
+   - on the search-tree fixture, `python/tests/net/test_turn_refresh.py`: the deferred arm (nothing at
+     an inner node) against recompute at supersession (every frozen board of an inner node's position
+     computed there, both colours' sides) - every evaluated node bit for bit alike and the reference,
+     the deferred entries the eager ones tensor for tensor, the deferral non-vacuous in every case;
+     every geometry x seeds 0-1 (2 slow) x both C20 readings x the lineage and two-parent readings x
+     causal, root-refresh and node-refresh epochs (supersession inside a refreshed subtree), three
+     markings of the inner nodes, the present moving and a timeline woken inside inner segments;
+     evaluations alone under the creation reading and current frozen features; once per board and
+     epoch (T7); the triggers only at evaluated nodes;
+   - on real engine positions, `python/tests/engine/test_cached_tree_form.py`: the same two arms on
+     every engine variant's random play (turn starts evaluated, by marking also the present gate's
+     state or half the mid-action states), and through the step API's tree form (natural gates and
+     none; causal, root refresh and the phase form's cached half) - every leaf its reference, and the
+     leaves the every-gate search also meets bit for bit alike; the flat form's leaves turn starts.
+   The engine's search has no refresh ladder (issue 271): the triggers are the fixture's. C27 is
+   class R in the register. Issues 267-271.
 8. **Evaluation purity (C19-C21).**
    - Python, `test_cache.py`: `test_same_state_and_epoch_same_evaluation` (causal and
      root-refresh), `test_different_epochs_evaluate_differently`,
@@ -5310,6 +5363,221 @@ superseded or made moot says so; nothing is deleted.
     low for an A5 network. Built: nothing (C26 is not built here; A5 refuses the cached path, issue
     252). For the user: N\* is read under the tokenisation adopted, so 6c's per-range reading and
     the pilot run's N\* wait on A5's verdict or are read for both arms. Edit 199.
+259. **C3's root refresh was anchored on the pseudo-legal expansion; the search's leaves are the
+    legal one** (§7.9; register C3, D1, I15). *The C26/C27 design panel (2026-11-08).*
+    `start_epoch` built the position it hands `start` - the anchor of the root refresh - with
+    `Game.position`'s defaults, the pseudo-legal moves, while the search expands every leaf, the
+    root included, with `legal_moves_only` under its legality budget (`mcts.cpp`,
+    `leaf_expansion`: the one call site of the legal-moves filter). The moves decide the move
+    graph and the typed relations, which the refresh's dense pass reads (B9's move-graph heads,
+    B11); so at a root whose pseudo-legal and legal moves differ, the epoch's history was
+    conditioned on another input than the root leaf's, and the root leaf's cached evaluation -
+    "at the root the two-level mask reduces to full dense attention" (§7.9) - missed the dense
+    pass over it: by 2.4e-5 to 3.6e-4 on its logits at two such roots (FP32, 2 layers), against
+    under 1e-6 anchored right (MEASUREMENTS, "The cached path at engine roots"). How often: of the
+    first live turn starts with 8 boards or more of random play (`_walk`, seeds 5-24), 1 in 20
+    on Two Timelines and 9 in 20 on Timeline Battleground (the panel's judge: 6 of 20 on its
+    own sample). **Fixed**: the anchor is the root leaf's input - the root expanded with the
+    search's expansion options and legality policy (`legal_moves_only`, `legality_checks`,
+    `legality_nodes`). Only the root refresh's values change: the causal epoch's frozen entries
+    read no move or edge, and `state_digest` holds neither, so epoch keys, the engine's epoch
+    numbers and `start`'s shortcut are unchanged. MT-04's step-API test anchored its reference at
+    `start`'s argument, so it held either way; the new tests pin the anchor to the first leaf's
+    moves and edges under every split and legality setting, and the root leaf to the dense pass
+    within 1e-5 (in the test, the stale anchor misses by more). C26 rests on it: the first cached
+    search's root evaluation is the dense pass (§7.10's crossing). No spec edit: the spec does not
+    name the anchor's expansion.
+260. **C26 presumes C3** (§7.9, §7.10; register C3, C26). *C26 built behind its flag
+    (2026-11-08).* §7.10 runs a root at or above N\* "cached, with the root refresh", and C3 is
+    provisional (6c's refresh arm). Built: `CacheConfig.phase_form` is refused without
+    `root_refresh` - the phase form never runs the causal epoch at or above N\*. If 6c drops C3,
+    C26 must be restated: its cached half would be the causal epoch, which under C20's first
+    reading carries across searches, so §7.10's "the first cached search starts with its root
+    refresh like any other" would no longer describe the crossing. For the user only if 6c drops
+    C3. Edit 381.
+261. **The dense epoch: one for every search below N\*, numbered by its key** (§7.10, §8.5, §8.7;
+    register C14, C26). "The mode belongs to the refresh epoch" (§7.10), and below N\* nothing is
+    refreshed. Built: one dense epoch per evaluator, `Epoch("dense", "dense")`, independent of the
+    root - a dense evaluation is a function of the state alone - so every search below N\* carries
+    it, and the engine's evaluation cache, keyed by (state, moves made, epoch), serves dense
+    evaluations across self-play's fresh searches (C14) as the dense configuration's does. Its
+    engine number is `engine_epoch`'s hash of its key: never 0 - the epoch of a search whose
+    evaluator has no `start`, so a cache shared with such a search never mixes the two - never a
+    cached epoch's (their keys differ), and the same for every evaluator. The alternative, a dense
+    epoch per root, would lose C14's reuse below N\*, where 88% of the human games' moves are.
+    Edit 381. *Corrected 2026-11-23 (C26/C27's review, finding L9): "a function of the state alone"
+    holds up to the last bits, which depend on the batch the state was evaluated in (issue 262) - so
+    the shared evaluation cache serves a dense evaluation whose last bits came from another search's
+    batch. The cached path's docstring now says so; edit 381 was applied upstream (the spec review of
+    2026-11-15) with the unqualified clause, and edit 385 proposes the qualification.*
+262. **"The dense search" read as the same network's dense pass, batched alike** (§15.2's C26 row;
+    register C26, C19-C21). The row: "a search rooted under N\* equals the dense search node for
+    node". The dense pass's last bits are no function of the position alone: grad mode moves them,
+    and so does the batch a position is padded into (measured: up to 1.1e-6 on the logits between
+    a position alone and in a batch of four, 1.4e-6 between grad and no-grad, FP32, 2 layers; the
+    same batch twice is bit for bit - MEASUREMENTS, "The phase form"). So node for node holds bit
+    for bit only if the dense mode is the dense evaluator itself, batch for batch. Built so:
+    `CachedNetworkEvaluator.dense`, a `NetworkEvaluator(scope="dense")` with the evaluator's prior
+    and `max_batch`, takes every batch of a search rooted under N\*; the row's test compares H15's
+    digests and every evaluation bitwise, with the dense search's evaluator built alike.
+    Consequence: purity below N\* is the dense path's - exact through the engine's evaluation
+    cache and MCGS transpositions (a hit returns the stored evaluation), but a state evaluated
+    twice with the cache off may differ in its last bits with the batch it shares; at or above N\*
+    the cached path's one-position purity (C19) holds. Edit 380 words the row so.
+263. **N\* lives in the evaluator's configuration until offset training exists** (§7.10; register
+    C26, M18; issue 258). Built: `CacheConfig.phase_boards`, placeholder 50, equal to
+    `token_counts.N_STAR` (a test pins the two). §7.10 chooses the training mask by the
+    conditioning root's board count, so N\* is a training-time constant: a network trained with one
+    N\* and deployed with another meets a regime it never trained (§7.7's rule). Until the
+    conditioning-offset hook exists nothing trains either way, so N\* is the evaluator's; once it
+    does, N\* is pinned with the network (a `NetConfig` field or the trainer's record) and the
+    evaluator refuses a mismatch. Couples with issue 258 (A5 moves N\*). Edit 382.
+264. **A carried tree across the crossing keeps dense-made statistics** (§7.10, §8.7; register C12,
+    C26). §7.10 forbids transpositions that "mix a dense and a cached evaluation of one state" and
+    says carried nodes keep their statistics "with no K/V to invalidate". In match play a search
+    carried across N\* (C12) keeps the visits, values and priors dense evaluations made, while every
+    new leaf is evaluated cached; a state the carried tree holds is not evaluated again, and in the
+    tree search (not MCGS) a new node for a state another carried node holds is evaluated cached.
+    Read as §8.7's carry - statistics "mildly stale" that "self-correct under fresh backups" - not
+    as C26's forbidden mix: no evaluation of one mode is ever served for the other (the engine
+    cache's epoch keeps them apart; tested). For the user to confirm. *Corrected 2026-11-23 (C26/C27's
+    review, finding M1): that last claim holds for the engine's evaluation cache only, and the tree
+    search only.* **Under graph search (MCGS) a cached path transposes into a node evaluated dense.**
+    The re-root rebuilds the graph's table from the carried nodes, keyed by state and moves made in
+    the action, not by epoch (`engine/src/mcts.cpp`: `reroot`, `identity`, `find_node`), so after the
+    crossing a node the cached search makes can reach, by a move, a state a carried node holds: the
+    new edge links to that node, which is not evaluated again, and the cached search reads its dense
+    evaluation - its priors, and its value through its statistics. Probed through the C step API
+    (ply split, `graph=1`, N\* the root's boards + 1, 256 playouts before the crossing and 128 after,
+    two seeds on each of Timeline Battleground, Very Small - Open and Two Timelines): in 3 of the 6
+    carried searches a node evaluated in the root refresh's epoch, never before the crossing, has a
+    child by a move that is a carried node, evaluated before the crossing and never after - nine such
+    links in all (six at one root) - whose WDL is the dense pass's to 1e-6 and 1.3e-3 to 5.0e-3 from
+    the cached path's evaluation of the same state. Pinned by R6f's new `ply-graph` arm
+    (`test_a_carried_search_crossing_n_star`). That is a dense and a cached evaluation of one state
+    mixed through a transposition, which §7.10 - "every node in a search is evaluated the same way, so
+    transpositions (§8.5) never mix a dense and a cached evaluation of one state" - forbids, read
+    strictly: **a spec conflict, for the user**. The tree search has no such route (a carried node is
+    reached only along the carried tree's own edges); the tree form under graph search (decision 10,
+    from main 4e9267e) has it by the same code for its evaluated nodes, which are graph nodes (not
+    probed). The two readings: (a) §8.7's carry covers it - a carried node's statistics, its dense
+    evaluation among them, are reused like any carried statistics, and the graph's merge with them;
+    nothing to build, and the arm stands as written; (b) strict - after the crossing no path reaches
+    a node of the other mode: at a re-root that changes the search's mode (or at every epoch
+    change) the engine must drop the carried nodes' table entries, so a new path makes its own node,
+    evaluated cached, beside the carried one, as the tree search does - or re-evaluate the carried
+    nodes in the new epoch; an engine change in `reroot` and `set_epoch`, ABI-neutral, and the arm's
+    assertion turns round. Graph search and the phase form are both off by default, so nothing ships
+    either way meanwhile. No edit proposed until the user rules (the sentence (a) or (b) would add to
+    §7.10 is drafted here, not proposed: (a) "a search carried across N\* keeps its nodes, and under
+    graph search a line made after the crossing may merge into one (§8.7)"; (b) "at the crossing the
+    carried nodes leave the transposition table").
+265. **The root refresh runs once per search root - per decision - not once per game move** (§7.9,
+    §7.10; register C3). Pre-existing: §7.9's "once per actual game move" is built as once per
+    search, and under the ply split and the tree form an action is several decisions, each a search
+    with its own root and refresh (`start_epoch` before every search). So C26's crossing can fall
+    mid-action: a search rooted at a mid-action state with N\* boards or more is cached while the
+    action's first decision was dense - consistent with "the root decides, once per search". For
+    the user: is a refresh per decision intended - §7.9 would then read "once per search root" (an
+    edit drafted for if so, not proposed) - or should one refresh serve an action's decisions?
+266. **A5 under C26** (§7.10, §14.4; register A5, C26; issues 252, 258). The phase form's dense half
+    could run a piece-centric network (A5 is built for the dense scope), but the cached path
+    refuses A5 before anything else (issue 252), the phase form on or off, so A5 and C26 cannot run
+    together; MEASUREMENTS' A5-under-C26 figures (the cached node 2.11x at or above N\*) assume an
+    A5 cached network that issue 252 refuses. Unchanged; for the user with issue 252.
+267. **"Once per board and epoch" is per board with its past, its perspective and its epoch** (§7.3's
+    end, §7.9; register C20, C27; spec issue 303). *C27 built behind the fixture's tree form
+    (2026-11-09).* The cached path keys an entry by (epoch, digest), the digest covering the board,
+    the acting colour (A7: frozen boards are encoded from the acting side) and its causal past's
+    digests. So a board superseded inside a turn is computed once per perspective that reads it -
+    twice when the turn's next evaluated nodes act for both colours, as after the present moves -
+    and under `frozen_features="current"` once per status it is read under (the present's moves
+    change its input). Built so (it is the store's rule; nothing new was needed); tested (T7). Edit
+    383 words the rule so.
+268. **Rung 1 per path below an inner branching jump** (§7.9; register C3a, C27). C27: "A travel move
+    made at an inner node counts toward the next evaluated node". Built: rung 1 fires at an evaluated
+    node whose segment - the moves since its nearest evaluated ancestor, the move into it included -
+    holds a move that created a timeline (`tree.segment_branched`), so several evaluated nodes below
+    one inner branching jump (siblings, or a line's next evaluated nodes on different paths) each
+    refresh at their own V-th visit: one unbudgeted rung-1 fork per path. The other reading - the
+    jump counts once, toward the first evaluated node only - would need rung 1 to remember which
+    jumps it has fired for, which makes it C24's travel signal. For the user if 6c's rung-1 sub-arm
+    runs under the tree form. Edit 384.
+269. **C24's effort signal under an inner parent** (§7.9 "Complexity as a trigger"; register C24,
+    C27; issue 78). C24's effort signal is "the parent's outputs"; under the tree form an inner
+    parent has none. Built: the nearest evaluated ancestor's predicted difficulty - the evaluation
+    whose logits the inner nodes inherited (`tree.evaluated_ancestor`). This departs from issue 78's
+    "an unevaluated parent contributes nothing" (which would give None under every inner parent);
+    add-only either way. For the user with issue 268. Edit 384. *Restated 2026-11-23 (C26/C27's
+    review, finding L4; the built reading kept, as the main loop decided):* the alternative is the
+    literal reading - C24's "the parent's outputs" (§7.9, register C24) read as the parent's own,
+    with issue 78's rule that an unevaluated parent contributes nothing: under the tree form a node
+    below an inner parent then has no effort signal, and C24 fires there on structure and travel
+    alone. Either reading is one line in `SearchTree.complexity_signals`. The spec as the review of
+    2026-11-15 edited it carries edit 384, so §7.9 now names the built reading ("the nearest
+    evaluated ancestor's"); the literal one would withdraw that sentence. The built one reaches no
+    search before the user rules: C24 is a prototype, its flag off, run on the fixture only (the
+    engine path refuses it, issue 271). The user's question.
+270. **C27 does not name the flat form** (§7.9, §8.2; register C27, D2). Under the flat form every
+    node is a turn start and every node is evaluated, and a turn's travel lies on the edge into the
+    child, so rung 1 and C24 read it there, as under the ply split. Nothing to build (tested: T10,
+    every flat leaf a turn start); edit 384 says so.
+271. **The engine's search has no refresh ladder** (§7.9; register C3a, C24, C27; issues 268, 301).
+    The engine opens one epoch per search (`set_epoch`, before the first gather) and never refreshes
+    a node, and `CachedNetworkEvaluator` read neither `CacheConfig.node_refresh` nor
+    `complexity_refresh` - so a cached evaluator configured for either was, through the step API,
+    silently the root-refresh-only path. Now refused there (`NotImplementedError`, 2026-11-09); the
+    ladder (rung 1, C24, and C27's triggers at evaluated nodes) runs in the search-tree fixture
+    (`net/tree.py`) only. No caller set the flags. If 6c's rung-1 sub-arm must run through the real
+    search, the engine needs (the user's call, after 6c): `Node::epoch` and `Node::refreshed`, and an
+    epoch per evaluation request; the ladder's parameters in `SearchParams` (in front of `expand`,
+    which stays last); the triggers in `select_once` at nodes that have an evaluation and are not
+    inherited; a refresh leaf - a new `t5d_leaf` field in front of `expansion`, which changes the
+    layout table, `CLeaf` and `_check_layouts`; C24's effort carried in `t5d_evaluations`; the leaves'
+    epochs passed to the evaluator; node epochs in H15's digest; and node refreshes refused under
+    graph search, as issue 301 refuses the tree form. Not built (an ABI change beyond this lane's
+    brief).
+272. **Dead epochs' entries in the engine's evaluation cache** (§8.7; register C14, C26). When a game
+    crosses N\* - and at every root refresh - the previous epoch's entries are never served again,
+    but they are purged only by board count (`EvalCache::purge_fewer_boards`, at a search's start
+    and re-root) and a full cache drops new entries (`EvalCache::insert`): after the crossing, dense
+    entries with as many boards as the root or more hold capacity until the board count passes
+    them. Bounded by the cache's limits, harmless to correctness. An option, not taken: purge the
+    other epochs' entries on `set_epoch` (an engine change, ABI-neutral).
+273. **The KVStore never drops an epoch** (§7.9: epochs "die with §8.7's garbage collection";
+    register C3, C3a). `KVStore.drop_epoch` exists and nothing calls it, so a cached game's store
+    grows by each search's root refresh (both perspectives' history) and its supersession entries.
+    Pre-existing (C3's), noted because C26 makes the cached half's memory per game the store's. Not
+    built: dropping the previous search's epochs at `start`. *Resolved 2026-11-23 (C26/C27's review,
+    finding M2): the review measured it - 10 searches through one evaluator (dense, cached, a new
+    game) left 7 dead epochs, 24.75 MiB beside 3.61 MiB live.* `CachedNetworkEvaluator.start`, when
+    it opens a new epoch, has the cached evaluator drop the root refresh the new search replaces
+    (`CachedEvaluator.release`): its history and every entry computed under it. Only a root epoch
+    that evaluator made (it records their keys), so in a store shared with another evaluator the
+    other's epochs stay (issue 274); the causal epoch, which later searches share, the dense epoch,
+    which stores nothing, and node refreshes are kept. After every start the store holds the live
+    epoch's entries and the causal epoch's (`test_the_store_keeps_only_the_live_search`,
+    `test_release_drops_only_a_root_refresh_it_made`). Still kept: a root-dependent causal epoch
+    (`causal@<anchor>`: C20's `past_and_epoch_history` reading without the root refresh), keyed by
+    its anchor alone, which a later search at the same root reuses - one per root a game visits, as
+    before; no caller runs that configuration.
+274. **Epoch keys are unique per evaluator, not per store; `state_digest` omits the moves** (§7.9;
+    register C3, C19). Pre-existing: a refresh epoch's key is `kind:<counter>:<anchor>` with the
+    evaluator's counter, so two evaluators sharing one store at one root would write under one key
+    (`put` refuses the second); and since `state_digest` holds no moves or edges, one evaluator used
+    under two expansion configurations at one root reuses the first epoch (`start`'s shortcut),
+    conditioned on the first input. Neither arises in the build's callers; not changed. *The second
+    half resolved 2026-11-23 (C26/C27's review, finding L15):* the shortcut compares the root's
+    whole network input (`cache.input_digest`: every field of the position, moves and edges
+    included), so one evaluator started at one root under two legality policies opens a refresh for
+    each, and the first goes from the store (issue 273; `test_start_reopens_at_a_root_whose_moves_differ`).
+    The first half stands: keys are unique per evaluator, and `release` drops only the epochs its own
+    evaluator made.
+275. **A search driven without `start_epoch` keeps the evaluator's last epoch - now its mode too**
+    (register C26). `run_search` opens the epoch; a caller that drives `CStepDriver` and `serve`
+    itself must call `start_epoch` first, or the evaluator answers in whichever epoch it opened
+    last - since C26 possibly in the other mode. Pre-existing for the cached path; the tests assert
+    every leaf's epoch. No guard in `serve`, which does not know the search's root.
 
 <!-- A new list, so that the numbers from 140 render as written. -->
 
@@ -6141,6 +6409,9 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     and let the search's budgets carry the position; for the chosen move, the most visited
     child known legal (the memory ceiling's fallback, already built). Either changes training
     games, so it is a decision, not a fix.
+    *Ruled 2026-11-15 (review decision 13, register H22: a node budget, never a time limit; a turn
+    start it cannot settle ends the game unscored), ruled binding by the user 2026-11-23, and built
+    2026-11-24 in the C++ play loop, netplay and the training generator: issue 413.*
 409. **MT-01/02/03's mutation review: what it found, what changed, what the survivors do now**
     (§15.4, §11.1, §13.1 6f, §11.3; register H41, H19, H17, H43; issues 400-405; edits 300-302).
     The review (2026-11-01; 47 mutants and 3 combinations, on a copy) found no bug in the engine
@@ -6349,6 +6620,211 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     outcomes (a root stuck, or never listed again) and 18 invariant failures (the root's memory
     count stale); with the fix none (the same 557 faults, 476 of them leaving the root unlisted,
     each listed by the later playout; 18 s).
+413. **Decision 13's game loops, built: the terminal test within a node budget, and the unscored
+    ending** (register H22, I15, H37, I3; §11.0, §12.3, §12.8, §13, §16; review decision 13 of
+    2026-11-15, ruled binding by the user 2026-11-23; settles issue 408). Built on `lane/engine`
+    from the handed-over plan (d13), each step checked against main as it now is.
+    **The budget.** One node budget for the game loop's two exact questions - each turn start's
+    verdict (`detect_mate`) and the verification of a chosen move the expansion left unknown (tier
+    3's search nodes; tier 2's checks unlimited) - under the memory ceiling `mate_bytes`. C++:
+    `PlayParams::terminal_nodes` (`kTerminalNodes`), `t5d-play --terminal-nodes`. Python:
+    `PlayConfig.terminal_nodes` and `GeneratorConfig.terminal_nodes` (`netplay.TERMINAL_NODES`;
+    `python -m t5d.engine.netplay --terminal-nodes`), the generator's in every record's
+    `generator_config` (format version 2 kept). The C API: `t5d_search_verify_budgeted` (checks and
+    nodes; `T5D_NO_LIMIT` both is `t5d_search_verify`), bound as `Search.verify(index, checks=,
+    nodes=)` and in `_SIGNATURES` (a library without it is refused at load). 1 to UINT64_MAX
+    (exact); 0 refused.
+    **The value, a PLACEHOLDER**: 2,000,000 search nodes, the search's own `mate_nodes` default -
+    the budget each fresh search's root check already runs under, so the loop and its searches
+    cannot disagree; tests pin the three together (the plan's recommended answer).
+    **The unscored ending.** A verdict the budget does not reach ends the game "unknown"
+    (`GameEnd::Unknown`, `Unsettled::Verdict`). A chosen move left unknown gives way to the most
+    visited child known legal, as built, and with none the game ends "unknown" at the action's turn
+    start (`Unsettled::Choice`): the action under way is not recorded - in Python its decisions,
+    their positions and resignation events leave the I15 record, and the game handle is put back
+    from a copy taken at the turn start. Before the ruling that case threw ("the memory ceiling").
+    The question goes into `GameRecord::unsettled` / `GameResult.unsettled` and the 5dpgn
+    Termination: "unknown (the turn start's verdict stayed unknown within the game loop's budget,
+    H22: unscored; never a mate)" or "unknown (no move could be shown legal within the game loop's
+    budget, H22: unscored)". No new end kind: "unknown" was unscored end to end, and the target side
+    (issue 731, `TargetConfig.unscored_whole_blend` off) masks its outcome targets.
+    **Readings taken** (the plan's recommended answers; the documents leave them open): (a) one end
+    name, "unknown", the question beside it; (b) an unsettled choice drops the partial action - it
+    has no place in record format version 2; (c) the rules before the cap, as built: a capped turn
+    start the budget cannot settle is "unknown", not a drawn cap; (d) the memory ceiling counts with
+    the budget (its Unknown is the same unsettled question); (e) `max_seconds` stays a tool's safety
+    stop (`time_limit`), outside the ruling, whose "never a time limit" bounds the terminal test -
+    now bounded by nodes in every loop; (f) match play's reading ("the engine's own turn needs no
+    verdict") waits on E11's clock (`lane/search`): until then the C++ loop's and netplay's match
+    mode end "unknown" as self-play does.
+    **Where the plan was out of date or wrong.** Its part 9, the C++ loop, waited on lane/engine's
+    merge - now done, so it is built here. The rollback copies the game at the action's turn start
+    (`Game.copy()`) instead of the plan's `game_at` replay, which would have had to rebuild I22's
+    seeded starts. The target side and its tests were already on main (issue 731). G12's pool runs
+    `generate_game` per game, so it takes the budget unchanged. The plan's two-board royal-only
+    start lets one king jump cover both boards (the action ends after one move): the mid-action
+    tests use three timelines, where no single move lets White submit.
+    **Counted and measured.** The engine's own
+    `selfplay_games_end_by_checkmate_stalemate_or_the_cap` now ends one of its ten games unscored -
+    Very Small - Open, the flat form, seed 2: 18 actions, a turn start at 88 boards whose verdict
+    2,000,000 nodes do not settle (2.9 s of verdicts, the machine loaded); it passed before because
+    the exact verdict ran until it settled (the suite's slowest test). At 191 boards 2 million nodes
+    stop the verdict in 3.8 s (MEASUREMENTS, "Exact move legality's cost"). So the placeholder ends
+    some games well below the turn cap's 300 boards and near the generator's 80: for the pilot run,
+    the share of games ended unscored per board-count range, from which the budget is set (§13:
+    unscored endings fall where large-board data is thinnest). *For the user (the review of decision
+    13, X4):* keep the 2,000,000-node placeholder, or have the pilot run measure the games ended
+    unscored by board count and set the budget from that? One test game ended unscored at 88 boards
+    (MEASUREMENTS, "An unscored game at 88 boards").
+    **Tests.** Engine: `capi_search_verifies_a_chosen_move_within_a_budget_h22`;
+    `play_terminal_budget_is_the_searchs_own_and_refuses_none_h22`,
+    `play_a_turn_start_the_budget_cannot_settle_ends_the_game_unscored_h22` and
+    `play_a_choice_the_budget_cannot_settle_ends_the_game_unscored_h22` (test_legality_cost.cpp);
+    `play_exe_terminal_nodes_ends_an_unsettled_game_unscored_h22` and `--terminal-nodes 0` refused.
+    Changed: issue 406's deadline tests set the budget exact (they test the deadline, not the
+    budget); test_selfplay.cpp's `check_game` takes the ruled Unknown end (unscored, the verdict
+    unknown within the same budget, checked within it). Python:
+    `tests/engine/test_terminal_budget.py` (the binding, the default, the verdict unknown or exact
+    and deterministic, both unscored endings with the rollback, determinism under a budget) and
+    `tests/train/test_generator_budget.py` (the budget in the record, the unknown record's round
+    trip and targets, a record with no decision, the dropped partial action). Proposed edits 306
+    (§11.0), 307 (§13), 308 (§16).
+414. **The review of decision 13 (`lane/engine` 193b517; three passes: spec, correctness,
+    mutation)** (register H22, I15, I3; §11.0, §12.8, §13, §16; issue 413). No HIGH; no budget hit
+    ever gave a wrong answer (5,775 budgeted verdicts, each Unknown or exact). Fixed as the main
+    loop decided, one commit per group; the numbers are this round's (issues 414-449, edits
+    309-329).
+    **X2, with L6, L8, C-L1 and F5's seam** (the witness). An unsettled choice ended the game
+    unscored though the turn-start verdict had just found a legal action - its witness - within the
+    same budget (the spec pass's four real choice endings: bare kings on three timelines at 32
+    nodes, ply and tree; Focused - Just Kings at 64). Now, at a decision with no child known legal,
+    every loop plays the witness's next step while the action's moves are its prefix (its submission
+    once they are all of it; under the flat form the whole turn). The C++ loop has `detect_mate`'s
+    own witness; Python gets it through a new C function, `t5d_game_verdict` (E4's verdict at a
+    game's turn start within a node budget and a memory ceiling, with its witness, each move
+    recorded in the state it is made in; `T5D_VERDICT_*`, static_asserts against `Outcome`;
+    `_SIGNATURES`; `Game.verdict`), asked only when needed (`netplay.TurnWitness`, the probe's
+    budget and ceiling: deterministic, the verdict's own). Where the plan said "its first move is a
+    root child", progressive widening lists only the instantiated children: a step the root has not
+    instantiated is played as a child of its own - known legal, unvisited - the C++ loop re-rooting
+    a match search on its moves (`advance_moves`), netplay's match play dropping the carried search
+    (the C API re-roots on a child or a whole action only; the side's next decision makes a fresh
+    one), the generator recording it as a further child (unvisited, so no deblunder blend:
+    `_blunder_weight` skips an unvisited played child; `replay_positions` plays it by its candidate
+    index). An instantiated witness step is marked known legal. Its choice code is
+    "verified_fallback" (a move known legal played in the chosen one's place): no new code, format
+    version 2 kept. Counted: `GameRecord::witness_moves`, `GameResult.witness_moves`. Moves are
+    compared by coordinates and promotion, as the C API's records match them: the detector's witness
+    carries other values in fields the generator sets (`aux_square`, an unused promotion) - the
+    first build compared whole moves and matched none. C-L1: the choice's Termination note now says
+    "the chosen move was not shown legal within the game loop's budget and no other is known legal".
+    L6: an unsettled question's end follows the clock, at a verdict and a choice alike - `TimeLimit`
+    once the deadline has passed, `Unknown` before, whatever stopped it (before, a memory stop after
+    the deadline was `Unknown` at a verdict and `TimeLimit` at a choice) - and the deadline is
+    checked as each verification starts. L8: the verification takes the verdict's detector (C++
+    `exact.detector`; `t5d_search_verify_budgeted` the search's) and Python's probe the generator's
+    `mate_bytes` override (`netplay.verdict_params`), as the C++ loop takes both from its search
+    parameters. F5's seam: `PlayParams::unsettle_verification_for_tests` (a verification withheld
+    from a given count on, as if the budget ran out). Tests:
+    `capi_game_verdict_answers_with_a_witness_h22`;
+    `play_with_no_child_known_legal_the_verdicts_witness_is_played_h22` (issue 406's Q3 node at
+    100,000 nodes, which ended on the choice before - one witness move, its action completed);
+    `play_every_choice_unsettled_plays_the_witness_whole_h22` (every verification withheld: the
+    action is the witness, ply and tree);
+    `play_a_choice_unsettled_off_the_witness_puts_the_game_back_after_two_moves_h22` (five
+    timelines, two steered moves off the witness, the third verification withheld: both moves taken
+    back - M18); Python: `Game.verdict` on the three verdict positions and three timelines; netplay
+    (self and match) and the generator playing the witness; the four real endings, which now play on
+    - 1 and 5 actions, each ending later on a verdict the budget cannot settle. The rollback tests
+    withhold the witness (it would continue whenever the moves played happen to be its prefix).
+    Proposed edit 309.
+    **X1, X6, X7, L4, L10: the missing tests** (the mutation pass's candidates, adopted; its
+    survivors M08, M09, M10, M17, M18, M21, M24, M26, M28, M31, M39, M42, M47, M54, M56, M62). X1:
+    checks and nodes reach their own tiers, through the binding and through
+    `t5d_search_verify_budgeted` (bare kings: tier 3 needs 4 search nodes, one tier-2 check settles
+    the move). X6: rollbacks after two moves - netplay and the generator on five timelines of bare
+    kings (two moves real, the third unsettled; the witness withheld), the C++ loop's Q3 test with a
+    first move off the witness (F4) and, with the seam, after two moves (commit X2: M18); the
+    dropped action's resignation event goes with it (M54); netplay's decision log holds no unsettled
+    decision (M47); its `--terminal-nodes` reaches the games (M42); the binding's default is exact
+    (M31). X7: a capped turn start the budget cannot settle is Unknown, not TurnCap (M08); a verdict
+    the memory ceiling stops ends the game Unknown (M09); the budgeted verification keeps the
+    search's memory ceiling (M26). L4: the default budget with a deadline at the 191-board verdict -
+    a 1 s stop ends it TimeLimit (1.0 s), a 60 s one leaves it to the node budget, Unknown (2.5 s,
+    loaded); `selfplay_games_end_by_checkmate_stalemate_or_the_cap` holds its unscored games to one;
+    the never-throws sweep gives a third of its games a one-node budget (9 end Unknown) and a third
+    the fast classification with every verification withheld (131 witness moves), its third left
+    exact. L10: `unsettled_name`'s strings (M10). The observation on that self-play test (one game,
+    54 s of its 62) is left: trimming it was not shown to keep every kill.
+    **X5, L3, L5, L7: netplay's replay, the binding's range, the records, the callback.** X5:
+    netplay's replay check of a game ended on a verdict its budget left unsettled asked the gate
+    that very verdict in full mode, with no budget (minutes at large positions; past the 600 s
+    timeout the uncaught exception aborted the run): `replay_problems` now replays such a game
+    `--parse-only` (the states and the final boards still checked against the engine's reader) and
+    makes a timeout a note, never a failure or an abort; `main` uses it. L3: `Search.verify` refuses
+    a budget outside 0 to T5D_NO_LIMIT (`ValueError`) instead of wrapping it into the C type (-1
+    read as exact, 2**64 as 0). L5: `python -m t5d.train.selfplay_pool --terminal-nodes`; t5d-play
+    and netplay records name a budget other than the default in a `TerminalNodes` header (the
+    default records unchanged, so default and exact records differ only by it); t5d-play's summary
+    and the pool's per-game line say an unscored end's question; the generator writes it as an
+    optional header key, `unsettled` ("verdict" or "choice"; `GameRecord.unsettled`), present in no
+    other record - format version 2 kept, as `seeded_start` was added (reading 7 of the table). L7:
+    the generator's `on_decision` is called for an action's decisions once the action is kept
+    (played to its submission, or resigned), its searches held open until then, and never for an
+    action an unsettled choice drops; the C++ loop and netplay keep a dropped action's decisions in
+    their counts and logs, as `GameRecord::decisions` now says (the audit lane's readers skip them).
+    Tests: the binding's range; a record naming its budget; an unsettled verdict's game replayed
+    parse-only, and a timeout a note; the generator's optional key; `on_decision` only for decisions
+    kept; the pool's `--terminal-nodes`; t5d-play's header and summary.
+    **X3, X4, L1, L2, L9: the record.** X3: the readings that change training data are put to the
+    user - rows 11-15 of the readings table: (b) an unsettled choice's action under way dropped,
+    positions included; (c) the rules before the cap (Standard - Two Timelines at 256 nodes ends
+    unknown where 4,096 ends turn_cap); (f) match play's interim reading; and this round's two, X2's
+    off-tree witness step under "verified_fallback" and the optional `unsettled` header key - and
+    edits 310 (section 11.0: an unsettled choice's action under way is not recorded) and 311
+    (section 12.8) bring the text in line with (b). X4: the 88-board game is a MEASUREMENTS row with
+    its conditions ("An unscored game at 88 boards under the game loop's default budget"); edit 307
+    says "one test game ended unscored at 88 boards"; keeping the placeholder or having the pilot
+    measure unscored endings by board count is the user's question (issue 413, the "For the user"
+    list). L1: the stale passages - the generator's docstring ("no node budget yet"),
+    `t5d/selfplay.hpp` (the header comment, `verified_choices`), `engine/README.md`'s search
+    paragraph, this log's lane line. L2: the placeholder cites issue 413 where it is defined
+    (`kTerminalNodes`, `PlayParams::terminal_nodes`, `TERMINAL_NODES`, `PlayConfig.terminal_nodes`,
+    `GeneratorConfig.terminal_nodes`). L9 (docs only, no search change): `PlayParams::turn_cap` no
+    longer says the search scores capped positions as the game will - the search values a capped
+    node whose verdict is unknown as a draw where the game ends it unscored (values only: such a
+    game's targets are masked).
+    **Verified.** The survivors re-run with the mutation pass's runner on a fresh copy of the final
+    tree (a102584; one mutant at a time, builds and BLAS threads at 3): KILLED - M08
+    (play_an_unsettled_turn_start_at_the_cap_is_unknown_h22), M09
+    (play_a_verdict_the_memory_ceiling_stops_ends_the_game_unknown_h22), M10
+    (play_terminal_budget_is_the_searchs_own_and_refuses_none_h22,
+    play_exe_terminal_nodes_ends_an_unsettled_game_unscored_h22), M17 and M21
+    (play_a_choice_unsettled_off_the_witness_puts_the_game_back_after_two_moves_h22,
+    play_an_unsettled_choice_after_a_move_puts_the_game_back_h22), M18
+    (play_a_choice_unsettled_off_the_witness_puts_the_game_back_after_two_moves_h22), M24
+    (capi_search_verifies_a_chosen_move_within_a_budget_h22), M26
+    (test_the_budgeted_verification_keeps_the_memory_ceiling), M28
+    (test_checks_and_nodes_reach_their_own_tiers), M31
+    (test_the_bindings_default_verification_is_exact), M39
+    (test_netplay_rolls_back_the_whole_action_after_two_moves), M42
+    (test_netplay_cli_takes_terminal_nodes), M47
+    (test_netplay_decision_log_survives_an_unsettled_choice), M54
+    (test_generator_drops_the_dropped_actions_resignation_event), M56 and M62
+    (test_generator_drops_the_whole_action_after_two_moves). M12 (the verification limits tier 2's
+    checks too) survives, equivalent in practice as the review found: with the budget at 2,000,000 -
+    100,000 at the smallest tested - tier 2's checks never bind before tier 3's nodes on a tested
+    position. A note on the runner: it rebuilds the engine for each C++ mutant and only at its end
+    from the pristine sources, so the Python mutants that follow a C++ one in its list run against
+    that mutant's library - the first pass had M39, M42 and M47 "killed" by the memory-ceiling test
+    under M26's library; re-run alone on the pristine library, each is killed by its own test
+    (above). The copy restored pristine (its sources' hash). Final checks on a102584: engine 785 of
+    785 (`--werror`; 27 minutes, the machine loaded); long_detectors 2 of 2; ruff clean (check;
+    format, 140 files); pytest - the whole `tests/engine` directory and the train files that play or
+    read games - 743 passed, 1 skipped (test_records' opt-in T5D_RECORDS run; T5D_REQUIRE_ENGINE=1);
+    verify ok; gate commit ok (SMOKE TEST - PASSED, baseline 41 compared, 0 declined; proof channel
+    DISABLED). No search path changed (`mcts.cpp`, the scanner and the prover untouched since
+    193b517): no Lazy SMP run owed; no truth source changed: no nightly owed.
 
 402. **6f's settling scans: their wrapper is not on main** (§13.1 6f "verify the proof-export
     invariant under TT churn for Hunt and the settling scans (§11.3)"; §11.4 "df-pn at the
@@ -7841,7 +8317,15 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     `lane/engine` is building (the budgeted terminal test, the unscored ending,
     `t5d_search_verify_budgeted`, both Python loops); this lane adopts it from main when it lands
     rather than building a second one. Until then the clocked loop's verdict stays as it was:
-    uncharged, and bounded only by `max_seconds` (issue 406's deadline).
+    uncharged, and bounded only by `max_seconds` (issue 406's deadline). *(Done 2026-11-24, in
+    the merge of main b18a7b3, decision 13's game loops:* the clocked loop's verdict is the
+    unclocked loop's - within `PlayParams::terminal_nodes` (netplay: `PlayConfig.terminal_nodes`),
+    run before the side's decision starts and so charged to neither clock, and one the budget
+    cannot settle ends the game unscored (`GameEnd::Unknown`, `Unsettled::Verdict`, "*") with both
+    clocks untouched; tested on a clock that moves at every read, and on the wall and model clocks
+    in netplay. A clocked decision's verifications - the bound's, the fallback's, the search
+    against the remaining clock - take the same node budget, the deadline beside it
+    (`t5d_search_verify_within` gained decision 13's `checks` and `nodes`).)
 457. **"Every board-move adds a board"** (§8.6's trajectory). A branching jump adds two boards
     (its destination's successor and the new timeline's), and an action's moves number one or
     more. Built: N advances between two of our actions by both players' boards per action,
@@ -9956,6 +10440,55 @@ repository's copies, which upstream has still to take:
     on the state alone, a classification a deadline cut met another list's evaluation and the
     search threw; "one network input" made exact, not a new rule (§8.5's search purity and
     §15.2's purity row unchanged).
+306. **§11.0's budget paragraph (H22 built)**: now - "**The game loop asks item 3's question under a
+    budget** (2026-11-15 review, settling BUILD_LOG issue 408; ruled, and not yet built in the
+    Python loops)." Proposed - "(2026-11-15 review, settling BUILD_LOG issue 408; built in the C++
+    play loop, netplay and the training generator, BUILD_LOG issue 413)", and after "never a time
+    limit, which would make a record irreproducible" add: "- its value a placeholder, the search's
+    own terminal-check budget (2,000,000 nodes, §16), so the loop asks nothing of a turn start that
+    a fresh search's root check does not -". Why: issue 413 (the plan's recommended value; the spec
+    gave none).
+307. **§13's "Exactness is the other cost"**: now - "The game's turn-start verdict and the
+    verification of a chosen move before it is played are exact with no node limit (H37) ... The
+    game loop's answer - ruled, not yet built in the Python loops - is a node budget and an unscored
+    ending, never a guessed mate (§11.0)." Proposed - "Exact, with no node limit, the game's
+    turn-start verdict and the verification of a chosen move have each been measured past twenty to
+    thirty minutes at ~190 boards ... The game loop's answer is a node budget and an unscored
+    ending, never a guessed mate (§11.0): at the placeholder budget the 191-board verdict stops
+    unknown within 4 s, and one test game ended unscored at 88 boards (MEASUREMENTS) - how often, by
+    board count, is the pilot run's to measure." Why: issues 413, 414 (X4: reworded from "the
+    engine's own test games end unscored from 88 boards", one game of ten on a loaded machine).
+308. **§16 (H22 as built)**: now - under "Ruled in the 2026-11-15 review, and not yet built":
+    "**H22**: the game loop's terminal test takes a node budget, and a turn start it cannot settle
+    ends the game unscored (§11.0)." Proposed - remove it there (or keep only "H22 at match play:
+    the engine's own turn needs no verdict - waits on E11's clock"), and add under "Search": "**H22,
+    the game loop's exact questions.** One node budget for each turn start's verdict and for the
+    verification of a chosen move the expansion left unknown: 2,000,000 search nodes, the search's
+    own `mate_nodes` - a placeholder (`PlayParams::terminal_nodes`,
+    `PlayConfig`/`GeneratorConfig.terminal_nodes`; the C API's `t5d_search_verify_budgeted`). A
+    question it leaves unsettled ends the game "unknown" - unscored, never a mate - the record's
+    Termination naming the question; an unsettled choice drops the action under way, the record
+    ending at its turn start. A wall-clock stop (`max_seconds`) is a tool's safety stop, never
+    training's." This supersedes the second half of the code round's edit 411 ("the loops' node
+    budget is still to build"). Why: issue 413.
+309. **§11.0's budget paragraph: the verdict's witness (review decision 13's X2)**: now - "a choice
+    that stays unknown within it is passed over for the most visited child known to be legal — as
+    built — and with none known the game ends unscored." Proposed - "... passed over for the most
+    visited child known to be legal - as built; with none known, for the next step of the action the
+    turn start's verdict found within the same budget, while the moves played are its prefix - and
+    only once they have left it does the game end unscored." Why: issue 414 (X2) - the turn start
+    was settled; the ruling's "a turn start it cannot settle" does not describe an unsettled choice.
+310. **§11.0's budget paragraph: an unsettled choice's action under way (review decision 13's X3)**:
+    now - "... ends the game *unscored*: its positions keep their search-derived targets and lose
+    their outcome-derived ones (§12.8) ..." Proposed - add after it: "A choice that leaves the game
+    unscored ends it at that action's turn start: the action under way is not recorded, its
+    positions with it (a record holds whole actions)." Why: issue 413's reading (b), now the user's
+    to confirm (the readings table, row 11); the text read as though every position of an unscored
+    game kept its search-derived targets.
+311. **§12.8: an unscored game's targets (review decision 13's X3)**: now - "A game that ends
+    unscored (§11.0) keeps its search-derived targets and masks its outcome-derived ones." Proposed
+    - "... masks its outcome-derived ones; a choice that ends it unscored leaves out the action
+    under way, which has no record (§11.0)." Why: as edit 310.
 
 <!-- A new list, so that the numbers from 137 render as written. -->
 
@@ -10146,6 +10679,62 @@ repository's copies, which upstream has still to take:
     - Why: section 15.5's last clause - each committed-class row "either decided or
       explicitly awaiting a named trained ablation" - and the register's vocabulary, which is
       how a reader tells how firm a row is.
+
+<!-- A new list, so that the numbers from 380 render as written. -->
+
+380. **§15.2's C26 row (what "the dense search" is)**: now - "Phase form: with the cached
+    configuration on, a search rooted under N\* equals the dense search node for node; one rooted at
+    or above it evaluates every node cached". Proposed - "... a search rooted under N\* equals the
+    dense search - the same network's dense-scope pass, its positions batched alike - node for node:
+    the same search graph (H15) and bit-identical evaluations; one rooted at or above it evaluates
+    every node cached". Why: issue 262 - the dense pass's last bits move with the batch and the grad
+    mode, so node-for-node equality is bitwise only against the dense path batched alike; a
+    tolerance would let a search whose PUCT ties break otherwise pass as equal.
+
+381. **§7.10 "The root decides, once per search" (the dense epoch, and C3)**: now - "The mode belongs
+    to the refresh epoch: every node in a search is evaluated the same way, so transpositions (§8.5)
+    never mix a dense and a cached evaluation of one state ... the first cached search starts with its
+    root refresh like any other". Proposed - add: "Below N\* every search shares one dense epoch - a
+    dense evaluation is a function of the state alone - so the shared evaluation cache (C14) serves
+    dense evaluations across searches, and never to a cached one; its identity is never that of an
+    evaluator that conditions on no root. The phase form presumes C3: at or above N\* a search starts
+    with its root refresh." Why: issues 260 and 261 - both are choices the build had to make that
+    §7.10 leaves open.
+
+382. **Register C26 (whose N\* it is)**: now - "N\* is where the cached arm starts to beat dense at
+    equal wall-clock ... placeholder 50". Proposed - add: "N\* belongs to the evaluator until
+    conditioning-offset training exists; from then it is pinned with the network - the training
+    mask's N\* is the deployment's (§7.7)". Why: issue 263.
+
+383. **§7.3's end, §7.9 "Inside a turn", register C20 and C27 ("once per board and epoch")**: now -
+    §7.3: "the recompute waits for the next node the network evaluates ... and is done once per board
+    and epoch"; §7.9: "recomputed (§7.3) when the network next runs, once per board and epoch"; C20
+    and C27 the same. Proposed - "once per board - with its causal past and the acting colour's
+    perspective (A7) - and epoch". Why: issue 267 - the cached path's entries are per perspective
+    (spec issue 303), so a board superseded inside a turn is computed once for each colour whose
+    next evaluated node reads it.
+
+384. **§7.9 "Inside a turn", register C3a and C24 (the triggers under the tree form and the flat
+    form)**: now - "The ladder's triggers - rung 1 and the complexity trigger - are checked only at
+    nodes the network evaluates ... A travel move made at an inner node counts toward the next
+    evaluated node". Proposed - add: "Rung 1 reads a branching travel move anywhere on the segment
+    since the nearest evaluated node, per path: each evaluated node below an inner branching jump is
+    eligible at its own visit gate. The complexity trigger's 'parent's outputs' are the nearest
+    evaluated ancestor's. The flat form evaluates every node, so the ladder runs per node there and a
+    turn's travel counts on the edge into its node." Why: issues 268, 269 and 270 - three readings
+    the build had to choose, each named for the user.
+
+385. **§7.10 "The root decides, once per search" (the dense evaluation's last bits; edit 381 as
+    applied)**: now - "Below N\* every search shares one dense epoch, because a dense evaluation is a
+    function of the state alone: the shared evaluation cache (§8.7) serves dense evaluations across
+    searches, and never serves one to a cached search." Proposed - "... because a dense evaluation is
+    a function of the state alone, up to its last bits, which depend on the batch it was evaluated in
+    (§15.2's C26 row compares the dense search batched alike): the shared evaluation cache (§8.7)
+    serves dense evaluations across searches - their last bits another search's batch's - and never
+    serves one to a cached search." Why: issue 261's correction (C26/C27's review, finding L9) -
+    unqualified, the clause contradicts issue 262, which edit 380's wording of the row rests on.
+
+<!-- A new list, so that the numbers from 400 render as written. -->
 
 400. **§11.0 "Third-party code" and register H26 (what reading every oracle's code found)**:
     now - §11.0: "ftxi's detector and cwmtt are the external checks; ftxi's adapts cwmtt's
@@ -10878,6 +11467,23 @@ entry changes in the same edit as its code, which the standing rule defers to up
   github.com/FirePlank/5d-chess-engine into the worktree's own module store
   (`.git/worktrees/search/modules/oracle-kairos`, 90 MB) - not on the CHECKPOINT 9 section's
   list. Nothing has been downloaded since; the store is kept (deleting it is the user's call).
+- **2026-11-08/09 - C26 and C27 behind their flags, with section 15.2's two rows** (`lane/net`;
+  issues 259-275, edits 380-384). CHECKPOINT 9's ruling 2, built to the design a three-way panel and a
+  judge chose. Five commits: issue 259 first - C3's root refresh was anchored on the pseudo-legal
+  expansion while every search leaf is legality-filtered, so at a root whose two move lists differ
+  the root leaf missed the dense pass (fixed: the anchor is the root leaf's input); C26, the phase
+  form (`CacheConfig.phase_form`, N\* = `phase_boards` 50, `CacheConfig.mode` the one predicate; the
+  dense epoch shared below N\*; the dense mode the dense evaluator itself, batch for batch); C27 in the
+  search-tree fixture (`SearchTree(evaluates=...)`, inner nodes, the triggers only at evaluated nodes,
+  the deferred recompute exact by construction); the engine path refusing node refreshes it cannot
+  make (issue 271); the default path's evidence (93 cases bit for bit). Both rows green: the phase
+  form's search is the dense search node for node through the C step API on every split, a per-node
+  switch killed; the deferred recompute bitwise against recompute at supersession on the fixture,
+  real actions and the step API's tree form. For the user: issues 264, 265, 268, 269 (and 260 if 6c
+  drops C3; 266 with 252); for the main loop: the lane's line under "Current state" (not edited here),
+  edits 380-384 upstream, and the engine ladder only if 6c needs it (271). The whole suite on the
+  lane's head, in CI's four shards: 2155 passed, 1 skipped (opt-in); `gate --tier commit`: the smoke
+  test passed, the oracle layer failing only on Kairos not checked out in this worktree (CHANGELOG).
 - **2026-11-08 - issue 535 fixed** (`lane/fix535`, from main d8a54d3, main 03eca7a taken in by a
   fast-forward before the commit; **numbering: the block the main loop assigned this fix, issues
   600-619 and edits 420-429 - issues 600 and 601 used, no edit**). Begun 2026-11-02; the account's
@@ -11255,3 +11861,93 @@ entry changes in the same edit as its code, which the standing rule defers to up
     passed, 0 declined; proof channel DISABLED). The nightly gate is not owed: the merge brought
     `lane/engine`'s truth sources unchanged and this lane changed none. Decision 13 (H1 part 5) is
     not on main yet (main has since taken the net lane, 98f68c1); it is adopted when it lands.
+- **2026-11-23 - C26/C27's review round** (`lane/net`; issues 276-299 and edits 385-399 are this
+  round's block). Main 4e9267e merged first: two conflicts, both sides kept (CHANGELOG by heading,
+  the lane's entries above main's, the cited-ids entry once with both notes; BUILD_LOG line by
+  line, both session-log entries); `docs/design/` is main's exactly. Then the findings of the three
+  review passes of 6754794 (spec, correctness, mutation; no HIGH), each fixed as the main loop
+  decided, a commit per group.
+  - **The records** (M1; L2, L3, L4, L9). Issue 264's graph route was probed: in 3 of 6 carried
+    graph searches across N\*, a cached path transposed into a node evaluated dense. It is pinned by
+    R6f's new `ply-graph` arm. Issue 264 is now a spec conflict for the user, with the engine work
+    reading (b) would need (`reroot`, `set_epoch`). Issues 261 and 269 are restated, edit 385 is
+    proposed, and the cached path's docstring is corrected. No engine code changed. Checks: ruff
+    clean; R6f "4 passed in 54.24s".
+  - **The store and the shortcut** (M2, L15). `start` drops the root refresh it replaces
+    (`CachedEvaluator.release`, only epochs that evaluator made), and its shortcut compares the
+    whole network input (`input_digest`). This resolves issue 273 and the second half of issue 274.
+    Checks: ruff clean; the three new tests with the tests that start one evaluator more than once
+    (R6d, R6e, the anchor tests, `test_one_cached_evaluator_follows_its_search_to_a_new_root`, the
+    dense dispatch, the dense epoch's number): "12 passed in 40.06s".
+  - **The guards** (L5-L8). The switches are validated as bools, `CachedEvaluator.config` is
+    read-only, the engine path refuses the ladder at every `start`, the dense dispatch checks the
+    network's format, and the gate must answer with a bool. Checks: ruff clean; the new and changed
+    tests with the fixture's trigger tests: "13 passed in 14.83s".
+  - **The missing tests** (M3, M4, L11-L14; the C17 and C23 tests came with L6). R6b now holds per
+    leaf (L1: smallest gap 5.35e-2) and at `ROOT_DENSE_BOUND` for the root leaf (L10). The C26
+    entry's per-leaf figure is corrected in place. Checks: ruff clean; the new tests with R6b, R6c
+    and the anchor test: "18 passed in 74.88s".
+  - **The survivors and the checks.** The 8 survivors were re-run with the mutation runner on a
+    fresh copy of b48b356, T12 re-anchored, and all 8 are KILLED, each by its named test (the table
+    is in CHANGELOG). E16 is killed too, and this round's own fixes were mutated back and caught.
+    Checks: ruff "All checks passed!", "138 files already formatted"; the five test files of the
+    change, slow included, with `test_search_api.py` and `test_cache.py`: "483 passed in 3507.36s
+    (0:58:27)"; verify ok; gate commit "oracle layer [commit]: ok", SMOKE TEST - PASSED (41
+    compared, 0 declined), proof channel DISABLED. ftxi and notation were built in the worktree
+    with local tools, nothing downloaded. **For the main loop:**
+    - issue 264 is the user's to rule, (a) or (b); (b) is engine work in `reroot` and `set_epoch`;
+    - edit 385 goes upstream;
+    - issue 269 stays the user's question;
+    - the lane's line under "Current state" now has C26/C27 built and reviewed, which is not
+      edited here.
+- **2026-11-24 - Decision 13's game loops** (`lane/engine`, from main d4c7fb9; issue 413; edits
+  306-308; the plan handed over from the review's code round). The terminal test and the chosen
+  move's verification within one node budget (2,000,000, a placeholder) in the C++ play loop,
+  netplay and the training generator, the unscored ending with its question in the record, and the C
+  API's `t5d_search_verify_budgeted`. Coordination: `lane/search`'s phase 2 edits `selfplay.cpp`,
+  netplay and the timed loop and adopts this budget from main; this change keeps to the terminal
+  test and the unscored ending, so whichever lands second reconciles `selfplay.cpp` (here: the
+  verdict's budget, `make_legal`'s no-child case and the end after a stopped action). Checks: engine
+  778 of 778 (`--werror`; 27 minutes, the machine loaded to 97-100% by another lane's job);
+  long_detectors 2 of 2; ruff clean (check; format, 136 files); pytest - the whole `tests/engine`
+  directory and the train files that play or read games (test_generator_budget, test_unscored,
+  test_mechanics, test_records, test_seeded_starts, test_selfplay_pool, test_steering, test_targets,
+  test_trainer, test_completed_q_arm, test_target_arms, test_qat) - 600 passed, 1 skipped
+  (test_records' opt-in T5D_RECORDS run), T5D_REQUIRE_ENGINE=1; verify ok; gate commit ok (SMOKE
+  TEST - PASSED, baseline 41 compared, 0 declined; proof channel DISABLED). Lazy SMP and the nightly
+  not owed: no search, prover or scanner path and no truth source changed.
+- **2026-11-24 - main 98f68c1 merged into `lane/engine`** (M23; the net lane's C26/C27 and their
+  review round - Python and documents only), before decision 13's review round. Conflicts in
+  CHANGELOG (the lane's entry above main's) and BUILD_LOG's session log (both entries, by date).
+  Checks: ruff clean (check; format, 140 files); decision 13's two Python test files, 12 passed
+  (T5D_REQUIRE_ENGINE=1); verify ok. No engine file changed: the engine was not rebuilt; the round's
+  checks run on its final tree.
+- **2026-11-24 - Decision 13's review round** (`lane/engine`; issue 414; edits 309-311, 307
+  reworded; main 98f68c1 merged first, c65d9e5). Five commits: X2 with L6, L8, C-L1 and F5's seam
+  (73e6430); the missing tests, X1, X6, X7, L4, L10 (cb7130c); netplay's replay, the binding's
+  range, the records, the callback - X5, L3, L5, L7 (39f6797); the record - X3, X4, L1, L2, L9
+  (a102584); and this verification. The survivors' re-run: 16 of 16 killed by named tests, M12
+  equivalent in practice (issue 414). Coordination: `lane/search`'s phase 2 edits `selfplay.cpp` and
+  `netplay.py`; this round's hunks there are the witness step and `off_tree` in `make_legal`, the
+  clock rule at a verdict, the seam, `TurnWitness`, `verdict_params`, `replay_problems` and the
+  `TerminalNodes` header - whichever lands second reconciles them. Checks: as issue 414's last
+  paragraph.
+- **2026-11-24 - The review of E11/E8 phases 1, 1B and 2 (`rv-search2`): main b18a7b3 merged into
+  `lane/search` first** (M23; decision 13's game loops and their review round, issues 413-414).
+  Numbering for the round: issues 480-499, edits 347-359. Conflicts: `selfplay.cpp` (7: decision
+  13's verdict budget, `make_legal`'s witness step and `off_tree`, its end after a stopped action,
+  beside E11's clock and H1's policy - where no child is known legal the witness first, then the
+  search against the remaining clock, then the unsettled choice; the memory-ceiling throw gone),
+  `netplay.py` (15: the same order; `_legal_against_the_clock` returns None where it threw; one
+  turn-start copy for a flag and an unsettled choice; both header sets), the C API and its mirror
+  (`t5d_search_verify_within` beside main's two functions, given decision 13's `checks` and `nodes`;
+  `Search.verify` one method), t5d-play's usage, the README's synopsis, CHANGELOG (by heading, the
+  lane's entries on top) and this file (both sides). H1 part 5 in the merge (issue 456): the clocked
+  verdict is the unclocked loop's - within `terminal_nodes`, charged to neither side, unsettled
+  ending the game unscored with the clocks untouched; tested in C++ (a clock that moves at every
+  read) and in netplay (wall and model clocks). Two of decision 13's tests found the merge's netplay
+  passing the verification's `seconds` positionally and always: it is passed by keyword, and only on
+  a clocked decision with wall time. Checks on the merge: engine 847 of 847 (`--werror`); pytest -
+  `test_time_management`, `test_terminal_budget`, `test_switch_match`, `test_search_api`,
+  `test_netplay`, `test_decision_log` and the train files `test_generator_budget`, `test_unscored` -
+  all passed (T5D_REQUIRE_ENGINE=1). The round's full checks run at its end.

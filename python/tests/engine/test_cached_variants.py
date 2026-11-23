@@ -30,6 +30,10 @@ dragon or a princess. Engine positions use the lineage reading only (C23; spec i
   diverging games through one store and epoch, two refresh epochs sharing one store, one
   ``CachedNetworkEvaluator`` following its search to a new root; boards alike but for a has-moved
   marker, or alike but for their past, keep their own entries.
+* C3's anchor is the root leaf's input (issue 259): ``start_epoch`` hands ``start`` the root
+  expanded as the search expands its leaves - under every split and legality setting the position
+  has the first leaf's moves and edges - so the root refresh's evaluation of the root leaf is the
+  dense pass over it, at roots whose pseudo-legal and legal moves differ.
 * ``test_every_n2_switch_with_relations_on_three_variants``: section 6's switches, with the
   typed relations the engine builds (``relations_for``: attack, defence, pin, x-ray, check).
 * ``test_f1_bf16_cached_on_three_variants`` (slow): F1 as shipped but block-causal, BF16.
@@ -49,11 +53,11 @@ import pytest
 import torch
 
 from t5d.engine import Game
-from t5d.engine.capi import T5D_MOVE_TRAVEL
+from t5d.engine.capi import T5D_MOVE_TRAVEL, T5D_NO_LIMIT, T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_FLAT, T5D_SPLIT_TREE
 from t5d.engine.evaluator import CachedNetworkEvaluator, NetworkEvaluator, _split, run_search, state_of
 from t5d.engine.play import ROYAL_IDS
 from t5d.net import NetConfig, build_model
-from t5d.net.cache import CacheConfig, CachedEvaluator, reference_output, state_digest
+from t5d.net.cache import CacheConfig, CachedEvaluator, input_digest, reference_output, state_digest
 from t5d.net.state import PIECE_IDS, RELATION_IDS
 from tests.engine.helpers import ENGINE_VARIANTS, requires_engine
 from tests.net.test_cache import _close
@@ -392,6 +396,203 @@ def test_two_orders_of_one_action_through_the_step_api(variant):
             graph, info = _search(model, root, refresh, 1, seen, playouts=64)
             assert tree.leaves > len(set(tree.keys)), (variant, refresh, "no state reached twice")
             assert info.transposition_hits > 0 and graph.repeats > 0, (variant, refresh)
+
+
+# --- C3's anchor: the root leaf's input (issue 259) -------------------------------------------------
+
+#: The splits a search expands its leaves under, and its legality settings: the default budget,
+#: exact, the pseudo-legal seam (``legal_moves_only`` off: the leaves' moves are the pseudo-legal
+#: ones, ``Game.position``'s default), and a budget that binds (no full check, 10 nodes: at these
+#: roots its moves are neither the exact ones nor those of the budget with its two numbers swapped).
+SPLITS = {"ply": T5D_SPLIT_BOARD_MOVE, "tree": T5D_SPLIT_TREE, "flat": T5D_SPLIT_FLAT}
+BINDING = {"legality_checks": 0, "legality_nodes": 10}
+LEGALITY = {
+    "budgeted": {},
+    "exact": {"legality_checks": T5D_NO_LIMIT, "legality_nodes": T5D_NO_LIMIT},
+    "pseudo-legal-seam": {"legal_moves_only": 0},
+    "binding": BINDING,
+}
+ANCHOR_VARIANTS = ("Standard - Two Timelines", "Misc - Timeline Battleground")
+
+
+def _differing_root(variant: str, boards: int = 8) -> Game:
+    """A copy of random play's first live turn start with ``boards`` boards or more whose
+    pseudo-legal moves - ``Game.position``'s default expansion - are not the moves its search
+    expands its leaves with (the legal ones at the search's default budget)."""
+    from t5d.engine.search import Search, search_params
+
+    p = search_params()
+    for seed in range(5, 45):
+        for g in _walk(variant, seed, boards=boards):
+            info = g.info()
+            if info.boards < boards or info.moves_made != 0:
+                continue
+            with Search(g) as probe:
+                live = not probe.info().root_finished
+            pseudo = g.position().state.moves
+            leaf = g.position(legal_moves=True, legality_checks=p.legality_checks, legality_nodes=p.legality_nodes).state.moves
+            if live and (pseudo.shape != leaf.shape or not np.array_equal(pseudo, leaf)):
+                return g.copy()
+    raise AssertionError(f"random play from {variant!r} reached no live turn start whose pseudo-legal and legal moves differ")
+
+
+class _FirstLeaf:
+    """Wraps an evaluator: the position its ``start`` was given, and the first leaf's position and
+    evaluation (a fresh search's first leaf is its root)."""
+
+    def __init__(self, inner) -> None:
+        self.inner = inner
+        self.started = self.first = self.first_eval = None
+
+    def start(self, root):
+        self.started = state_of(root)
+        return self.inner.start(root)
+
+    def __call__(self, positions):
+        evs = self.inner(positions)
+        if self.first is None:
+            self.first, self.first_eval = state_of(positions[0]), evs[0]
+        return evs
+
+
+def _first_leaf(model, root: Game, params) -> _FirstLeaf:
+    """One playout of a search from ``root``: its root leaf through the cached path with C3's root
+    refresh."""
+    from t5d.engine.search import Search
+
+    ev = _FirstLeaf(CachedNetworkEvaluator(CachedEvaluator(model, CacheConfig(root_refresh=True))))
+    with Search(root, params=params) as search:
+        run_search(search, ev, playouts=1, batch_size=4)
+        assert search.info().evaluations == 1
+    return ev
+
+
+@pytest.mark.parametrize("variant", ANCHOR_VARIANTS)
+def test_the_root_refresh_anchors_at_the_root_leafs_input(variant):
+    """C3's anchor (issue 259): ``start_epoch`` hands the evaluator's ``start`` the root leaf's own
+    input. Under the ply split, the tree form and the flat form, at the search's default legality
+    budget, exactly, and on the pseudo-legal seam, the position ``start`` gets has the first
+    gathered leaf's - the root's - candidate moves (source, destination and promotion, in order),
+    its edges (the move graph and the typed relations) and every input ``state_digest`` covers, and
+    the epoch is anchored at it. Non-vacuous: at these roots ``Game.position()``'s default
+    expansion - the pseudo-legal moves - is not the leaf's (mutant: the anchor built from it), and
+    under the binding budget the leaf's moves are neither the exact expansion's nor the swapped
+    budget's (mutants: the anchor's budget dropped, or its two numbers swapped)."""
+    from t5d.engine.search import search_params
+
+    model = _model(3)
+    with _differing_root(variant) as root:
+        pseudo = root.position().state
+        exact = root.position(legal_moves=True, legality_checks=T5D_NO_LIMIT, legality_nodes=T5D_NO_LIMIT).state.moves
+        swapped = root.position(legal_moves=True, legality_checks=BINDING["legality_nodes"], legality_nodes=BINDING["legality_checks"])
+        swapped = swapped.state.moves
+        checked = 0
+        for split, flag in SPLITS.items():
+            for name, legality in LEGALITY.items():
+                ev = _first_leaf(model, root, search_params(seed=3, split=flag, eval_cache_entries=0, batch_size=4, **legality))
+                a, b, what = ev.started, ev.first, (variant, split, name)
+                assert np.array_equal(a.moves, b.moves) and np.array_equal(a.edges, b.edges), what
+                assert state_digest(a) == state_digest(b) == ev.inner.epoch.anchor, what
+                if split != "flat":  # the flat form's leaves offer no submit (the generator ends turns)
+                    assert (a.submit_possible, a.submit_legal) == (b.submit_possible, b.submit_legal), what
+                if name == "binding":  # the budget binds, and each of its numbers is read as itself
+                    assert not np.array_equal(b.moves, exact) and not np.array_equal(b.moves, swapped), what
+                else:
+                    assert (not np.array_equal(pseudo.moves, b.moves)) == (name != "pseudo-legal-seam"), what
+                checked += 1
+        assert checked == len(SPLITS) * len(LEGALITY)
+
+
+def test_the_anchor_follows_a_binding_legality_budget():
+    """C3's anchor under a legality budget that changes the moves: at Two Timelines' differing root
+    the budget (checks 0, nodes 10) binds - its leaf has 51 candidates where the pseudo-legal
+    expansion has 52, the exact one 50 and the budget with its numbers swapped (10, 0) 50 - so the
+    anchor has the leaf's moves only when ``start_epoch`` passes both numbers, each to its own
+    parameter. Under the ply split and the tree form."""
+    from t5d.engine.search import search_params
+
+    model = _model(3)
+    with _differing_root("Standard - Two Timelines") as root:
+        exact = root.position(legal_moves=True, legality_checks=T5D_NO_LIMIT, legality_nodes=T5D_NO_LIMIT).state.moves
+        swapped = root.position(legal_moves=True, legality_checks=10, legality_nodes=0).state.moves
+        for split in (T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_TREE):
+            params = search_params(seed=3, split=split, eval_cache_entries=0, batch_size=4, **BINDING)
+            ev = _first_leaf(model, root, params)
+            a, b = ev.started, ev.first
+            assert not np.array_equal(b.moves, exact) and not np.array_equal(b.moves, swapped), "the budget binds (non-vacuous)"
+            assert np.array_equal(a.moves, b.moves) and np.array_equal(a.edges, b.edges), split
+            assert state_digest(a) == state_digest(b) == ev.inner.epoch.anchor
+
+
+def _logit_gap(a, b) -> float:
+    """The largest gap between two evaluations' move, WDL and categorical logits."""
+    return max(
+        float(np.abs(np.asarray(getattr(a, n)) - np.asarray(getattr(b, n))).max(initial=0.0))
+        for n in ("policy_logits", "wdl_logits", "value_logits")
+    )
+
+
+#: The root leaf against the dense pass: one function through two summation orders (measured under
+#: 1e-6 on these roots, FP32, 2 layers), where the anchor built from the pseudo-legal expansion
+#: misses by 2.4e-5 to 3.6e-4 - so the bound sits between them, tighter than ``_evals_close``'s 1e-4.
+ROOT_DENSE_BOUND = 1e-5
+
+
+@pytest.mark.parametrize("supersession", [R2, R1])
+@pytest.mark.parametrize("variant", ANCHOR_VARIANTS)
+def test_the_root_refresh_at_an_engine_root_is_the_dense_pass(variant, supersession):
+    """C3 (section 7.9: "at the root the two-level mask reduces to full dense attention") on engine
+    roots whose pseudo-legal and legal moves differ: with the root refresh, the cached path's
+    evaluation of the root leaf - through the step API, under each split - is the dense pass over
+    that leaf (``NetworkEvaluator(scope="dense")``) within ``ROOT_DENSE_BOUND``. The test's teeth, in
+    the test: an epoch anchored on the pseudo-legal expansion (main before issue 259) has its
+    history conditioned on another move graph, and its evaluation of the same leaf misses the dense
+    pass by more than the bound."""
+    from t5d.engine.search import search_params
+
+    model = _model(5 + (supersession == R1), supersession_scope=supersession)
+    dense = NetworkEvaluator(model, scope="dense")
+    with _differing_root(variant) as root:
+        for split, flag in SPLITS.items():
+            ev = _first_leaf(model, root, search_params(seed=3, split=flag, eval_cache_entries=0, batch_size=4))
+            assert ev.inner.epoch.kind == "root"
+            want = dense([ev.first])[0]
+            GAPS["step-api fp32"] = max(GAPS["step-api fp32"], _evals_close(ev.first_eval, want, (variant, split)))
+            assert _logit_gap(ev.first_eval, want) < ROOT_DENSE_BOUND, (variant, split, _logit_gap(ev.first_eval, want))
+        stale = CachedNetworkEvaluator(CachedEvaluator(model, CacheConfig(root_refresh=True)))
+        stale.start(root.position())  # the pseudo-legal expansion: one state_digest with the leaf, other moves
+        assert stale.epoch.anchor == state_digest(ev.first)
+        assert _logit_gap(stale([ev.first])[0], want) > ROOT_DENSE_BOUND, (variant, "the stale anchor misses the dense pass")
+
+
+def test_start_reopens_at_a_root_whose_moves_differ():
+    """``start``'s shortcut (BUILD_LOG issue 274): one evaluator is started at a root under one legality
+    policy - the pseudo-legal moves - then at the same root under another - the search's legal ones:
+    one ``state_digest``, other moves and edges. The second start opens a root refresh of its own,
+    whose root leaf is the dense pass over the legal input (it would miss it reading the first
+    refresh's move graph - ``test_the_root_refresh_at_an_engine_root_is_the_dense_pass``'s stale
+    anchor); started there again it continues that epoch, computing nothing; and the first epoch's
+    entries are gone (issue 273)."""
+    from t5d.engine.search import search_params
+
+    model = _model(3)
+    dense = NetworkEvaluator(model, scope="dense")
+    p = search_params()
+    with _differing_root("Standard - Two Timelines") as root:
+        pseudo = root.position().state
+        legal, again = (
+            root.position(legal_moves=True, legality_checks=p.legality_checks, legality_nodes=p.legality_nodes).state for _ in range(2)
+        )
+        assert state_digest(pseudo) == state_digest(legal) and not np.array_equal(pseudo.moves, legal.moves)
+        assert input_digest(pseudo) != input_digest(legal) == input_digest(again)
+        ev = CachedNetworkEvaluator(CachedEvaluator(model, CacheConfig(root_refresh=True)))
+        first = ev.start(pseudo)
+        second = ev.start(legal)
+        assert second is not first and second.anchor == first.anchor and second.key != first.key
+        assert _logit_gap(ev([legal])[0], dense([legal])[0]) < ROOT_DENSE_BOUND
+        computed = dict(ev.cached.store.computed)
+        assert ev.start(again) is second and ev.cached.store.computed == computed
+        assert {k[0] for k in ev.cached.store.entries} == {second.key}
 
 
 # --- one store across games, epochs and searches --------------------------------------------------
