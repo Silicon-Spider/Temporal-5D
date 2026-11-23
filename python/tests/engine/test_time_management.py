@@ -236,9 +236,12 @@ def test_the_hard_bound_holds_on_the_wall_clock():
             assert run.plan.hard_seconds <= 0.25 * (3.0 - 0.05) + 1e-9
             assert run.verdict.stop != T5D_TIME_STOP_NONE
             s.advance(s.choose()[0])
-        # A clock with hardly anything left: the hard bound, not the plan, ends it (one batch runs).
+        # A clock with hardly anything left - its hard bound a quarter of 0.01 s - and a measured
+        # batch of 3 ms or more: the hard bound ends the decision at its first check (review L8(a)).
+        # No batch need run: the root carried from the last decision has visited children.
         run = run_timed_search(s, Slow(), tm, remaining=0.06)
-        assert run.verdict.stop in (T5D_TIME_STOP_HARD_BOUND,) or run.plan.soft_seconds <= run.plan.hard_seconds
+        assert run.verdict.stop in (T5D_TIME_STOP_HARD_BOUND, T5D_TIME_STOP_SEARCH)
+        assert run.slices == 0
 
 
 @pytest.fixture(scope="module")
@@ -286,6 +289,76 @@ def test_a_flag_ends_the_game_at_the_actions_start(nets):
         res = play_game(evaluators, play, net_cfg=cfg)
     assert res.end == "flag" and res.winner == 1 and res.actions == [] and res.result == "*"
     assert check_replay(res, replay_with_gate(res.record, gate=GATE)) == []
+    # The flagged decision's work is counted (review L6), as the engine's play_game counts it; it
+    # overran its hard bound (0 s: a quarter of nothing left).
+    assert res.decisions == 1 and res.playouts > 0 and res.evaluations > 0
+    assert res.hard_overruns == 1
+
+
+def _clocked_game(nets, **kw):
+    """A match game on the model clock (the reviewers' probe configuration)."""
+    cfg, evaluators = nets
+    play = PlayConfig(mode="match", batch_size=4, hunt=False, settling=False, model_clock=True, **kw)
+    with torch.no_grad():
+        return play_game(evaluators, play, net_cfg=cfg)
+
+
+def test_netplay_credits_the_increment(nets):
+    """At 1 s and 10 s an action, both clocks end above the base (an action's charge is below
+    the base, or its side would have flagged)."""
+    price = (("cost_seconds_per_evaluation", 1.0),)
+    res = _clocked_game(nets, variant="Standard", cap_turns=2, time=1.0, increment=10.0, time_overrides=price)
+    assert res.end != "flag" and len(res.actions) >= 2
+    assert all(x > 1.0 for x in res.clock_remaining)
+
+
+def test_netplay_on_the_model_clock_is_reproducible_and_charges_the_models_price(nets):
+    """The model clock (H15; the module's claim): the same game twice is the same game, clocks
+    included; and it charges the model's price, not the wall time - at 1e4 s an evaluation the
+    first decision's forced batch alone exhausts a 5 s clock."""
+    kw = dict(
+        variant="Standard - Two Timelines",
+        cap_turns=2,
+        cap_boards=30,
+        seed=5,
+        time=4.0,
+        increment=0.05,
+        time_overrides=(("cost_seconds_per_evaluation", 1.0),),
+    )
+    a, b = _clocked_game(nets, **kw), _clocked_game(nets, **kw)
+    assert a.clock_remaining == b.clock_remaining
+    assert a.record == b.record
+    c = _clocked_game(nets, variant="Standard", cap_turns=2, time=5.0, time_overrides=(("cost_seconds_per_evaluation", 1e4),))
+    assert c.end == "flag" and c.decisions == 1
+
+
+def test_netplay_a_flag_mid_action_leaves_the_game_at_the_actions_start(nets):
+    """A flag after the action's first decision: the game handle goes back to the action's start
+    (its fingerprint and board count the start's). The bases are scanned for such a flag."""
+    with Game.variant("Standard") as g:
+        start = g.snapshot()
+    found = 0
+    for i in range(1, 61):
+        res = _clocked_game(nets, variant="Standard", cap_turns=2, time=0.05 * i, time_overrides=(("cost_seconds_per_evaluation", 1.0),))
+        if res.end == "flag" and res.actions == [] and res.decisions >= 2:
+            found += 1
+            assert res.final_fingerprint == start.fingerprint
+            assert res.final_boards == len(start.boards)
+            break
+    assert found  # the premise
+
+
+def test_netplay_refuses_bad_time_overrides():
+    """A clear refusal, never a TypeError from the keyword clash (review L6)."""
+    for overrides, match in (
+        ((("allocator", 1),), "PlayConfig.allocator"),
+        ((("signals", 0),), "PlayConfig.signals"),
+        ((("reserve", 1.0),), "no field 'reserve'"),
+        ((("cost_seconds_per_evaluation",),), "pairs"),
+    ):
+        with pytest.raises(ValueError, match=match):
+            PlayConfig(mode="match", time=5.0, time_overrides=overrides).validate()
+    PlayConfig(mode="match", time=5.0, time_overrides=(("cost_seconds_per_evaluation", 1.0),)).validate()
 
 
 def test_self_play_takes_no_clock():

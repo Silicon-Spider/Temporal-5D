@@ -9170,3 +9170,12 @@ struck through, where nothing of it is left to apply); the others stand as writt
   - Fixes 2 - M7: the C API's step-API test under each of 6o's switches on a driver-supplied
     clock, the C API's flags and wall clock, Python's driver-clock parity (`run_timed_search`'s new
     `clock`), `ALLOCATORS` against the header, `TimeManager`'s own refusal (7 of 7 mutants killed).
+  - Stopped 2026-11-09 by the weekly limit during M8; resumed 2026-11-23 on the rewritten history
+    (2026-11-16: every id new - fixes 1 and 2 are now 3566c67 and 9630783, E11 6bdd838, E8 f974d0c,
+    main 05afde5 faaa64e; ids in this log from before then are the old ones).
+  - Fixes 3 - M8, L6, L8(a, b, e): `MatchClock::clock`, a `Clock*` seam for match play's clock (the
+    decision run, charged and Guard's re-search bounded by it); the whole-decision charge, the
+    increment, a mid-action flag, the overrun counted, the hard bound binding in the end-to-end
+    games, t5d-play's arm in the record; netplay's flagged work counted, its flag documented, bad
+    `time_overrides` refused; netplay's increment, model clock and mid-action flag tested (12 of 12
+    mutants killed).

@@ -10,6 +10,43 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-23 - E11/E8 review fixes 3: match play's clock accounting pinned, a clock seam for it, netplay brought in line
+
+Review of the E11/E8 change (05afde5..644801c then; faaa64e..f974d0c since the history rewrite of
+2026-11-16), phase 1, findings M8, L6 and L8(a, b, e). Every mutant the findings name is killed on
+this tree (S02, S03, S05, P02, Y07, Y08, Y09; S07 as rewritten for the seam; with the HardBound
+stop deleted, the seam ignored and L6's two: 12 of 12).
+- **The seam (M8)**: `MatchClock::clock` (`t5d/selfplay.hpp`), a `Clock*` in place of the steady
+  clock, null by default (unused with `model_clock`). `play_game` reads the decision's start on it
+  (in place of a steady time point), runs `run_timed` with it, charges the decision by it and
+  bounds Guard's re-search by it; the search gets no in-batch deadline from a clock that is not the
+  steady one (as `run_timed` already did). Nothing changes with it unset.
+- **Tests (`engine/tests/test_timeman.cpp`)**: the whole decision charged on a virtual clock
+  moved by the evaluator and by a step at every read - the clocks' total charge is the clock's
+  advance less one step a decision, so a charge of the search alone (S07) fails it - with the flat
+  arms parting there (L8(e)); the increment credited (S02); a flag mid-action leaves the game at
+  the action's start (S03, a scan of bases for one); the first-decision flag counts its overrun
+  (S05); the end-to-end games run again with the hard bound the plan itself, every decision
+  stopping on it and none charged past it (L8(b) - at the default multiples the overrun count could
+  not fail; with the stop deleted 154 decisions overrun). A comment notes that the model clock
+  makes the two flat arms one behaviour. `ManualClock` gains a step per read.
+- **t5d-play (P02)**: `test_play_exe.cpp` checks the record names the flat arm `--allocator` gave.
+- **netplay (L6)**: the decision's totals (playouts, evaluations, cache hits, batches, the
+  network's seconds) are counted before the clock is charged, so a flagged decision's work counts as
+  in `play_game`; `GameResult`'s `end` and `winner` and `result` name the flag; `PlayConfig.validate`
+  refuses `time_overrides` that are not (name, value) pairs, that name `allocator` or `signals`
+  (`PlayConfig`'s own fields) or a field `t5d_time_params` lacks - a clear `ValueError`, not the
+  keyword clash's `TypeError`.
+- **Python tests (`test_time_management.py`)**: netplay's increment (Y07), its model clock
+  reproducible and charging the model's price (Y08), a flag mid-action leaving the game at the
+  action's start (Y09), the flagged decision's work and overrun counted, the refusals; the
+  tight-clock assertion that could not fail now requires the hard bound (or the search's own stop)
+  and no batch (L8(a): the carried root is visited - "one batch runs" was wrong).
+- **Docs**: the engine README (the seam; the "Tested" paragraph), netplay's module docstring.
+
+Spec: none of the spec changes - match play's clock (§12.3; register E7, issue 456's reading) as
+built; the seam is a test hook. No proposed edit; no measured figure.
+
 ### 2026-11-09 - E11/E8 review fixes 2: the time surface through the C API and Python tested past its defaults
 
 Review of 05afde5..644801c, phase 1, finding M7 (the main loop's decision: the step-API digest

@@ -106,6 +106,11 @@ struct MatchClock {
   /// The model clock (run_timed with no clock): deterministic - for tests and
   /// reproducible runs; the wall clock otherwise.
   bool model_clock = false;
+  /// A clock in place of the steady clock (tests: a virtual one; not owned,
+  /// unused with model_clock): each decision is run (run_timed), charged and
+  /// its Guard re-search bounded by it; the search is given no in-batch
+  /// deadline (that is the steady clock's).
+  Clock* clock = nullptr;
 };
 
 struct PlayParams {

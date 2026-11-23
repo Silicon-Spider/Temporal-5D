@@ -136,7 +136,8 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
   std::array<TimeManager, 2> tms{TimeManager(tp), TimeManager(tp)};
   if (mc.enabled) g.clock_remaining = {mc.base_seconds, mc.base_seconds};
   WallClock wall;
-  Clock* const clock = mc.model_clock ? nullptr : &wall;
+  // The match clock: the steady clock, a test's in its place, or none (the model clock).
+  Clock* const clock = mc.model_clock ? nullptr : mc.clock != nullptr ? mc.clock : &wall;
   SearchBudget verdict_budget;  // no node or time limit: a verdict is a proof (H37)
   verdict_budget.max_bytes = sp.mate_bytes;
   for (;;) {
@@ -202,7 +203,8 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       g.reused_visits += search->node(search->root()).visits;
       Limits limits{params.playouts};
       if (params.max_seconds > 0) limits.seconds = std::max(params.max_seconds - elapsed(), 1e-6);
-      const auto d0 = std::chrono::steady_clock::now();
+      // E11: the decision's start on the match clock (read only when it is charged).
+      const double c0 = mc.enabled && clock != nullptr ? clock->now() : 0.0;
       std::optional<TimedRun> timed;
       if (mc.enabled) {
         // E11: the side's time manager runs the decision on its clock.
@@ -309,8 +311,7 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
         if (timed && clock != nullptr) {
           // E11: no reserve is held for Guard (offline, H42; issue 306) - its
           // re-search draws on what the hard bound leaves.
-          const double left = timed->plan.hard_seconds -
-                              std::chrono::duration<double>(std::chrono::steady_clock::now() - d0).count();
+          const double left = timed->plan.hard_seconds - (clock->now() - c0);
           again.seconds = again.seconds > 0 ? std::min(again.seconds, std::max(left, 1e-6)) : std::max(left, 1e-6);
         }
         search->run(evaluator, again);
@@ -366,9 +367,7 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       if (timed) {
         // E11: the decision charged to the side's clock - its whole wall time
         // (search, choice, verification), or on the model clock its work.
-        const double spent =
-            clock != nullptr ? std::chrono::duration<double>(std::chrono::steady_clock::now() - d0).count()
-                             : timed->seconds;
+        const double spent = clock != nullptr ? clock->now() - c0 : timed->seconds;
         if (spent > timed->plan.hard_seconds) {
           ++g.hard_overruns;
           g.max_overrun_seconds = std::max(g.max_overrun_seconds, spent - timed->plan.hard_seconds);

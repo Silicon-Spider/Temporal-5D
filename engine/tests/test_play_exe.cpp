@@ -11,6 +11,7 @@
 #include <iterator>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #if !defined(_WIN32)
@@ -165,10 +166,12 @@ TEST(play_exe_plays_match_play_on_a_clock) {
   REQUIRE(wall.header("Engine") != nullptr);
   CHECK(wall.header("Engine")->find("clock 4 s + 0.05 s per action (integral allocator, signals on, wall clock)") !=
         std::string::npos);
-  for (const char* arm : {"flat-evals", "flat-wall-clock"}) {
-    play_and_gate({"--match", "--time", "3", "--allocator", arm, "--model-clock", "--cap-turns", "3", "--split",
-                   "flat"},
-                  {});
+  for (const auto& [arm, name] : {std::pair{"flat-evals", "flat_evals"}, std::pair{"flat-wall-clock", "flat_wall_clock"}}) {
+    const t5d::PgnRecord r = play_and_gate(
+        {"--match", "--time", "3", "--allocator", arm, "--model-clock", "--cap-turns", "3", "--split", "flat"}, {});
+    // The arm parsed is the arm named (on the model clock the two flat arms play alike).
+    REQUIRE(r.header("Engine") != nullptr);
+    CHECK(r.header("Engine")->find(std::string("(") + name + " allocator") != std::string::npos);
   }
   const t5d::PgnRecord off = play_and_gate(
       {"--variant", "Very Small - Open", "--match", "--time", "3", "--no-signals", "--model-clock", "--cap-turns", "4"},

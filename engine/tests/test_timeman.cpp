@@ -70,11 +70,17 @@ double dense(double n) {
   return t * (40 * 256 + 4 * t);
 }
 
-// A clock the test moves.
+// A clock the test moves - and, with a step, one that moves at every read.
 class ManualClock final : public Clock {
  public:
   double t = 0;
-  double now() override { return t; }
+  double step = 0;
+  std::uint64_t reads = 0;
+  double now() override {
+    ++reads;
+    t += step;
+    return t;
+  }
 };
 
 // An evaluator that charges a clock for each leaf: `per_eval` seconds at 100
@@ -729,6 +735,10 @@ TEST(timeman_the_proof_hook_is_refused_without_the_proof_channel) {
 
 TEST(timeman_match_play_on_the_clock_end_to_end) {
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  // (On the model clock the two flat arms are one behaviour - the price planned
+  // is the price paid - so this loop runs it twice; they part where the prices
+  // differ: timeman_6os_three_arms, the C API's step-API test and
+  // timeman_match_play_charges_the_whole_decision_on_its_clock.)
   for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
     for (const Allocator arm : {Allocator::Integral, Allocator::FlatEvals, Allocator::FlatWallClock}) {
       PlayParams p;
@@ -747,9 +757,20 @@ TEST(timeman_match_play_on_the_clock_end_to_end) {
       const GameRecord g = play_game(start, *uniform, p);
       CHECK(g.end == GameEnd::TurnCap || g.end == GameEnd::Checkmate || g.end == GameEnd::Stalemate);
       CHECK_EQ(g.timed_decisions, g.decisions);
-      CHECK_EQ(g.hard_overruns, std::uint64_t{0});
       CHECK(g.clock_remaining[0] > 0);
       CHECK(g.clock_remaining[1] > 0);
+      // The hard bound held where it binds (review L8(b): at the default
+      // multiples the plan ends every decision first, so an overrun count of 0
+      // there says nothing): the same game with the hard bound the plan itself -
+      // every decision then stops on it, and none is charged past it (without
+      // the stop, 154 of these decisions would be).
+      PlayParams tight = p;
+      tight.clock.time.hard_multiple_low = 1;
+      tight.clock.time.hard_multiple_high = 1;
+      const GameRecord t = play_game(start, *uniform, tight);
+      CHECK(t.time_stops[static_cast<std::size_t>(TimeStop::HardBound)] > 0);  // the premise
+      CHECK_EQ(t.hard_overruns, std::uint64_t{0});
+      CHECK_EQ(t.max_overrun_seconds, 0.0);
       // Every action legal, and the record replays to the final state.
       GameState s = g.start;
       MoveList scratch;
@@ -786,6 +807,12 @@ TEST(timeman_match_play_on_the_clock_end_to_end) {
   CHECK(flag.end == GameEnd::Flag);
   CHECK_EQ(flag.winner, 1);
   CHECK(flag.actions.empty());
+  CHECK_EQ(flag.decisions, std::uint64_t{1});
+  // Its hard bound is 0 s (a quarter of nothing left), and the batch a move
+  // needs costs its work: an overrun, counted.
+  CHECK_EQ(flag.hard_overruns, std::uint64_t{1});
+  CHECK(flag.max_overrun_seconds > 0);
+  CHECK(flag.final_state == flag.start);
   CHECK_EQ(flag.result(), std::string("*"));
   CHECK_EQ(flag.white_score(), 0.0);
   // Self-play takes no clock (its budgets are PCR's).
@@ -821,6 +848,93 @@ bool same_plan(const TimePlan& a, const TimePlan& b) {
 }
 
 }  // namespace
+
+TEST(timeman_match_play_credits_the_increment) {
+  // Fischer's increment (issue 456's reading): a side's clock gains it after
+  // each of its actions. At 2 s and 10 s an action, both clocks end above the
+  // base - an action's charge is below the base, or its side would have flagged.
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  PlayParams p;
+  p.search = quiet_params();
+  p.match_play = true;
+  p.turn_cap.turns = 3;
+  p.clock.enabled = true;
+  p.clock.model_clock = true;
+  p.clock.base_seconds = 2;
+  p.clock.increment_seconds = 10;
+  p.clock.time.cost_seconds_per_evaluation = 1.0;
+  const GameRecord g = play_game(variant("Standard"), *uniform, p);
+  CHECK(g.end != GameEnd::Flag);
+  CHECK(g.actions.size() >= 2);
+  CHECK(g.clock_remaining[0] > p.clock.base_seconds);
+  CHECK(g.clock_remaining[1] > p.clock.base_seconds);
+}
+
+TEST(timeman_a_flag_mid_action_leaves_the_game_at_the_actions_start) {
+  // A flag after the action's first decision (a move played, the submit still
+  // to choose): the action is not recorded, and the game is back at its start -
+  // the record's replay. The bases are scanned for such a flag (at 1 s an
+  // evaluation, White's first decision costs about 0.44 s).
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  int found = 0;
+  for (int i = 1; i <= 80 && found == 0; ++i) {
+    PlayParams p;
+    p.search = quiet_params();  // the board-move split: a decision a move, one the submit
+    p.match_play = true;
+    p.turn_cap.turns = 2;
+    p.clock.enabled = true;
+    p.clock.model_clock = true;
+    p.clock.base_seconds = 0.05 * i;
+    p.clock.time.cost_seconds_per_evaluation = 1.0;
+    const GameRecord g = play_game(variant("Standard"), *uniform, p);
+    if (g.end != GameEnd::Flag) continue;
+    std::uint64_t recorded = 0;
+    for (const std::vector<Move>& a : g.actions) recorded += a.size() + 1;
+    if (g.decisions - recorded < 2) continue;  // flagged at its action's first decision
+    ++found;
+    GameState s = g.start;
+    for (const std::vector<Move>& a : g.actions) {
+      for (const Move& m : a) s.apply(m);
+      s.submit();
+    }
+    CHECK(g.final_state == s);
+  }
+  CHECK(found > 0);  // the premise
+}
+
+TEST(timeman_match_play_charges_the_whole_decision_on_its_clock) {
+  // MatchClock::clock, the seam (review M8): a virtual clock in place of the
+  // steady one, moved by the evaluator (three times the prior's price a leaf)
+  // and by a step at every read - so the reads after the search (the choice,
+  // the verification, the charge itself) show in the charges. Every read is
+  // inside a decision and a decision is charged from its first read to its
+  // last, so the two clocks together were charged the clock's whole advance
+  // less one step a decision; charging the search alone would leave out two
+  // more steps a decision.
+  const double base = 5;
+  std::vector<GameRecord> games;
+  for (const Allocator arm : {Allocator::Integral, Allocator::FlatEvals, Allocator::FlatWallClock}) {
+    ManualClock clock;
+    clock.step = 1e-3;
+    ChargingEvaluator ev(clock, 3 * TimeParams{}.cost_seconds_per_evaluation);
+    PlayParams p;
+    p.search = quiet_params();
+    p.match_play = true;
+    p.turn_cap.turns = 3;
+    p.clock.enabled = true;
+    p.clock.clock = &clock;
+    p.clock.base_seconds = base;
+    p.clock.time.allocator = arm;
+    const GameRecord g = play_game(variant("Standard - Two Timelines"), ev, p);
+    CHECK(g.timed_decisions > 0);
+    CHECK_EQ(g.timed_decisions, g.decisions);
+    const double charged = 2 * base - g.clock_remaining[0] - g.clock_remaining[1];
+    CHECK(near(charged, clock.t - static_cast<double>(g.timed_decisions) * clock.step, 1e-9));
+    games.push_back(g);
+  }
+  // The flat arms part on a clock whose price is not the plan's (review L8(e)).
+  CHECK(games[1].clock_remaining != games[2].clock_remaining);
+}
 
 TEST(timeman_e8_off_is_e7_bit_for_bit) {
   // With the flag off, an effort distribution given or not, every plan is E7's;

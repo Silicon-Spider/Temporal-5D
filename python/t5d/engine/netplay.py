@@ -40,8 +40,8 @@ mirrors the engine's ``play_game`` (``src/selfplay.cpp``; ``t5d-play``) step for
   of fixed playouts - 6o's arms by ``allocator`` and ``signals``; a decision charged its whole wall
   time (search, choice, verification), or on ``model_clock`` its work at the cost model's price
   (deterministic). A side whose clock runs out loses on time (``end`` "flag", result ``*``: the
-  clock is the match's convention, not a rule), as the engine's ``play_game`` does. Self-play
-  takes no clock.
+  clock is the match's convention, not a rule), as the engine's ``play_game`` does - the flagged
+  decision's work counted in the totals. Self-play takes no clock.
 * **A move is played only once known legal**: a chosen child the legality budget left
   unknown is classified exactly first (``Search.verify``) - illegal, it is removed and the
   choice made again; still unknown, the most visited child known legal is played. Every
@@ -87,6 +87,7 @@ from .capi import (
     T5D_SPLIT_BOARD_MOVE,
     T5D_SPLIT_FLAT,
     T5D_SPLIT_TREE,
+    CTimeParams,
     find_library,
 )
 from .convert import relations_for
@@ -191,6 +192,14 @@ class PlayConfig:
             raise ValueError("the clock is match play's: self-play's budgets are PCR's (section 12.5), never a clock's")
         if self.allocator not in ALLOCATORS:
             raise ValueError(f"allocator must be one of {sorted(ALLOCATORS)}")
+        fields = {name for name, _ in CTimeParams._fields_}
+        for entry in self.time_overrides:
+            if not (isinstance(entry, tuple) and len(entry) == 2 and isinstance(entry[0], str)):
+                raise ValueError(f"time_overrides: (field name, value) pairs, not {entry!r}")
+            if entry[0] in ("allocator", "signals"):
+                raise ValueError(f"time_overrides: {entry[0]!r} is PlayConfig.{entry[0]}'s, not an override")
+            if entry[0] not in fields:
+                raise ValueError(f"time_overrides: t5d_time_params has no field {entry[0]!r}")
 
 
 @dataclass
@@ -200,8 +209,8 @@ class GameResult:
     config: PlayConfig
     record: str
     actions: list[list[Move]]
-    end: str  # "checkmate", "stalemate", "turn_cap", "unknown", "action_limit"
-    winner: int | None  # 0 white, 1 black (checkmate only)
+    end: str  # "checkmate", "stalemate", "turn_cap", "unknown", "action_limit", "flag" (E11: lost on time)
+    winner: int | None  # 0 white, 1 black (checkmate; or a flag: the side whose clock still ran)
     decisions: int = 0
     playouts: int = 0
     evaluations: int = 0  # leaves the network evaluated (the cache's hits not counted)
@@ -234,7 +243,8 @@ class GameResult:
     @property
     def result(self) -> str:
         """The 5dpgn result: ``1-0``, ``0-1``, ``1/2-1/2`` (stalemate) or ``*`` (not ended by
-        the rules - the turn cap included, which self-play scores as a draw)."""
+        the rules - the turn cap included, which self-play scores as a draw, and a flag, which is
+        the match's convention, scored for the other side)."""
         if self.end == "checkmate":
             return "1-0" if self.winner == 0 else "0-1"
         if self.end == "stalemate":
@@ -486,6 +496,15 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                     res.decision_log.append(_decision_entry(game, search, pick, len(res.actions), res.decisions, action, start.even))
                 after = search.info()
                 res.decisions += 1
+                # The decision's work, counted before the clock is charged: a flagged decision's too
+                # (as the engine's play_game counts it).
+                res.playouts += after.playouts - before.playouts
+                res.evaluations += after.evaluations - before.evaluations
+                res.cache_hits += after.cache_hits - before.cache_hits
+                res.batch_sizes.extend(stats.batch_sizes)
+                res.network_seconds += stats.evaluate_seconds
+                res.collect_seconds += stats.collect_seconds
+                res.deliver_seconds += stats.deliver_seconds
                 if timed is not None:
                     # The decision charged to the side's clock: its whole wall time, or its model time.
                     spent = timed.seconds if cfg.model_clock else time.perf_counter() - d0
@@ -495,13 +514,6 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                     if res.clock_remaining[mover] <= 0:
                         flagged = True  # the side's flag fell during its action: not recorded
                         break
-                res.playouts += after.playouts - before.playouts
-                res.evaluations += after.evaluations - before.evaluations
-                res.cache_hits += after.cache_hits - before.cache_hits
-                res.batch_sizes.extend(stats.batch_sizes)
-                res.network_seconds += stats.evaluate_seconds
-                res.collect_seconds += stats.collect_seconds
-                res.deliver_seconds += stats.deliver_seconds
                 child = search.child(pick)
                 submitted = False
                 if cfg.split == "flat":

@@ -4239,7 +4239,9 @@ verification of a chosen move - or on the model clock its work at the model's pr
 whose clock runs out loses on time: `GameEnd::Flag`, the action under way not recorded,
 result `*` (the clock is the match's convention, not a rule), scored for the other side.
 `GameRecord` counts each side's time left, the stops by kind, the extensions and the
-decisions charged more than their hard bound.
+decisions charged more than their hard bound. `MatchClock::clock` puts a clock in place of the
+steady one (tests: a virtual clock): the decisions are run, charged and Guard's re-search
+bounded by it, and the search is given no in-batch deadline (that is the steady clock's).
 
 Tested (`tests/test_timeman.cpp`, `tests/test_capi_search.cpp`, `tests/test_play_exe.cpp`,
 `python/tests/engine/test_time_management.py`): §8.6's table and the plans by hand (the
@@ -4266,10 +4268,16 @@ Python building `run_timed`'s tree, on the model clock and on an elapsed time th
 supplies under each of 6o's switches (the integral arm with the signals on and off, both flat
 arms - which that clock tells apart); the C API's switches, its flags (`wont_resolve`,
 `converged`) and its wall clock (the scale measured); Python's `ALLOCATORS` the header's
-constants, and `TimeManager`'s own refusal of the proof hook; the cost shape equal to `net/cost.py`'s `dense_flops` at
-three board counts (Python); match play on a clock under each arm (legal, replayed by
-the reader and the gate), a flag, self-play refused; the proof hook refused without the
-proof channel, in C++, C and Python.
+constants, and `TimeManager`'s own refusal of the proof hook; the cost shape equal to
+`net/cost.py`'s `dense_flops` at three board counts (Python); match play on a clock under each
+arm (legal, replayed by the reader and the gate) and with the hard bound the plan itself (every
+decision stopped on it, none charged past it), the increment credited, a flag at the first
+decision (its overrun counted) and one mid-action (the game back at the action's start), the
+whole decision charged on a virtual clock (through `MatchClock::clock`: the reads after the
+search included; the flat arms parting there), self-play refused; t5d-play's `--allocator`
+named in the record; netplay's increment, its model clock (reproducible, the model's price
+charged), a flag mid-action, a flagged decision's work counted and bad `time_overrides`
+refused; the proof hook refused without the proof channel, in C++, C and Python.
 
 ## 5DFEN
 
