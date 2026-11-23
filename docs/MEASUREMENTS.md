@@ -2083,3 +2083,118 @@ require: illegality proofs one exhaustive search per move (Q3's position), and a
 points that no creation order realises, judged one by one because the abstract check gives up
 at its step limit (4,096) on nearly every box. What would change them is algorithmic (issue
 407); whether the play loop's exact steps should carry a node budget is a decision (issue 408).
+
+### The cached path at engine roots - C3's anchor (issue 259) (numerics; no threshold, no verdict)
+
+**What it is.** How often a search root's pseudo-legal and legal move lists differ - where C3's root
+refresh, anchored on `Game.position`'s default (pseudo-legal) expansion before issue 259, read
+another move graph than the root leaf - and what it cost the root leaf's evaluation, which section
+7.9 makes the dense pass. Recorded so that issue 259's fix has its evidence beside it.
+
+**Conditions.** 2026-11-08, machine `dev-r`, PyTorch 2.13.0+cpu, Python 3.14.7, NumPy 2.5.2, 2 torch
+threads, the engine library built Release in `lane/net` (main d6cbdb7); FP32, 2 layers, the v1
+configuration under the block-causal scope, random weights at initialisation scale. Roots: the
+first live turn start with 8 boards or more of seeded pseudo-legal random play
+(`test_cached_variants._walk`, seeds 5-24), the search's default legality budget (64 checks, 2,000
+nodes - here the same lists as exact). Gaps: the largest absolute difference over the root leaf's
+move, WDL and categorical logits between the cached path with C3's root refresh (one playout
+through the C step API, ply / tree / flat alike) and `NetworkEvaluator(scope="dense")` on the same
+leaf, at the first root of `_differing_root` (Two Timelines seed 23, 8 boards; Timeline Battleground
+seed 8, 11 boards), model seed 5 (C20's `causal_past`) and 6 (`past_and_epoch_history`).
+
+| Variant | Roots whose two lists differ | Moves, pseudo-legal / legal, where they differ |
+|---|---|---|
+| Standard - Two Timelines | 1 of 20 | 52 / 50 |
+| Misc - Timeline Battleground | 9 of 20 | 114/112, 89/78, 89/54, 86/59, 87/79, 72/71, 94/91, 152/150, 87/86 |
+
+| Root leaf against the dense pass | Two Timelines (R2 / R1) | Timeline Battleground (R2 / R1) |
+|---|---|---|
+| Anchored on the pseudo-legal expansion (main before issue 259) | 1.09e-4 / 2.37e-5 | 3.57e-4 / 4.47e-5 |
+| Anchored at the root leaf's input (the fix) | 4.77e-7 / 4.47e-7 | 8.34e-7 / 7.75e-7 |
+
+*Read.* With the anchor right, the root leaf is the dense pass to its summation order (under 1e-6);
+anchored wrong it misses by 24-460x that, sometimes under the 1e-4 FP32 tolerance the step-API tests
+used - which is why MT-04 did not see it, and why the new test bounds the root leaf at 1e-5. The
+two lists differ where a pseudo-legal move would leave a royal capturable, far more often on
+Timeline Battleground's crowded 5x5 boards (three timelines from the start) than on Two Timelines.
+
+### The phase form (C26) through the C step API - the gaps met, and the dense pass's last bits (numerics; no threshold, no verdict)
+
+**What it is.** The figures behind section 15.2's C26 row as built (`python/tests/engine/test_phase_form.py`,
+`python/tests/net/test_phase_form.py`; BUILD_LOG issues 260-266): how far the phase form's cached
+half is from its references, how far the two modes are apart, and why the dense half must be the
+dense evaluator itself (issue 262).
+
+**Conditions.** 2026-11-08/09, machine `dev-r` (loaded: another lane's test suite ran beside these),
+PyTorch 2.13.0+cpu, Python 3.14.7, NumPy 2.5.2, 2-3 torch threads, the engine library built Release in
+`lane/net` (main d6cbdb7 + issue 259's fix); FP32, 2 layers, the v1 configuration under the
+block-causal scope, random weights at initialisation scale, model seeds 0-6; the verification ladder
+off in every search. Roots: `test_cached_variants._search_root` (random play's first live turn start
+with 8 boards or more) on Two Timelines, Timeline Battleground and Very Small - Open, and every engine
+variant for the dense half; N\* the root's boards + 1 or + 3 (dense) and the root's boards or - 2
+(cached); 12-24 playouts a search, batches of 8 leaves. Games: `netplay`'s small network made
+block-causal, N\* = the start's boards + 3.
+
+| Quantity | Largest (or smallest, where marked) | Bound |
+|---|---|---|
+| Rooted under N\*: the phase form's search against the dense search (digest, counts, every evaluation) | bitwise equal, every arm | bitwise |
+| Rooted at or above N\*: a cached leaf against the two-level reference anchored at the root (logits) | 1.31e-6 | 1e-4 |
+| ... the root leaf against the dense pass (issue 259's anchor) | 9.54e-7 | 1e-4; 1e-5 (`ROOT_DENSE_BOUND`) from 2026-11-23 |
+| ... a search's non-root leaves against the dense pass (the smallest search maximum) | 1.33e-1 (smallest) | above 1e-3 |
+| ... every non-root leaf against the dense pass (the smallest over every leaf; 2026-11-23) | 5.35e-2 (smallest) | above 1e-3, per leaf |
+| A carried graph search across N\*: a carried node reached after the crossing by a cached path - its WDL against the dense pass's, and against the cached path's evaluation of the same state (2026-11-23; BUILD_LOG issue 264) | 1e-6 (largest); 1.3e-3 to 5.0e-3 | - |
+| The dense pass: a position alone against in a batch of four (logits; 3 seeds x 4 synthetic positions of 9-17 boards) | 1.13e-6 | - |
+| The dense pass: grad against no-grad, alone | 1.37e-6 | - |
+| The dense pass: the same batch twice | 0 (bitwise) | - |
+
+*Added 2026-11-23 (C26/C27's review round; the same machine, loaded - other lanes' tests running -
+PyTorch 2.13.0+cpu, Python 3.14.7, NumPy 2.5.2, 3 torch threads, the engine built in `lane/net` on
+main 4e9267e).* The per-leaf row is the smallest gap met by R6b's 18 searches and R6c's, now asserted
+per leaf (the review's own probe of the 18: 5.36e-2, on Very Small - Open, seed 1). The graph row:
+the ply split with `graph=1`, N\* the root's boards + 1, 256 playouts before the crossing and 128 after
+it, model and search seeds (6, 3) and (7, 4) on Timeline Battleground, Very Small - Open and Two
+Timelines; 3 of the 6 carried searches met such a node (nine links in all), the WDLs compared as
+probabilities (the engine's `network_wdl` and the softmax of each evaluation's logits).
+
+*Read.* Under N\* the phase form is the dense search itself, so its figure is equality, not a gap.
+At or above N\* the cached leaves sit on their references at the summation-order level, as MT-04's
+do, while they differ from the dense pass by a tenth or more - the modes are far apart, so a search
+that mixed them per node would be a different search (the per-node-switch mutant always is). The
+dense pass is not a function of the position alone in its last bits (about 1e-6 here, with the batch
+or the grad mode), which is why the phase form's dense mode is the dense evaluator itself, batch for
+batch, and why §15.2's row is proposed reworded (edit 380).
+
+### Refresh and supersession inside a turn (C27) - the deferral's gaps (numerics; no threshold, no verdict)
+
+**What it is.** The figures behind section 15.2's C27 row as built (`python/tests/net/test_turn_refresh.py`,
+`python/tests/engine/test_cached_tree_form.py`; BUILD_LOG issues 267-271): how far the deferred
+recompute's evaluations are from their from-scratch references. Between the two arms - recompute
+at the next evaluated node and recompute at supersession - nothing is measured: they are bit for
+bit equal in every case (the entries are content-addressed and computed by one function).
+
+**Conditions.** 2026-11-09, machine `dev-r` (loaded: another lane's test suite ran beside these),
+PyTorch 2.13.0+cpu, Python 3.14.7, NumPy 2.5.2, 4 torch threads, the engine library built Release in
+`lane/net`; FP32, 2 layers, the v1 configuration under the block-causal scope, random weights at
+initialisation scale. Fixture: `test_cache.py`'s seven geometries, seeds 0-2, both C20 readings, the
+lineage and two-parent readings (and, for evaluations alone, the creation reading and current frozen
+features), causal, root-refresh and node-refresh epochs, paths of 9-15 moves with inner segments of
+1-4 nodes. Engine: every variant's random play to 12 boards (seeds 0 and 1), turn starts evaluated
+and, by marking, the present gate's state or half the mid-action states; the step API's tree form at
+two random-play roots (natural gates and none; 40 playouts; against the every-gate search's 160),
+causal, root refresh and C26's cached half; the flat form, 24 playouts.
+
+| Quantity | Largest | Bound |
+|---|---|---|
+| Fixture: an evaluated node against its reference, trunk (max abs) | 1.91e-6 | 2e-5 |
+| ... heads (value, WDL, policy) | 1.55e-6 | 1e-4 |
+| Real actions: an evaluated state against its reference, trunk | 1.79e-6 | 2e-5 |
+| ... heads | 1.43e-6 | 1e-4 |
+| The step API's tree and flat forms: a leaf against its reference (move, WDL, categorical logits) | 1.43e-6 | 1e-4 |
+| Deferred against eager, every evaluation and every shared entry | 0 (bitwise) | bitwise |
+
+*Read.* The deferred recompute costs nothing in accuracy: every gap is the cached path's own
+summation-order level (MT-04's figures), and the two arms never differ in a bit. What the deferral
+changes is when a board is computed - at the next evaluated node, once per board, perspective and
+epoch - and how many: a board superseded inside a turn and never read by an evaluated node (an
+eager entry the turn's next evaluated nodes do not read, as after the present moves under the
+current frozen features) is never computed.
