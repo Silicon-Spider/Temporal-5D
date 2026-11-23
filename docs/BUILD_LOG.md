@@ -400,7 +400,9 @@ locally before each merge, nightly included when a truth source changes.
 **Now** - four lanes, each a git worktree under `.claude/worktrees/` on its own branch,
 pushed after every commit, taking main by merge, never rebase (re-check with `git branch
 -a -vv` and `git log main..origin/lane/<lane>`):
-- `lane/gate` - MT-04 and G9 merged. **H52, Kairos (2026-10-23, merged 2026-10-24 with its review fixes):** pinned at
+- `lane/gate` - (2026-11-23: the branch holds nothing main lacks - its tip 65c14a4 is on main; its
+  deletion from GitHub was asked for and is the user's to do; the lane's next work starts from main.)
+  MT-04 and G9 merged. **H52, Kairos (2026-10-23, merged 2026-10-24 with its review fixes):** pinned at
   `8bfea4a6e8d1`, its query surface confirmed and recorded in `PROVENANCE.md`, its Rust
   toolchain (1.99.0) fetched by `build --bootstrap`, its driver and two sources (`kairos`,
   `kairos:naive`) built and smoke-tested - wired, enabled in no tier (issues 524-533,
@@ -429,12 +431,13 @@ pushed after every commit, taking main by merge, never rebase (re-check with `gi
   issues 177-197, 450-451, edits 137-146, 330); next E11 (E7 with 6o's arms, no root-scan
   reserve while Guard is offline - issue 306) and E8 behind its flag, then MT-03's
   settling-scan part.
-- `lane/audit` (from main 01ebbe5, 2026-11-01) - the done-means audit merged (2026-11-08): section 15.2 row by row, section 15.4 invariant by invariant, the committed-class rows and section 15.5 clause by clause, checked adversarially by a five-agent workflow and corrected (section "Done-means audit"; issues 535-538, edits 364-366).
-- `lane/fix535` (from main d8a54d3, 2026-11-02) - issue 535: the flat form and the graph's node creation made exception-safe under an allocation failure (false exhaustion, a partial append, a stranded node), in progress.
+- `lane/audit` (from main 01ebbe5, 2026-11-01) - the done-means audit merged (2026-11-08): section 15.2 row by row, section 15.4 invariant by invariant, the committed-class rows and section 15.5 clause by clause, checked adversarially by a five-agent workflow and corrected (section "Done-means audit"; issues 535-538, edits 364-366). The branch holds nothing main lacks (2026-11-23: its tip 7f79f9b is on main); its deletion from GitHub was asked for and is the user's to do.
+- `lane/fix535` (from main d8a54d3, 2026-11-02) - issue 535: the flat form and the graph's node creation made exception-safe under an allocation failure (false exhaustion, a partial append, a stranded node), with its review round (issue 600) - merged 2026-11-23 (b77c4ca, on the PR branch for main; session log). For the main loop: issue 603's build flag, then issue 604.
 - `lane/net` - A5 (piece-centric tokens, dense scope only, behind its flag, off) merged with
   its review fixes (2026-11-02; issues 244-258, edits 190-199): no 2x flag stands under
-  CHECKPOINT 9's phase form. Next: C26/C27 (low priority, the cached path behind its flag),
-  then the v1 re-run of §15.2's network rows (the audit's list).
+  CHECKPOINT 9's phase form. C26/C27 behind their flags (issues 259-275, edits 380-384) reviewed
+  and merged 2026-11-23 (be01cdb, on the PR branch for main; the review's four LOW findings in the
+  session log). Next: the v1 re-run of §15.2's network rows (the audit's list).
 - G9, the bounded AMD attempt - done (`lane/gate`, merged 2026-10-23): it partly works -
   the network on the RX 9070 XT (ROCm 10.1.0, torch 2.14.0, `build/venv-rocm`) matches the
   CPU and drives the search through the C API; torch.compile does not run (no Windows
@@ -9370,3 +9373,60 @@ struck through, where nothing of it is left to apply); the others stand as writt
   `engine/testdata/hunt-truth/` (that commit is now `b1d0ca9`). The user holds the table of old
   and new ids. The brief's rule stands: a session never force-pushes or rewrites pushed history.
   Documents only: no code, no test, nothing the gate covers.
+- **2026-11-23 - `lane/fix535` and `lane/net` merged for main; `lane/audit` and `lane/gate` found
+  empty** (the branch of pull request Silicon-Spider/Temporal-5D#2, for main; the user asked for
+  the old branches to be cleared and those with new work merged, `lane/net` reviewed first).
+  - **The branches, against main af0c19b.**
+    - `lane/audit` (7f79f9b) and `lane/gate` (65c14a4): no commit main lacks; each tip is on
+      main. Deleting them from GitHub was refused by this session's permissions (a session pushes
+      only to its own branch), so it is the user's to do; either can be restored from its id.
+    - `lane/fix535`: 16 commits of its own, review round done.
+    - `lane/net`: 6 commits of its own, not reviewed.
+    - `lane/engine`: 8 commits of its own, mid-way through the review of 65c14a4..e8cbfa3 (the
+      nightly gate and the long twins owed at the round's end).
+    - `lane/search`: 4 commits of its own; its phase 2 waits for `lane/engine` on main.
+    - Both `lane/engine` and `lane/search` carry a `LegalityOptions::deadline`. They conflict in
+      `legal.hpp`, `legal.cpp`, `mcts.cpp` and `selfplay.cpp`, which is phase 2's reconciliation
+      (M2). Both were being pushed to on 2026-11-23, so neither was merged.
+  - **`lane/fix535` merged** (b77c4ca), no conflict.
+    - Checks on the merged tree: engine `--werror --test` 718 of 718 (g++ 13.3, 4 cores, no
+      warning); verify ok (the 17 known `proof-channel-vacuous` notes, H48); ruff clean.
+    - The engine-driving pytest files (`tests/engine`, `tests/train/test_records.py`,
+      `test_steering.py`; `T5D_REQUIRE_ENGINE=1`, torch 2.13.0+cpu as CI) were stopped at 52
+      passed, 0 failed: too slow on 4 cores to finish alongside the rest.
+    - CI on b77c4ca, push and pull request: the network job's eight shards green (the whole
+      Python suite), the commit tier green, both compilers' engine builds green on the push.
+    - The pull request's g++-13 engine job was cancelled at the job's 30-minute limit, every test
+      passed up to that point. Since issue 535's fault sweeps the job takes about 23.5 minutes on
+      a runner, against 16-20 before, so `.github/workflows/engine.yml`'s limit is now 45.
+    - No Lazy SMP run owed: `prover.cpp` and `scanner.cpp` are unchanged.
+  - **`lane/net` reviewed** before its merge, by reading; torch was not installed for the
+    reviewer. The default path with every new flag off is unchanged. `CacheConfig.mode` is the
+    one runtime predicate, and its N\* boundary (dense below, cached at or above) is tested on
+    both sides. C27's deferral is exact. Issue 271 is complete. The "bit for bit" tests compare
+    exactly. No HIGH or MEDIUM finding; four LOW findings, for the main loop:
+    - **LOW-1:** issue 259 can recur through `CachedNetworkEvaluator.start`'s shortcut
+      (`engine/evaluator.py`, `epoch.anchor == state_digest(state)`): `state_digest` omits the
+      moves and edges. So two searches from one root, under different legality settings, share an
+      epoch anchored on the other move graph. This is the lane's issue 274. No caller does it
+      today. The fix: a digest of the anchor's input, moves and edges included.
+    - **LOW-2:** the "93 cases bit for bit" evidence (2fc9d59) is an uncommitted probe; commit it,
+      or a reduced form of it, as a test.
+    - **LOW-3:** `tests/net/test_turn_refresh.py`'s
+      `test_with_every_node_evaluated_the_fixture_is_what_it_was` compares two runs of the new
+      code, so it cannot see a change from the old fixture. The unchanged `test_complexity` and
+      `test_cache` back that claim.
+    - **LOW-4:** `t5d/engine/token_counts.py`'s `phase_form` (already on main) is a second copy
+      of the predicate (`n < n_star`). It could route through `CacheConfig(...).mode(n)`.
+  - **`lane/net` merged** (be01cdb). Conflicts only in `CHANGELOG.md` and this file, both sides
+    kept: the 2026-11-17 commit-id entries once (the same text on both lanes, checked), the Lazy
+    SMP table, M17's and section 15.2's lines, and the session log. The merge adds exactly the
+    lane's own lines to both files. No engine source changed.
+    - Checks on the combined tree: ruff clean (all 117 files); verify ok; gate commit ok (oracle
+      layer ok, ftxi 8256/8256, notation 3012/3012; engine differential smoke test passed,
+      baseline 41 compared, 0 declined; calibration 1.53x; proof channel DISABLED).
+    - The whole Python suite runs in CI's network job on the push.
+  - For the user: delete `lane/audit` and `lane/gate` on GitHub if wanted; merge pull request
+    Silicon-Spider/Temporal-5D#2.
+  - For the main loop: the review's four LOW findings above; issue 603's build flag and then
+    issue 604; `lane/engine`, then `lane/search` with the deadline reconciliation.

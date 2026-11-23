@@ -10,6 +10,39 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-23 - `lane/fix535` and `lane/net` merged for main; the engine CI job's time limit raised to 45 minutes
+
+The user asked for the old branches to be cleared and the ones with new work merged. On the
+branch of pull request Silicon-Spider/Temporal-5D#2, for main:
+
+- **`lane/fix535` merged** (57e797c; b77c4ca): issue 535's fix and its review round. Its own
+  entries are below.
+- **`lane/net` merged** (6754794; be01cdb): C26 and C27 behind their flags, with section 15.2's
+  rows 6 and 7. Its own entries are below. It was reviewed first, as the user asked (2026-11-23,
+  by reading). The review found no HIGH and no MEDIUM finding, and four LOW, none blocking; they
+  are recorded in `docs/BUILD_LOG.md`'s session log for the main loop:
+  - issue 259 can recur through `start`'s epoch shortcut (the lane's issue 274);
+  - the "93 cases bit for bit" evidence is not committed as a test;
+  - one test cannot fail for the claim its name makes;
+  - `token_counts.phase_form` is a second copy of the dense/cached predicate.
+- **Conflicts.** The two lanes conflicted only in this file and the build log, and both sides
+  are kept. The 2026-11-17 commit-id entry is kept once: both lanes carried the same text.
+- **Not merged.** `lane/engine` is mid-way through a review round, and its nightly gate is
+  owed. `lane/search`'s phase-2 fixes wait for `lane/engine` on main and for the two deadline
+  mechanisms to be reconciled. Both lanes were being pushed to on 2026-11-23.
+- **`lane/audit` and `lane/gate`** hold nothing main lacks. Their deletion from GitHub was asked
+  for; this session's permissions do not allow it, so it is the user's to do.
+- **`.github/workflows/engine.yml`: the time limit is 45 minutes, up from 30.** The pull
+  request's g++-13 job was cancelled at 30 minutes with every test passed up to that point; the
+  same commit's push run passed in about 23.5 minutes. Since issue 535's fault sweeps, the
+  engine job takes about 23.5 minutes on a runner (`lane/fix535`'s own run, 2026-11-17), against
+  16-20 minutes before. That is too close to 30 for a slow runner. No test, budget or check
+  changes.
+- **`docs/BUILD_LOG.md`:** the lane lines and a session-log entry with the checks.
+
+Spec: none - merges (the merged entries carry their own `Spec:` lines) and a CI time limit; no
+part of the spec describes either. The review's findings propose no spec edit.
+
 ### 2026-11-17 - Cited commit ids follow the history rewrite of 2026-11-16
 
 On 2026-11-16 the user had the history of `main` and of every lane rewritten and pushed again, so

@@ -21,7 +21,9 @@ concurrency:
 jobs:
   build-and-test:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # The build and the 718 tests take about 24 minutes on a runner (issue 535's
+    # fault sweeps added some 3-4); 45 leaves room for a slow runner.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
