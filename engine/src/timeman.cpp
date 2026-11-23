@@ -660,7 +660,10 @@ TimedRun run_timed(Search& search, Evaluator& evaluator, TimeManager& tm, const 
   struct DeadlineReset {
     Search& s;
     std::optional<std::chrono::steady_clock::time_point> held;
-    ~DeadlineReset() { s.set_deadline(held); }
+    ~DeadlineReset() {
+      s.set_deadline(held);
+      s.unlift_root_listing();
+    }
   } reset{search, held};
   std::optional<std::chrono::steady_clock::time_point> hard;
   if (clock != nullptr && clock->steady()) {
@@ -691,12 +694,20 @@ TimedRun run_timed(Search& search, Evaluator& evaluator, TimeManager& tm, const 
       }
       if (cap) slice.seconds = std::max(std::chrono::duration<double>(time_left(*cap)).count(), 1e-6);
       // The exception (a move needs a visit): until a root child has one, the
-      // slice runs without the hard bound inside it, so that the root's listing
-      // and classification complete (the E11 review's M1: a cut listing would
-      // leave a root with nothing to choose) - the caller's cap still holds.
+      // root's own listing runs without the hard bound - under the caller's
+      // deadline (and cap) - so that it completes (the E11 review's M1: a cut
+      // listing would leave a root with nothing to choose); every other call
+      // in the slice keeps the bound (S4: the children's checks and
+      // classifications, a verification).
       const std::vector<RootChild> children = search.root_children();
       const bool forced = std::none_of(children.begin(), children.end(), [](const RootChild& c) { return c.visits > 0; });
-      if (hard) search.set_deadline(forced ? held : hard);
+      if (hard) {
+        if (forced) {
+          search.lift_root_listing(held);
+        } else {
+          search.unlift_root_listing();
+        }
+      }
       const StopReason r = search.run(evaluator, slice);
       if (r != StopReason::Playouts && r != StopReason::Evaluations) {
         out.search_stop = r;

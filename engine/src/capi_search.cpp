@@ -1014,6 +1014,21 @@ t5d_status t5d_search_set_deadline_at(t5d_search* search, int64_t steady_ns, cha
   });
 }
 
+t5d_status t5d_search_lift_root_listing(t5d_search* search, int32_t lifted, int64_t steady_ns, char** error) {
+  return guarded(error, [&]() -> t5d_status {
+    if (search == nullptr) throw std::invalid_argument("search is NULL");
+    if (lifted == 0) {
+      search->search.unlift_root_listing();
+    } else if (steady_ns == T5D_NO_DEADLINE) {
+      search->search.lift_root_listing(std::nullopt);
+    } else {
+      search->search.lift_root_listing(std::chrono::steady_clock::time_point(
+          std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::nanoseconds(steady_ns))));
+    }
+    return T5D_OK;
+  });
+}
+
 t5d_status t5d_search_run_timed(t5d_search* search, int32_t evaluator, uint64_t evaluator_seed, t5d_timeman* tm,
                                 const t5d_time_context* context, int32_t wall_clock, t5d_time_plan* plan,
                                 t5d_time_verdict* verdict, char** error) {

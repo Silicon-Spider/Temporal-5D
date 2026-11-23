@@ -1569,6 +1569,20 @@ class Search {
   /// synchronous mode's reproducible runs).
   void set_deadline(std::optional<std::chrono::steady_clock::time_point> deadline) noexcept;
   std::optional<std::chrono::steady_clock::time_point> deadline() const noexcept;
+  /// Stage E11 (exception (1)'s scope, the E11 review's S4): while lifted, the
+  /// root's own listing - its expansion (the legal-moves filter's
+  /// classification of its moves) and, under the flat form, its fallback
+  /// listing - runs under `deadline` (with run()'s own Limits::seconds) in
+  /// place of the persistent deadline; every other call keeps the persistent
+  /// one: the children's turn-start checks and expansions, the verification of
+  /// unknown edges, a node's listing below the root. run_timed lifts it, to
+  /// the caller's deadline, for a slice before any root child has a visit -
+  /// the hard bound off for the root's listing alone, so that a root it would
+  /// cut is listed (a move needs a visit). Not lifted by default, nor after
+  /// unlift_root_listing(); it holds across run() calls and re-roots (it
+  /// follows the root) until then.
+  void lift_root_listing(std::optional<std::chrono::steady_clock::time_point> deadline) noexcept;
+  void unlift_root_listing() noexcept;
   /// E5/E9: the child to play, by index into root_children(). Throws
   /// std::invalid_argument if the root has no visited child.
   Choice choose() const;

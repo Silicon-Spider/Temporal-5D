@@ -2280,6 +2280,38 @@ TEST(capi_search_the_deadline_reads_back_and_restores_exactly) {
   CHECK_EQ(t5d_search_set_deadline_at(nullptr, held, nullptr), T5D_ERR_ARGUMENT);
 }
 
+TEST(capi_search_a_lifted_root_listing_runs_without_the_deadline) {
+  // The E11 review's S4 (t5d_search_lift_root_listing): a flat root whose
+  // generator stops before its first turn (generator_nodes 1) is listed by
+  // the fallback listing - which a persistent deadline already passed cuts
+  // (no turn; re-listed later). Lifted (to no deadline), the root's own
+  // listing runs without it and the root gets its turns, the deadline still
+  // persistent for every other call; unlifted, the persistent deadline is
+  // the root's again.
+  const Game g = variant_game("Standard");
+  t5d_search_params p = quick_params();
+  p.split = T5D_SPLIT_FLAT;
+  p.generator_nodes = 1;
+  for (const int lift : {0, 1}) {
+    const SearchHandle s = new_search(g.get(), p);
+    int64_t now_ns = 0;
+    REQUIRE_EQ(t5d_search_set_deadline(s.get(), 100.0, nullptr), T5D_OK);
+    REQUIRE_EQ(t5d_search_deadline(s.get(), &now_ns, nullptr, nullptr), T5D_OK);
+    REQUIRE_EQ(t5d_search_set_deadline_at(s.get(), now_ns - int64_t{200'000'000'000}, nullptr), T5D_OK);  // passed
+    if (lift == 1) REQUIRE_EQ(t5d_search_lift_root_listing(s.get(), 1, T5D_NO_DEADLINE, nullptr), T5D_OK);
+    REQUIRE_EQ(t5d_search_run(s.get(), T5D_EVALUATOR_UNIFORM, 1, 8, nullptr), T5D_OK);
+    t5d_search_summary info{};
+    REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
+    if (lift == 1) {
+      CHECK(info.root_children > 0);
+      REQUIRE_EQ(t5d_search_lift_root_listing(s.get(), 0, 0, nullptr), T5D_OK);
+    } else {
+      CHECK_EQ(info.root_children, uint64_t{0});  // the premise: the passed deadline cuts the root's listing
+    }
+  }
+  CHECK_EQ(t5d_search_lift_root_listing(nullptr, 1, T5D_NO_DEADLINE, nullptr), T5D_ERR_ARGUMENT);
+}
+
 TEST(capi_search_a_cleared_deadline_is_cleared) {
   // M3's test 3 (the C API's set_deadline): in check, with exact legality, a
   // deadline already passed leaves edges unknown (the premise); one set and

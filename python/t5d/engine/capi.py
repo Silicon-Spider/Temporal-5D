@@ -883,6 +883,7 @@ _SIGNATURES: dict[str, tuple[object, list[object]]] = {
     "t5d_search_set_deadline": (c_int32, [_SEARCH, c_double, _ERR]),
     "t5d_search_deadline": (c_int32, [_SEARCH, POINTER(c_int64), POINTER(c_double), _ERR]),
     "t5d_search_set_deadline_at": (c_int32, [_SEARCH, c_int64, _ERR]),
+    "t5d_search_lift_root_listing": (c_int32, [_SEARCH, c_int32, c_int64, _ERR]),
     "t5d_search_run_timed": (
         c_int32,
         [_SEARCH, c_int32, c_uint64, _TIMEMAN, POINTER(CTimeContext), c_int32, POINTER(CTimePlan), POINTER(CTimeVerdict), _ERR],

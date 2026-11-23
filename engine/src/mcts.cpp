@@ -846,6 +846,11 @@ struct Search::Impl {
   // inside run() the earlier of it and run()'s own Limits::seconds, the
   // persistent one restored when run() returns - never cleared by it.
   std::optional<std::chrono::steady_clock::time_point> deadline_;
+  // S4: the root's own listing under its own deadline while lifted
+  // (lift_root_listing), with run()'s own (run_own_, set inside run()).
+  bool root_lifted_ = false;
+  std::optional<std::chrono::steady_clock::time_point> root_deadline_;
+  std::optional<std::chrono::steady_clock::time_point> run_own_;
   std::size_t tree_bytes_ = 0;  // the nodes' counts (Node::bytes), summed
 
   // ---- stage E10: the verification ladder (t5d/ladder.hpp) ------------------------
@@ -1175,6 +1180,25 @@ struct Search::Impl {
   // Whether run()'s deadline has passed (false outside run() and without one).
   bool deadline_passed() const noexcept { return deadline_ && std::chrono::steady_clock::now() >= *deadline_; }
 
+  // S4: the deadline node `id`'s own listing (its expansion, a flat node's
+  // fallback listing) runs under - the persistent one (with run()'s own), or
+  // for the root while lifted the lifted one with run()'s own.
+  std::optional<std::chrono::steady_clock::time_point> listing_deadline(NodeId id) const noexcept {
+    if (!root_lifted_ || id != root_) return deadline_;
+    if (!root_deadline_) return run_own_;
+    if (!run_own_) return root_deadline_;
+    return std::min(*root_deadline_, *run_own_);
+  }
+  LegalityOptions listing_timed(NodeId id, LegalityOptions o) const {
+    if (const auto d = listing_deadline(id)) o.deadline = d;
+    return o;
+  }
+  bool listing_deadline_passed(NodeId id) const noexcept {
+    const auto d = listing_deadline(id);
+    return d && std::chrono::steady_clock::now() >= *d;
+  }
+  NodeId id_of(const Node& n) const noexcept { return static_cast<NodeId>(&n - nodes_.data()); }
+
   // A turn start: the game's end, by E4's exhaustive detector only (H37), or
   // the turn cap's convention (I11).
   void classify(Node& n) {
@@ -1352,7 +1376,7 @@ struct Search::Impl {
     const auto t0 = std::chrono::steady_clock::now();
     ExpandOptions o = params_.expand;
     o.legal_moves = params_.legal_moves_only;
-    o.legality = timed(params_.legality);
+    o.legality = listing_timed(id_of(n), params_.legality);  // the root's own listing: lifted (S4)
     expand(n.state, o, out, n.moves_made);  // A6: the node's count, from its path
     stats_.seconds_expand += detail::seconds_since(t0);
   }
@@ -1871,7 +1895,7 @@ struct Search::Impl {
     // without turns and still to be listed.
     const bool relisting = !f.generator;
     if (relisting) {
-      if (!f.relist || !n.edges.empty() || deadline_passed()) return 0;
+      if (!f.relist || !n.edges.empty() || listing_deadline_passed(id_of(n))) return 0;
     } else if (n.edges.size() >= want) {
       return 0;
     }
@@ -1971,7 +1995,8 @@ struct Search::Impl {
     SearchBudget budget;
     budget.max_nodes = params_.mate_nodes;
     budget.max_bytes = params_.mate_bytes;
-    timed(budget);
+    const NodeId id = id_of(n);
+    if (const auto d = listing_deadline(id)) budget.max_time = time_left(*d);  // the root's own: lifted (S4)
     const ActionList list = list_legal_actions(n.state, params_.flat_fallback, params_.detector, budget);
     std::vector<std::pair<double, std::size_t>> order;
     for (std::size_t i = 0; i < list.actions.size(); ++i) order.emplace_back(f.policy->score_of(list.actions[i].moves), i);
@@ -2004,7 +2029,7 @@ struct Search::Impl {
     // M1: stopped with nothing found once the deadline had passed - the
     // deadline's doing, not the node's (none of its turns was looked for):
     // listed again outside the deadline, never stuck for it.
-    f.relist = added == 0 && list.stats.stopped_by_budget && !list.stats.stopped_by_memory && deadline_passed();
+    f.relist = added == 0 && list.stats.stopped_by_budget && !list.stats.stopped_by_memory && listing_deadline_passed(id);
     ++stats_.fallback_listings;
     stats_.generated_turns += added;
     return added;
@@ -2533,7 +2558,7 @@ struct Search::Impl {
       o.window_k = 0;
       o.square_features = SquareFeatures::None;
       o.legal_moves = params_.legal_moves_only;
-      o.legality = timed(params_.legality);
+      o.legality = listing_timed(id, params_.legality);
       expand(nodes_[id].state, o, inherit_x_, nodes_[id].moves_made);
       stats_.seconds_expand += detail::seconds_since(t0);
     }
@@ -4092,9 +4117,14 @@ StopReason Search::run(Evaluator& evaluator, const Limits& limits) {
   struct DeadlineScope {
     Impl& s;
     std::optional<std::chrono::steady_clock::time_point> held;
-    ~DeadlineScope() { s.deadline_ = held; }
-  } scope{s, s.deadline_};
+    std::optional<std::chrono::steady_clock::time_point> held_own;
+    ~DeadlineScope() {
+      s.deadline_ = held;
+      s.run_own_ = held_own;
+    }
+  } scope{s, s.deadline_, s.run_own_};
   if (own && (!s.deadline_ || *own < *s.deadline_)) s.deadline_ = own;
+  s.run_own_ = own;  // the lifted root listing's limit too (S4)
   const auto own_passed = [&own] { return own && std::chrono::steady_clock::now() >= *own; };
   if (s.notified_generation_ != s.root_generation_) {
     evaluator.on_new_root(s.nodes_[s.root_].state, s.epoch_);
@@ -4502,6 +4532,16 @@ void Search::set_deadline(std::optional<std::chrono::steady_clock::time_point> d
   impl_->deadline_ = deadline;
 }
 std::optional<std::chrono::steady_clock::time_point> Search::deadline() const noexcept { return impl_->deadline_; }
+
+void Search::lift_root_listing(std::optional<std::chrono::steady_clock::time_point> deadline) noexcept {
+  impl_->root_lifted_ = true;
+  impl_->root_deadline_ = deadline;
+}
+
+void Search::unlift_root_listing() noexcept {
+  impl_->root_lifted_ = false;
+  impl_->root_deadline_.reset();
+}
 
 std::optional<std::array<float, kValueBins>> Search::root_child_value(std::size_t index) const {
   const Impl& s = *impl_;

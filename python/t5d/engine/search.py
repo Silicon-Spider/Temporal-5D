@@ -597,6 +597,16 @@ class Search:
         self._lib.call("t5d_search_deadline", self._live(), byref(at), byref(left), error=True)
         return int(at.value), float(left.value)
 
+    def lift_root_listing(self, steady_ns: int | None) -> None:
+        """Exception (1)'s scope (``t5d_search_lift_root_listing``; the E11 review's S4): the root's
+        own listing runs under the deadline ``steady_ns`` (as ``deadline()`` reports one;
+        ``T5D_NO_DEADLINE``: none) in place of the persistent deadline, every other call keeping
+        the persistent one; ``None``: the persistent deadline's again."""
+        lifted = steady_ns is not None
+        self._lib.call(
+            "t5d_search_lift_root_listing", self._live(), c_int32(int(lifted)), c_int64(int(steady_ns) if lifted else 0), error=True
+        )
+
     def set_deadline_at(self, steady_ns: int) -> None:
         """The persistent deadline set to a time point ``deadline()`` reported (``T5D_NO_DEADLINE``:
         none) - the same deadline, not one recomputed from now."""

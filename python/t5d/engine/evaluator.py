@@ -855,8 +855,9 @@ def run_timed_search(
     search's deadline is the hard bound for the run - the earlier of it and one the caller set
     (the rules engine's calls inside a batch stop at it; a 0 s bound a deadline already passed,
     never 0 - none: the E11 review's L3) - but not inside a slice run before any root child has
-    a visit (the exception, a move needs a visit: the root's listing completes - M1), where the
-    caller's applies; the caller's deadline is restored after, exactly (``Search.deadline`` and
+    a visit (the exception, a move needs a visit: the root's listing completes - M1) for the root's
+    own listing alone, which runs under the caller's (``Search.lift_root_listing``; S4: every other
+    call keeps the bound); the caller's deadline is restored after, exactly (``Search.deadline`` and
     ``set_deadline_at``; S2), as the engine's ``run_timed`` restores it; ``model_clock``: the
     cost model's clock (elapsed NaN), deterministic. ``effort``: the root's effort distribution
     for E8 (off unless the time manager's ``difficulty_weighting``). ``clock``: a clock of the
@@ -884,11 +885,9 @@ def run_timed_search(
     # deadline already passed, never 0 - which means none (the review's L3).
     held, held_left = search.deadline()
     held_end = time.perf_counter() + held_left  # when the caller's deadline passes (inf: never)
-    bound = held
     if steady and max(plan.hard_seconds, 1e-9) < held_left:
         search.set_deadline(max(plan.hard_seconds, 1e-9))
-        bound, _ = search.deadline()
-    lifted = False  # the forced slice's: run under the caller's deadline, not the bound (M1)
+    lifted = False  # the forced slice's: the root's own listing under the caller's deadline (M1, S4)
     idle = 0  # forced slices in a row that left no root child visited (S3)
     try:
         while True:
@@ -903,12 +902,12 @@ def run_timed_search(
             found = search.children()
             edgeless = not found
             forced = not any(c.visits > 0 for c in found)  # the engine's condition (S2)
-            # The exception (a move needs a visit): until a root child has one, the slice runs
-            # without the hard bound inside it, so that the root's listing and classification
-            # complete (the review's M1) - the engine's run_timed's condition, no root child
-            # visited, and its deadline, the caller's (S2).
+            # The exception (a move needs a visit): until a root child has one, the root's own
+            # listing runs without the hard bound - under the caller's deadline - so that it
+            # completes (the review's M1); every other call keeps the bound (S4) - the engine's
+            # run_timed's condition, no root child visited (S2).
             if steady and forced != lifted:
-                search.set_deadline_at(held if forced else bound)
+                search.lift_root_listing(held if forced else None)
                 lifted = forced
             driver = CStepDriver(search, playouts=batch, regs_per_board=regs_per_board, global_regs=global_regs, value_kind=value_kind)
             st = serve(driver, evaluator, batch_size=batch)
@@ -935,6 +934,7 @@ def run_timed_search(
                         verdict = replace(verdict, stop=T5D_TIME_STOP_SEARCH)
                         break
     finally:
+        search.lift_root_listing(None)
         search.set_deadline_at(held)
         tm.end(search)
     if model_clock:

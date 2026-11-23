@@ -609,8 +609,10 @@ struct TimedRun {
 /// end. `clock` null: the model clock (deterministic). A steady clock gives
 /// the search the hard bound as its persistent deadline for the run (the
 /// earlier of it and one the caller set, which is restored on return) - but
-/// not inside a slice run before any root child has a visit (the exception: a
-/// move needs a visit; the E11 review's M1). `max_seconds` (0: none; THE
+/// not for the root's own listing in a slice run before any root child has a
+/// visit (the exception: a move needs a visit; the E11 review's M1), which
+/// runs under the caller's deadline (Search::lift_root_listing); every other
+/// call in that slice keeps the bound (S4). `max_seconds` (0: none; THE
 /// DEADLINE in t5d/mcts.hpp): the caller's own limit from the call - a game's
 /// safety stop - each slice's Limits::seconds, so that the search stops at it
 /// (StopReason::Deadline, TimeStop::Search). The caller's persistent deadline

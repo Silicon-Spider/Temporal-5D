@@ -1616,12 +1616,12 @@ TEST(timeman_run_timed_holds_the_hard_bound_inside_every_batch_and_restores_the_
   CHECK(search.deadline() == std::optional(early));
 }
 
-TEST(timeman_the_forced_slice_runs_without_the_hard_bound) {
-  // The exception (a move needs a visit; the E11 review's M1): from a fresh
-  // root the slices before any root child has a visit run without the hard
-  // bound inside them - the root's listing and classification complete - and
-  // the slices after it with it. Batched: the first slice's two calls (the
-  // root, then its children); synchronous: the first two one-leaf slices.
+TEST(timeman_the_forced_slice_keeps_the_hard_bound_but_for_the_roots_listing) {
+  // The exception (a move needs a visit; the E11 review's M1) in its decided
+  // scope (S4): from a fresh root the search's deadline is the hard bound in
+  // every slice, the forced ones included - only the root's own listing runs
+  // without it (Search::lift_root_listing, seen below in its effects) - and
+  // the caller's (none) is restored after. Batched and synchronous.
   for (const bool sync : {false, true}) {
     SearchParams sp = quiet_params();
     sp.synchronous = sync;
@@ -1635,10 +1635,54 @@ TEST(timeman_the_forced_slice_runs_without_the_hard_bound) {
     ctx.remaining_seconds = 10;
     run_timed(search, spy, tm, ctx, &clock);
     REQUIRE(spy.calls >= 3);
-    CHECK(!spy.seen[0].has_value());
-    CHECK(!spy.seen[1].has_value());
-    for (std::size_t i = 2; i < spy.seen.size(); ++i) CHECK(spy.seen[i].has_value());
+    for (std::size_t i = 0; i < spy.seen.size(); ++i) CHECK(spy.seen[i].has_value());
     CHECK(!search.deadline().has_value());
+  }
+}
+
+TEST(timeman_the_forced_slice_lifts_the_bound_for_the_roots_own_listing_alone) {
+  // S4 (the spec pass's probe_forced_scope, adopted): with the hard bound a
+  // deadline already passed (the clock at 0.8 of the overhead), run_timed's
+  // forced slice from a fresh root still lists the root completely - as many
+  // root children as with no deadline - and visits some; the children's
+  // turn-start checks inside it stop at the bound (flat form: as many unknown
+  // verdicts as one slice with the passed deadline inside gives; before S4,
+  // none - the whole slice ran unbounded). Board-move: the root's own
+  // classification is lifted too - its edges as with no deadline.
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  for (const TurnSplit split : {TurnSplit::Flat, TurnSplit::BoardMove}) {
+    for (const char* name : {"Standard", "Standard - Two Timelines"}) {
+      SearchParams sp = quiet_params();
+      sp.split = split;
+      const std::size_t slice = std::max<std::size_t>(sp.batch_size, 1);
+      Search timed(variant(name), sp);
+      TimeManager tm;
+      TimeContext ctx;
+      ctx.remaining_seconds = TimeParams{}.overhead_seconds * 0.8;
+      WallClock wall;
+      const TimedRun r = run_timed(timed, *uniform, tm, ctx, &wall);
+      CHECK_EQ(r.plan.hard_seconds, 0.0);
+      Search inside(variant(name), sp);
+      inside.set_deadline(std::chrono::steady_clock::now() - std::chrono::seconds(1));
+      inside.run(*uniform, Limits{slice});
+      Search free(variant(name), sp);
+      free.run(*uniform, Limits{slice});
+      std::size_t visited = 0;
+      for (const RootChild& c : timed.root_children()) visited += c.visits > 0 ? 1 : 0;
+      std::size_t root_unknown = 0;
+      for (const RootChild& c : timed.root_children()) root_unknown += c.legality == MoveLegality::Unknown ? 1 : 0;
+      CHECK_EQ(timed.root_children().size(), free.root_children().size());
+      CHECK_EQ(root_unknown, std::size_t{0});
+      CHECK(visited > 0);
+      // Below the root the bound holds: the children's turn-start checks
+      // (flat: 7 unknown verdicts) and classifications (board-move, Two
+      // Timelines: 10 unknown edges) stop at it as with the deadline inside.
+      CHECK_EQ(timed.stats().unknown_verdicts, inside.stats().unknown_verdicts);
+      CHECK_EQ(timed.stats().unknown_edges, inside.stats().unknown_edges);
+      if (split == TurnSplit::Flat) CHECK(inside.stats().unknown_verdicts > 0);  // the premise
+      if (split == TurnSplit::BoardMove && std::string(name) != "Standard") CHECK(inside.stats().unknown_edges > 0);
+      CHECK_EQ(free.stats().unknown_verdicts + free.stats().unknown_edges, std::uint64_t{0});
+    }
   }
 }
 

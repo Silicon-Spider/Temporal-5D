@@ -8353,7 +8353,11 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     review's S1, 2026-11-24: none shown legal with time left - every verification stopped by the
     node budget or the memory ceiling - ends the game unscored, `Unsettled::Choice`, where it threw;
     no visited child and a search that cannot get one: unscored, `Unsettled::Search` - issue 480.)
-    Edits 333, 342, 346.
+    (S4, 2026-11-24: exception (1)'s scope narrowed to the decision - only the root's own listing,
+    its expansion or the flat form's fallback listing, runs without the bound, under the caller's
+    deadline, while no root child has a visit; the children's turn-start checks and
+    classifications, the verifications and the flat generator (node-budgeted, never timed) keep
+    it. `Search::lift_root_listing`, `t5d_search_lift_root_listing`.) Edits 333, 342, 346.
 459. **The stop signals' definitions** (§8.6's "visit gap unbridgeable", "root visit
     distribution stops changing"). Built (placeholders): smart pruning - the lead of the most
     visited child (path visits, MCGS) over the second exceeds the remaining evaluations (to
@@ -12007,3 +12011,7 @@ entry changes in the same edit as its code, which the standing rule defers to up
     deadline exactly; `tm.end` however the run returns (Python and C++). probe_py1 adopted.
   - **S3**: `run_timed` stops once the caller's deadline has passed, and on forced slices that make
     no progress (issue 482); mirrored in Python. The correctness pass's p1wall/p1model adopted.
+  - **S4**: exception (1) lifts the bound for the root's own listing alone
+    (`Search::lift_root_listing`, `t5d_search_lift_root_listing`; run_timed and Python); the spec
+    pass's probe_forced_scope numbers as a test (flat: 7 unknown verdicts; Two Timelines
+    board-move: 10 unknown edges below the root).

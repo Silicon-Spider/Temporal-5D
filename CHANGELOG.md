@@ -10,6 +10,33 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - E11 review round 2, S4: exception (1) lifts the hard bound for the root's own listing alone
+
+The review's S4 (SS-F3). The forced slice - before any root child has a visit - ran without the
+hard bound for every call in it, where the decision (M1's: "at the root, the forced first slice
+lists without the deadline") lifts it for the root's listing only: up to `batch_size - 1`
+children's turn-start checks at `mate_nodes` each, their classifications and the flat form's
+listings ran unbounded - the high-N regime §8.6 holds tight.
+- **`Search::lift_root_listing(deadline)` / `unlift_root_listing()`** (`t5d/mcts.hpp`): while
+  lifted, the root's own listing - its expansion (the legal-moves filter's classification) and,
+  under the flat form, its fallback listing - runs under `deadline` (with `run()`'s own
+  `Limits::seconds`) in place of the persistent deadline; every other call keeps the persistent
+  one. The C API appends `t5d_search_lift_root_listing`; Python mirrors it (`Search.lift_root_listing`).
+- **`run_timed`** keeps the bound as the search's deadline for the whole run and, for a slice
+  before any root child has a visit, lifts the root's own listing to the caller's deadline; it
+  unlifts on return, however it returns. Python's `run_timed_search` does the same.
+- The flat generator is node-budgeted, never timed (issue 467), so no bound reaches it either way.
+- Tests: the spec pass's probe_forced_scope (with the bound a deadline already passed, run_timed's
+  forced slice lists the root fully and visits 7 children; below the root the bound holds - the
+  flat form's 7 unknown verdicts, Two Timelines' 10 unknown edges, as with the deadline inside;
+  before S4, none); the bound in every slice, the forced ones included; the C API's lift by its
+  effect (a passed deadline cuts a flat root's fallback listing, lifted it lists); Python's calls
+  by spy.
+- Docs: `t5d/mcts.hpp`, `t5d/timeman.hpp`, `capi_search.h`, the README, issue 458.
+
+Spec: §8.6's guards and §16's E7 entry (exception (1)'s scope; the edit's text is S6's - edits 342
+and 346 retargeted there). No measured figure.
+
 ### 2026-11-24 - E11 review round 2, S3: run_timed stops once the caller's deadline has passed, and where its slices make no progress
 
 The review's S3 (SC-M2). `run_timed` looped for ever when the caller's persistent deadline had

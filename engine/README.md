@@ -4671,8 +4671,11 @@ bound"; the review's H1): the chosen move's exact verification gets what the bou
 where it is cut or the move illegal the most visited child known legal is played. Two
 exceptions: (1) a root with no visited child runs on, whatever the clock says, until one has a
 visit (a move needs a visit) - from an unevaluated root up to two evaluator calls, the root's own
-leaf and then its children's (one slice batched, two one-leaf slices synchronous), the slice run
-without the bound inside it so that the root's listing completes (the review's M1; a listing the
+leaf and then its children's (one slice batched, two one-leaf slices synchronous), the root's
+own listing - its expansion and, under the flat form, its fallback listing - run without the bound
+(under the caller's deadline: `Search::lift_root_listing`) so that it completes, every other call
+in the slice keeping the bound: the children's turn-start checks and classifications, a
+verification (the review's M1, in the scope S4 decided; a listing the
 bound cut elsewhere is re-listed later - issue 406); (2) where no child is known legal once the
 bound's verification is cut, the children are verified in visit order against the side's
 remaining clock, the first shown legal played, and the side flags if the clock runs out first -
@@ -4807,8 +4810,10 @@ charged), a flag mid-action, a flagged decision's work counted and bad `time_ove
 refused; the proof hook taken with the proof channel off - extending on a withheld proof,
 never stopping (a solved root stops only with the channel), nothing injected in a match game -
 in C++, C and Python. Phase 2 (the merge with issue 406): the hard bound inside every batch of
-every slice and the caller's deadline restored (also after a throw), the forced slice without
-it, `run()`'s own deadline inside the persistent one, the C API's deadline cleared by 0, 1e9 s or
+every slice and the caller's deadline restored (also after a throw), the forced slice keeping
+the bound but for the root's own listing (S4: with the bound already passed the root still lists
+fully and gets visits, the children's checks and classifications stopping at it - the spec
+pass's probe), `t5d_search_lift_root_listing`, `run()`'s own deadline inside the persistent one, the C API's deadline cleared by 0, 1e9 s or
 infinity; past the deadline an exact classification equal, move by move, to one with no check
 and no node, and a mating turn start not terminal; match play at issue 406's Q3 node on the clock
 seam - the verification cut inside the bound and a child known legal played, the second

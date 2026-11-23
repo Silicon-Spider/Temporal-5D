@@ -920,6 +920,13 @@ T5D_API t5d_status t5d_search_deadline(const t5d_search* search, int64_t* steady
 /* Sets the persistent deadline to a time point as t5d_search_deadline reports
  * it (T5D_NO_DEADLINE: none) - the same deadline, not one recomputed from now. */
 T5D_API t5d_status t5d_search_set_deadline_at(t5d_search* search, int64_t steady_ns, char** error);
+/* Exception (1)'s scope (stage E11, the E11 review's S4): `lifted` 1 - the
+ * root's own listing (its expansion and, under the flat form, its fallback
+ * listing) runs under the deadline `steady_ns` (as t5d_search_deadline reports
+ * one; T5D_NO_DEADLINE: none) in place of the persistent deadline, every other
+ * call keeping the persistent one (Search::lift_root_listing); 0 - it is the
+ * persistent deadline's again (`steady_ns` ignored). */
+T5D_API t5d_status t5d_search_lift_root_listing(t5d_search* search, int32_t lifted, int64_t steady_ns, char** error);
 /* One timed decision with a built-in evaluator (T5D_EVALUATOR_*): begin, batches
  * until a stop, end. wall_clock 1: the steady clock (the search's deadline set
  * to the hard bound for the run - the earlier of it and one already set, which

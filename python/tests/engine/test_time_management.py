@@ -551,15 +551,14 @@ def test_e8_off_leaves_the_plan_alone():
             a.begin(s, remaining=30.0, effort=[1.0] * 3)
 
 
-def test_run_timed_search_sets_the_bound_lifts_it_for_the_forced_slice_and_restores_the_callers(monkeypatch):
-    """The review's M3 (test 4) and L3, with M1's forced slice and S2: on the wall clock the hard
-    bound is the search's deadline - a 0 s bound (a clock at the overhead) a deadline already
-    passed (1e-9 s), never 0, which means none - the caller's deadline (``set_deadline_at``) for a
-    slice before any root child has a visit and the bound's same time point again after it (what
-    is left of it, not the whole bound again - the mutation pass's Y03), and the caller's restored,
-    exactly, when the run ends."""
+def test_run_timed_search_sets_the_bound_lifts_it_for_the_roots_listing_and_restores_the_callers(monkeypatch):
+    """The review's M3 (test 4) and L3, with M1's forced slice, S2 and S4: on the wall clock the
+    hard bound is the search's deadline for the whole run - a 0 s bound (a clock at the overhead) a
+    deadline already passed (1e-9 s), never 0, which means none - the root's own listing lifted to
+    the caller's deadline (``lift_root_listing``) for slices before any root child has a visit and
+    dropped after, and the caller's deadline restored, exactly, when the run ends."""
     calls: list[tuple[str, float]] = []
-    real_set, real_at = Search.set_deadline, Search.set_deadline_at
+    real_set, real_at, real_lift = Search.set_deadline, Search.set_deadline_at, Search.lift_root_listing
 
     def spy_set(self, seconds):
         calls.append(("set", float(seconds)))
@@ -569,28 +568,33 @@ def test_run_timed_search_sets_the_bound_lifts_it_for_the_forced_slice_and_resto
         calls.append(("at", int(steady_ns)))
         real_at(self, steady_ns)
 
+    def spy_lift(self, steady_ns):
+        calls.append(("lift", steady_ns))
+        real_lift(self, steady_ns)
+
     monkeypatch.setattr(Search, "set_deadline", spy_set)
     monkeypatch.setattr(Search, "set_deadline_at", spy_at)
+    monkeypatch.setattr(Search, "lift_root_listing", spy_lift)
     quiet = search_params(hunt=0, settling=0)
     with Game.variant("Standard") as g, Search(g, params=quiet) as s, TimeManager() as tm:
         s.run(T5D_EVALUATOR_UNIFORM, 32)  # visited: no forced slice
         run = run_timed_search(s, UniformEvaluator(), tm, remaining=3.0)
-        assert calls == [("set", run.plan.hard_seconds), ("at", T5D_NO_DEADLINE)]
+        assert calls == [("set", run.plan.hard_seconds), ("lift", None), ("at", T5D_NO_DEADLINE)]
         assert s.deadline()[0] == T5D_NO_DEADLINE
     calls.clear()
     with Game.variant("Standard") as g, Search(g, params=quiet) as s, TimeManager() as tm:
         run = run_timed_search(s, UniformEvaluator(), tm, remaining=3.0)  # a fresh root
         assert calls[0] == ("set", run.plan.hard_seconds)
-        assert calls[1] == ("at", T5D_NO_DEADLINE)  # the forced slice: the caller's (none)
-        bound = calls[2]
-        assert bound[0] == "at" and bound[1] != T5D_NO_DEADLINE  # the bound's time point again
-        assert calls[-1] == ("at", T5D_NO_DEADLINE)  # restored
+        assert calls[1] == ("lift", T5D_NO_DEADLINE)  # the forced slice: the root's listing under the caller's (none)
+        assert calls[2] == ("lift", None)  # a child visited: the bound for every call again
+        assert not [c for c in calls if c[0] == "at"][:-1]  # the bound itself never reset during the run
+        assert calls[-2:] == [("lift", None), ("at", T5D_NO_DEADLINE)]  # restored
     calls.clear()
     with Game.variant("Standard") as g, Search(g, params=quiet) as s, TimeManager() as tm:
         s.run(T5D_EVALUATOR_UNIFORM, 32)
         run = run_timed_search(s, UniformEvaluator(), tm, remaining=time_params().overhead_seconds)
         assert run.plan.hard_seconds == 0.0
-        assert calls == [("set", 1e-9), ("at", T5D_NO_DEADLINE)]
+        assert calls == [("set", 1e-9), ("lift", None), ("at", T5D_NO_DEADLINE)]
     calls.clear()
     with Game.variant("Standard") as g, Search(g, params=quiet) as s, TimeManager() as tm:
         real_set(s, 100.0)  # the caller's own deadline, later than the bound
