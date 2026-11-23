@@ -1728,7 +1728,7 @@ are prior art to read about, not code to port (AGENTS.md).
   hashes every answer and statistic of theirs (nodes, points, regions, boxes removed,
   the most positions held) on 571 positions - tiny multiverses, the sparse starts
   under five rulesets, every variant, unlimited and under budgets that stop them -
-  pinned at 2f07079, before the generator was written.
+  pinned at e8d3688, before the generator was written.
 
 **§15.2's row** (`tests/test_turngen.cpp`): on 300 tiny multiverses (the brute-force
 reference's; 265 with two playable boards or more, all three regimes), five
@@ -2266,7 +2266,7 @@ probe waits on another probe of its own shard (one of 64), never on another shar
   increment. `shared_stores_hold_at_first_concurrent_use` takes the stores: 150 rounds of a
   fresh `ConcurrentSolvedStore` and `DisproofStore` written by 8 threads, and every
   shortest proof, every deepest disproof and exactly one entry per position must be kept.
-  Built with the old lock (`e8de15e` with this file, `ShardLock` named
+  Built with the old lock (`3f04f8e` with this file, `ShardLock` named
   `std::shared_mutex`), the lock test failed in 50 of 50 runs (136-876 overlaps a run) and
   the store test crashed in 50 of 50 (120 of 120 each on 2026-10-17). With `ShardLock`
   neither failed in 300 runs (500 on 2026-10-17), and
@@ -3710,18 +3710,18 @@ rules are the ones given; its code signature is then "unrecorded".)
 
 THE TRUTH as committed (`testdata/hunt-truth/`, sha256
 `ce62e5f8c52e0d53b1519ef145aae00760d84a4b271b9e9643e5fcab02cf1a73`; recorded at
-`1d2d0d7` on 2026-10-03, a shared machine, 5,097 s on 6 workers): 825 roots, 805
+`b1d0ca9` on 2026-10-03, a shared machine, 5,097 s on 6 workers): 825 roots, 805
 measured (20 skipped as 6b skips them), **125 mates** - every one confirmed by its
 certificate against E4 alone. The roots are 6b's exactly, the records read raw as 6b
 and 6b′ read them: cwmtt/many2's export-form text gives an engine tool no action (the
 gate converts it for every source; that conversion is the harness's), so many2 adds
-only its starting position. A first recording (at `832aa30`, the records named by
+only its starting position. A first recording (at `95f6146`, the records named by
 path - which the boundary check refuses) gave every verdict, distance, finder, class
 status and cross-check the same; 25 roots' node counts moved with H46's relief fix.
 
 **After stage E9's review** the truth was not re-recorded: no fix changes a verdict of
-it. Its classes ran with the check filter off (the default since `832aa30`; the truth
-was recorded at `1d2d0d7`) and with fresh stores per class and root, so neither the
+it. Its classes ran with the check filter off (the default since `95f6146`; the truth
+was recorded at `b1d0ca9`) and with fresh stores per class and root, so neither the
 filter's J6-twin flaw nor the disproof class's missing options reached it; the attacker
 probe is efficiency only. Checked by recording it again with the fixed prover
 (2026-10-04, 4,962 s on 6 workers, a shared machine): all 825 verdicts, distances,
@@ -3818,7 +3818,7 @@ threads, 50 ms each - pre-registered, unchanged:
 
 ### 6b″: preliminary figures (a shared machine - not the verdict)
 
-2026-10-04, after stage E9's review (`c99abb4`), **Guard and Hunt as they ship** - the
+2026-10-04, after stage E9's review (`601feb2`), **Guard and Hunt as they ship** - the
 check filter off, the attacker probe on - and only proofs E4 confirmed counted; AMD
 Ryzen 9 9900X, 24 logical processors, busy 15% during Guard and 19% during Hunt (other
 agents' work and this tool's own threads); Release, g++ 16.2 `-O2`; the default ruleset
@@ -3850,11 +3850,11 @@ default then, not Guard's - while the filter was unsound (J6's twins), and count
 proofs whether E4 confirmed them or not (Guard's 48 refutations were, 1 was
 incomplete). They gave the same verdicts.
 
-**The truth's sources since M17.** M17 was measured at `d96d6d9`. The truth's sources
+**The truth's sources since M17.** M17 was measured at `f3d36c9`. The truth's sources
 (`T5D_TRUTH_SOURCES`) have changed three times since, so a build of today's tree has
 another code signature than M17's:
-- `9be6f04` typed the prover's hash constants (for g++ 13/14);
-- A6's first commit (`e554da0`) changed which thread's line the prover reports;
+- `cc1e224` typed the prover's hash constants (for g++ 13/14);
+- A6's first commit (`7c932d2`) changed which thread's line the prover reports;
 - on 2026-10-22 the shared stores' lock became a `std::mutex` per shard (`ShardLock`:
   "The stores' lock", under Lazy SMP).
 
