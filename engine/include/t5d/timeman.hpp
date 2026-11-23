@@ -447,6 +447,15 @@ std::uint64_t step_key(const RootChild& child) noexcept;
 /// the proofs with proof_volatility).
 RootSnapshot snapshot(const Search& search, std::uint64_t evaluations, std::uint64_t playouts, const TimeParams& params);
 
+/// Decision 12's hook (TimeParams::proof_volatility; RootSnapshot::proof_gap):
+/// the LARGEST gap between a proven verdict and the network's value of what it
+/// proves - our mate at the root (+1 against `root_net_value`), the opponent's
+/// after our principal line (-1 against that line's child's evaluation, from
+/// `children`; `root_net_value` where the child has none). Verdicts not
+/// Proven are not read. 0: none.
+double proof_gap(const std::vector<LadderVerdict>& verdicts, double root_net_value,
+                 const std::vector<RootChild>& children);
+
 // ---- the signals as pure functions (§8.6's table) --------------------------------
 
 /// The dense FLOP model's shape at `boards` boards: T (4 T + (8 + 4 r) d).

@@ -8357,7 +8357,11 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     its expansion or the flat form's fallback listing, runs without the bound, under the caller's
     deadline, while no root child has a visit; the children's turn-start checks and
     classifications, the verifications and the flat generator (node-budgeted, never timed) keep
-    it. `Search::lift_root_listing`, `t5d_search_lift_root_listing`.) Edits 333, 342, 346.
+    it. `Search::lift_root_listing`, `t5d_search_lift_root_listing`.) (S7, 2026-11-24: where no child
+    is known legal, a clocked decision searches against its clock BEFORE decision 13's witness step -
+    the merge had put the witness first, so a verdict with a witness pre-empted the search - and
+    plays the witness only when the search finds nothing with time left; the main loop to confirm
+    the order.) Edits 333, 342, 346.
 459. **The stop signals' definitions** (§8.6's "visit gap unbridgeable", "root visit
     distribution stops changing"). Built (placeholders): smart pruning - the lead of the most
     visited child (path visits, MCGS) over the second exceeds the remaining evaluations (to
@@ -12052,3 +12056,7 @@ entry changes in the same edit as its code, which the standing rule defers to up
     not marked done (issue 483); the correctness pass's p5 adopted.
   - **S6**: edits 342 (now §16's E7 entry), 343 (the spec's own text, its bold lead) and 346 (the
     frame sentence and register E7) rewritten; "not yet on main" dropped; D13 -> H22.
+  - **S7**: the mutation pass's candidate tests adopted (A05 under S4, A08, A09, B05, B16, B17,
+    C01-C03, D03, Y01, Y07, Y09, Y15, Y17) and the described ones written (B07; B04 and B15 through
+    `detail::DecisionClock`; D06 through `proof_gap`); H1 part (6)'s charge and overrun asserted. The
+    clocked no-child order changed: the clock's search before the witness (issue 458).

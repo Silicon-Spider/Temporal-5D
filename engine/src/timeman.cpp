@@ -374,25 +374,32 @@ RootSnapshot snapshot(const Search& search, std::uint64_t evaluations, std::uint
     // the opponent's after our principal line (-1 against that line's child's).
     // Read with the proof channel off too; it feeds only the disagreement
     // extension (check), never a stop.
-    for (const LadderVerdict& v : search.verdicts()) {
-      if (v.status != ProofStatus::Proven) continue;
-      double net = r.root_net_value;
-      double proven = 1.0;
-      if (v.job == LadderJob::PvSettling) {
-        proven = -1.0;
-        if (!v.path.empty()) {
-          for (const RootChild& c : children) {
-            if (c.submit == v.path.front().submit && c.moves == v.path.front().moves && c.evaluated) {
-              net = c.network_wdl[0] - c.network_wdl[2];
-              break;
-            }
+    r.proof_gap = proof_gap(search.verdicts(), r.root_net_value, children);
+  }
+  return r;
+}
+
+double proof_gap(const std::vector<LadderVerdict>& verdicts, double root_net_value,
+                 const std::vector<RootChild>& children) {
+  double gap = 0;
+  for (const LadderVerdict& v : verdicts) {
+    if (v.status != ProofStatus::Proven) continue;
+    double net = root_net_value;
+    double proven = 1.0;
+    if (v.job == LadderJob::PvSettling) {
+      proven = -1.0;
+      if (!v.path.empty()) {
+        for (const RootChild& c : children) {
+          if (c.submit == v.path.front().submit && c.moves == v.path.front().moves && c.evaluated) {
+            net = c.network_wdl[0] - c.network_wdl[2];
+            break;
           }
         }
       }
-      r.proof_gap = std::max(r.proof_gap, std::abs(proven - net));
     }
+    gap = std::max(gap, std::abs(proven - net));
   }
-  return r;
+  return gap;
 }
 
 // ---- the time manager ------------------------------------------------------------------

@@ -373,6 +373,26 @@ inline constexpr int kNoVisitRounds = 16;
 /// (`idle` counts those; a batch on a clock that advanced is not counted).
 bool cannot_move(bool added_playouts, bool still_edgeless, bool clock_advanced, int& idle) noexcept;
 
+/// Stage E11 (the E11 review's H1; its S7 tests the parts through this, as
+/// netplay's _DecisionClock): a clocked decision's time after its search, on
+/// the match clock - the clock (null: the model clock, which has no wall
+/// time), the decision's start on it, its hard bound and the side's clock at
+/// its start, in seconds.
+struct DecisionClock {
+  Clock* clock = nullptr;
+  double start = 0;
+  double hard = 0;
+  double remaining = 0;
+  /// The side's clock has run out - its flag; never on the model clock, never
+  /// for the hard bound alone.
+  bool out() const;
+  /// `budget` seconds of the side's clock from the decision's start as a
+  /// steady-clock deadline - now, once spent - and the earlier of it and
+  /// `game` (the game's own deadline); on the model clock `game` alone.
+  std::optional<std::chrono::steady_clock::time_point> within(
+      double budget, std::optional<std::chrono::steady_clock::time_point> game) const;
+};
+
 }  // namespace detail
 
 }  // namespace t5d::mcts

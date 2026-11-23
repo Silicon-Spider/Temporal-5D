@@ -750,6 +750,69 @@ def test_verify_takes_a_deadline():
         g.close()
 
 
+def test_verify_passes_its_seconds_and_budget(monkeypatch):
+    """The mutation pass's Y01, adopted: ``Search.verify(index, seconds=...)`` hands the C API its
+    seconds as seconds, with the node budget beside them."""
+    seen: list[tuple[int, float]] = []
+    g, s = _check_position_search()
+    try:
+        real = s._lib.call
+
+        def spy(name, *args, **kw):
+            if name == "t5d_search_verify_within":
+                seen.append((args[3].value, args[4].value))
+            return real(name, *args, **kw)
+
+        monkeypatch.setattr(s._lib, "call", spy)
+        unknown = [c for c in s.children() if c.legality != T5D_LEGALITY_LEGAL]
+        s.verify(unknown[0].index, seconds=2.5, nodes=1234)
+    finally:
+        s.close()
+        g.close()
+    assert seen == [(1234, 2.5)]
+
+
+def test_against_the_clock_the_most_visited_child_is_tried_first(monkeypatch):
+    """H1's second exception in netplay (the mutation pass's Y07, adopted): with no child known
+    legal the children are verified in visit order, the most visited first."""
+    from t5d.engine.netplay import PlayConfig, _choose, _DecisionClock
+
+    cfg = PlayConfig(mode="match", batch_size=4)
+    res = GameResult(config=cfg, record="", actions=[], end="", winner=None)
+    g, s = _check_position_search()
+    try:
+        tried: list[int] = []
+        most: list[int] = []
+        real = Search.verify
+
+        def spy(self, index, **kw):
+            if not most:
+                most.append(max(c.visits for c in self.children()))
+                most.append(min(c.visits for c in self.children()))
+            tried.append(self.child(index).visits)
+            return real(self, index, **kw)
+
+        monkeypatch.setattr(Search, "verify", spy)
+        spent = _DecisionClock(d0=time.perf_counter() - 10.0, hard=1.0, remaining=600.0, model=False)
+        _choose(s, cfg, res, ServeStats(), UniformEvaluator(), {}, None, clock=spent)
+        assert most[0] > most[1]  # the premise: the visits differ
+        assert len(tried) >= 2  # the pick's cut verification, then the first against the clock
+        assert tried[1] == most[0]
+    finally:
+        s.close()
+        g.close()
+
+
+def test_the_decision_clock_flags_on_the_sides_clock_not_the_hard_bound():
+    """H1 (the mutation pass's Y09, adopted): the hard bound spent is not the side's flag - only
+    its remaining clock run out is; never on the model clock."""
+    from t5d.engine.netplay import _DecisionClock
+
+    assert not _DecisionClock(d0=time.perf_counter() - 10.0, hard=1.0, remaining=600.0, model=False).out()
+    assert _DecisionClock(d0=time.perf_counter() - 10.0, hard=1.0, remaining=5.0, model=False).out()
+    assert not _DecisionClock(d0=time.perf_counter() - 10.0, hard=1.0, remaining=5.0, model=True).out()
+
+
 def test_netplay_choice_follows_the_clocked_policy():
     """The review's H1 in netplay (parts 1, 2 and 4), on a decision clock the test sets: the hard
     bound spent, the pick's verification is cut; with no child known legal the children are

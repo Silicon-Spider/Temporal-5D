@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <sstream>
+#include <fstream>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -2310,6 +2312,104 @@ TEST(capi_search_a_lifted_root_listing_runs_without_the_deadline) {
     }
   }
   CHECK_EQ(t5d_search_lift_root_listing(nullptr, 1, T5D_NO_DEADLINE, nullptr), T5D_ERR_ARGUMENT);
+}
+
+t5d_game* q3_node_game() {
+  std::ifstream in(std::string(T5D_ENGINE_DIR) + "/testdata/legality-cost/q3-flat-node.5dpgn", std::ios::binary);
+  REQUIRE(in.good());
+  std::ostringstream ss;
+  ss << in.rdbuf();
+  const std::string text = ss.str();
+  t5d_game* raw = nullptr;
+  REQUIRE_EQ(t5d_game_new_from_pgn(text.data(), text.size(), 4, &raw, nullptr), T5D_OK);  // Q3: play activates
+  size_t total = 0;
+  REQUIRE_EQ(t5d_game_record_actions(raw, &total, nullptr, nullptr), T5D_OK);
+  for (size_t i = 0; i < total; ++i) REQUIRE_EQ(t5d_game_replay_next(raw, nullptr), T5D_OK);
+  return raw;
+}
+
+t5d_search_params unsettled_params(uint64_t mate_bytes) {
+  t5d_search_params sp = quick_params();
+  sp.hunt = 0;
+  sp.settling = 0;
+  sp.legality_checks = 0;  // the expansion settles nothing beyond its cheap tiers
+  sp.legality_nodes = 0;
+  sp.verify_unknown = 0;
+  sp.verify_checks = 0;  // the lazy verification's budget: nothing
+  sp.verify_nodes = 0;
+  sp.mate_bytes = mate_bytes;
+  return sp;
+}
+
+TEST(capi_search_verify_within_without_a_deadline_is_the_exact_verify) {
+  // The mutation pass's C01 and C03, adopted: t5d_search_verify_within with no
+  // deadline and no budget limit is t5d_search_verify - the same EXACT
+  // classification (never the lazy budget) under the same memory ceiling
+  // (mate_bytes: 64 KB leaves some children unknown) - two twin searches at
+  // issue 406's Q3 node, the first unknown children (up to 12).
+  const Game ga(q3_node_game());
+  const Game gb(q3_node_game());
+  const t5d_search_params sp = unsettled_params(uint64_t{64} << 10);
+  const SearchHandle a = new_search(ga.get(), sp);
+  const SearchHandle b = new_search(gb.get(), sp);
+  REQUIRE_EQ(t5d_search_run(a.get(), T5D_EVALUATOR_UNIFORM, 1, 8, nullptr), T5D_OK);
+  REQUIRE_EQ(t5d_search_run(b.get(), T5D_EVALUATOR_UNIFORM, 1, 8, nullptr), T5D_OK);
+  int unknown = 0;
+  int decided = 0;
+  for (size_t i = 0; unknown + decided < 12;) {
+    t5d_search_summary ia{};
+    t5d_search_summary ib{};
+    REQUIRE_EQ(t5d_search_info(a.get(), &ia), T5D_OK);
+    REQUIRE_EQ(t5d_search_info(b.get(), &ib), T5D_OK);
+    REQUIRE_EQ(ia.root_children, ib.root_children);
+    if (i >= static_cast<size_t>(ia.root_children)) break;
+    t5d_root_child c{};
+    REQUIRE_EQ(t5d_search_child(a.get(), i, &c, nullptr, 0, nullptr), T5D_OK);
+    if (c.legality != T5D_LEGALITY_UNKNOWN) {
+      ++i;
+      continue;
+    }
+    int32_t va = -1;
+    int32_t vb = -1;
+    REQUIRE_EQ(t5d_search_verify(a.get(), i, &va, nullptr), T5D_OK);
+    REQUIRE_EQ(t5d_search_verify_within(b.get(), i, T5D_NO_LIMIT, T5D_NO_LIMIT, 0.0, &vb, nullptr), T5D_OK);
+    REQUIRE_EQ(vb, va);
+    (va == T5D_LEGALITY_UNKNOWN ? unknown : decided) += 1;
+    if (va != T5D_LEGALITY_ILLEGAL) ++i;  // an illegal child is removed: index i is the next
+  }
+  CHECK(decided >= 1);
+  CHECK(unknown >= 1);  // the ceiling reached: a verify_within without it would decide these
+}
+
+TEST(capi_search_verify_within_takes_seconds) {
+  // The mutation pass's C02, adopted: a deadline of 30 s is 30 seconds - every
+  // unknown child at the Q3 node (exact proofs up to ~0.8 s) tried is decided
+  // within it (up to 6), never left unknown as a 30 ms deadline would leave it.
+  const Game g(q3_node_game());
+  const SearchHandle s = new_search(g.get(), unsettled_params(uint64_t{512} << 20));
+  REQUIRE_EQ(t5d_search_run(s.get(), T5D_EVALUATOR_UNIFORM, 1, 8, nullptr), T5D_OK);
+  int verified = 0;
+  double longest = 0;
+  for (size_t i = 0; verified < 6;) {
+    t5d_search_summary info{};
+    REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
+    if (i >= static_cast<size_t>(info.root_children)) break;
+    t5d_root_child c{};
+    REQUIRE_EQ(t5d_search_child(s.get(), i, &c, nullptr, 0, nullptr), T5D_OK);
+    if (c.legality != T5D_LEGALITY_UNKNOWN) {
+      ++i;
+      continue;
+    }
+    int32_t v = -1;
+    const auto t0 = std::chrono::steady_clock::now();
+    REQUIRE_EQ(t5d_search_verify_within(s.get(), i, T5D_NO_LIMIT, T5D_NO_LIMIT, 30.0, &v, nullptr), T5D_OK);
+    longest = std::max(longest, std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+    ++verified;
+    REQUIRE(v != T5D_LEGALITY_UNKNOWN);
+    if (v != T5D_LEGALITY_ILLEGAL) ++i;
+  }
+  CHECK(verified >= 1);
+  CHECK(longest > 0.03);  // the premise: a proof longer than 30 ms
 }
 
 TEST(capi_search_a_cleared_deadline_is_cleared) {

@@ -4688,7 +4688,9 @@ none shown legal with time left (every verification stopped by the node budget o
 ceiling) ends the game unscored (`Unsettled::Choice`).
 Each of those verifications takes the game loop's node budget (decision 13, H22:
 `PlayParams::terminal_nodes`) with the deadline beside it, and the verdict's witness is played
-before the search against the clock. The turn-start verdict is the unclocked loop's - within
+only after the search against the clock has found nothing with time left (the E11 review's S7: the
+most visited child shown legal is the search's own choice, the witness a legal action and no
+more). The turn-start verdict is the unclocked loop's - within
 `terminal_nodes`, charged to neither side (it decides the result: the referee's work - issue 456),
 and one the budget cannot settle ends the game unscored with both clocks untouched. A moves-left above `kMovesLeftMaxTurns` (2000 turns; issue 476) is refused from the
 context and capped from the root's network output, so a plan's integral sums at most 1000

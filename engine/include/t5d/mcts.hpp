@@ -1591,6 +1591,10 @@ class Search {
   /// follows the root) until then.
   void lift_root_listing(std::optional<std::chrono::steady_clock::time_point> deadline) noexcept;
   void unlift_root_listing() noexcept;
+  /// The deadline the root's own listing runs under now: the lifted one while
+  /// lifted, else the persistent deadline (inside run(), with its own
+  /// Limits::seconds). For tests and diagnostics.
+  std::optional<std::chrono::steady_clock::time_point> root_listing_deadline() const noexcept;
   /// E5/E9: the child to play, by index into root_children(). Throws
   /// std::invalid_argument if the root has no visited child.
   Choice choose() const;

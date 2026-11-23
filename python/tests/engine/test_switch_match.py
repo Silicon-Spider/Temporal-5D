@@ -192,3 +192,15 @@ def test_a_flag_is_scored_and_an_unscored_game_left_out():
         _tally(m, GameResult(config=cfg, record="", actions=[], end="unknown", winner=None, unsettled=why), 0, "asset_boosted_edges")
     assert (m.wins, m.losses, m.draws, m.capped, m.unscored) == (1, 1, 0, 0, 3)
     assert m.score == 0.5
+
+
+def test_a_sides_own_override_wins_and_hunt_suggest_alone_is_named():
+    """The mutation pass's Y15 and Y17, adopted: a side's own override wins over the shared one, and
+    the Steering header is written when only ``hunt_suggest`` is on."""
+    from t5d.engine.netplay import _search_settings
+
+    cfg = PlayConfig(mode="match", search_overrides=(("asset_map", 0),), side_overrides=((("asset_map", 1),), ()))
+    assert _search_settings(cfg, 0)["asset_map"] == 1
+    assert _search_settings(cfg, 1)["asset_map"] == 0
+    header = steering_header(PlayConfig(mode="match", hunt_suggest=True))
+    assert header is not None and "hunt_suggest=1" in header

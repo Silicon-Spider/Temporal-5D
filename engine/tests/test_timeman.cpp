@@ -34,10 +34,12 @@
 
 #include "play_record.hpp"
 #include "synthetic.hpp"
+#include "t5d/ladder.hpp"
 #include "t5d/legal.hpp"
 #include "t5d/mcts.hpp"
 #include "t5d/movegen.hpp"
 #include "t5d/pgn.hpp"
+#include "t5d/prover.hpp"
 #include "t5d/selfplay.hpp"
 #include "t5d/timeman.hpp"
 #include "t5d/variants.hpp"
@@ -1546,10 +1548,12 @@ class DeadlineSpy final : public Evaluator {
   int throw_at = -1;
   int calls = 0;
   std::vector<std::optional<std::chrono::steady_clock::time_point>> seen;
+  std::vector<std::optional<std::chrono::steady_clock::time_point>> listing;  // the root listing's (S4)
   void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
     if (calls == throw_at) throw std::runtime_error("the spy throws on purpose");
     inner_->evaluate(batch, out);
     seen.push_back(search->deadline());
+    listing.push_back(search->root_listing_deadline());
     if (clock != nullptr) clock->t += 1e-4 * static_cast<double>(batch.size());
     ++calls;
   }
@@ -1895,6 +1899,12 @@ TEST(timeman_a_clocked_verification_sits_inside_the_hard_bound) {
   CHECK(kept);
   CHECK(!legal_exactly(s, steered));  // the premise: finished, the proof would have removed it
   CHECK(g.end != GameEnd::Flag);
+  // The charge is the decisions' whole time on the match clock (the clock
+  // moves only by the evaluator here, inside the decisions), and the forced
+  // slice that ran past the bound is counted (the review's SS-F2).
+  CHECK(near(p.clock.base_seconds - g.clock_remaining[1], clock.t, 1e-9));
+  CHECK(g.hard_overruns >= 1);
+  CHECK(g.max_overrun_seconds > 0);
 }
 
 TEST(timeman_no_child_known_legal_searches_against_the_clock_and_never_throws) {
@@ -2084,6 +2094,262 @@ TEST(timeman_a_root_solved_before_any_visit_is_unscored_on_a_clock_never_a_flag)
   CHECK_EQ(g.winner, -1);
   CHECK(g.clock_remaining[0] > 0);
   CHECK(g.actions.empty());
+}
+
+// An evaluator that lures the search to `lure` - a lower logit (1) than
+// `second`'s (1.5), so it sits after `second` among the root's children, but a
+// child the side to move values at +0.9, so its visits outgrow its prior - and
+// charges `clock` per leaf.
+class LureAndCharge final : public Evaluator {
+ public:
+  LureAndCharge(ManualClock& clock, double per_leaf, const GameState& root, Move lure, Move second)
+      : clock_(clock), per_leaf_(per_leaf), lure_(lure), second_(second), lured_(root) {
+    lured_.apply(lure);
+  }
+  void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
+    for (std::size_t i = 0; i < batch.size(); ++i) {
+      const MoveList& moves = batch[i].expansion->moves();
+      out[i].logits.assign(moves.size(), 0.0f);
+      for (std::size_t m = 0; m < moves.size(); ++m) {
+        if (moves[m] == lure_) out[i].logits[m] = 1.0f;
+        if (moves[m] == second_) out[i].logits[m] = 1.5f;
+      }
+      const double v = batch[i].moves_made == 1 && *batch[i].state == lured_ ? 0.9 : 0.0;
+      out[i].wdl = wdl_of(v);
+      out[i].value = two_hot(v);
+    }
+    clock_.t += per_leaf_ * static_cast<double>(batch.size());
+  }
+
+ private:
+  ManualClock& clock_;
+  double per_leaf_;
+  Move lure_;
+  Move second_;
+  GameState lured_;
+};
+
+TEST(timeman_after_a_removal_against_the_clock_the_child_shown_legal_is_played) {
+  // H1's second exception after a removal (the mutation pass's B07, written):
+  // the illegal move lured to the most visits from a lower prior - so it sits
+  // after the legal one among the children - is the pick (the visits rule);
+  // the bound's verification is cut (the hard bound the soft one: the search
+  // spends it); against the side's clock the lure is proven illegal and
+  // removed (the children after it renumbered) and the legal move, shown
+  // legal, is the one played - not whichever child took the removed one's
+  // index (checked: with that index kept, another child is played).
+  const GameState s = q3_flat_node();
+  const Move lure = move_named(s, "(+2T2)Kb4(+1T1)a4");
+  const Move legal = move_named(s, "(+1T2)Ka3(+2T2)a3");
+  ManualClock clock;
+  LureAndCharge ev(clock, 0.01, s, lure, legal);
+  PlayParams p = q3_clocked(60, false);
+  p.search.final_rule = FinalRule::Visits;  // the most visited child is the pick
+  p.clock.time.hard_multiple_low = 1;       // the hard bound the soft: the search spends it, so the
+  p.clock.time.hard_multiple_high = 1;      // pick's verification after it is cut
+  p.clock.clock = &clock;
+  GameRecord g(s);
+  CHECK_NOTHROW(g = play_game(s, ev, p));
+  REQUIRE(!g.decision_log.empty());
+  const DecisionLog& d = g.decision_log.front();
+  const std::vector<Move>& played = d.children.at(d.chosen).step.moves;
+  REQUIRE_EQ(played.size(), std::size_t{1});
+  bool kept = false;
+  for (const DecisionLog::Child& c : d.children) kept = kept || (c.step.moves.size() == 1 && c.step.moves[0] == lure);
+  CHECK(!kept);  // the premise: the lure was proven illegal and removed
+  CHECK(played.front() == legal);
+  CHECK(g.end != GameEnd::Flag);
+}
+
+TEST(timeman_against_the_clock_the_most_visited_children_are_verified_first) {
+  // H1's second exception (the mutation pass's B05, adopted): no child known
+  // legal, the bound's verification cut - the children are verified MOST
+  // VISITED FIRST against the side's remaining clock (60 s), so the child
+  // played is the most visited one shown legal.
+  const GameState s = q3_flat_node();
+  ManualClock clock;
+  SteerAndCharge ev(clock, 1.0, std::nullopt, std::nullopt);
+  PlayParams p = q3_clocked(60, false);
+  p.clock.clock = &clock;
+  GameRecord g(s);
+  CHECK_NOTHROW(g = play_game(s, ev, p));
+  REQUIRE(!g.decision_log.empty());
+  const DecisionLog& d = g.decision_log.front();
+  const DecisionLog::Child& played = d.children.at(d.chosen);
+  std::uint32_t most = 0;
+  for (const DecisionLog::Child& c : d.children) most = std::max(most, c.visits);
+  REQUIRE(most > 0);  // the premise: the forced slice visited children
+  CHECK_EQ(played.visits, most);
+}
+
+TEST(timeman_a_flagged_decision_counts_its_work_and_is_charged_its_whole_time) {
+  // M1 and H1 (the mutation pass's B17 and B16, adopted): the flagged decision
+  // counts - its work in the game's totals - and is charged its WHOLE time on
+  // the match clock (the search, the choice, the verifications after it), not
+  // its search's alone. A clock that moves at every read as well as by the
+  // evaluator; the forced slice's 4 leaves cost 4 s of a 2 s clock.
+  const GameState s = q3_flat_node();
+  ManualClock clock;
+  clock.step = 0.01;
+  SteerAndCharge ev(clock, 1.0, std::nullopt, std::nullopt);
+  PlayParams p = q3_clocked(2.0, false);
+  p.clock.clock = &clock;
+  GameRecord g(s);
+  CHECK_NOTHROW(g = play_game(s, ev, p));
+  REQUIRE(g.end == GameEnd::Flag);
+  CHECK(g.playouts > 0);
+  CHECK(g.evaluations >= std::uint64_t{4});
+  CHECK(near(2.0 - g.clock_remaining[1], clock.t - clock.step, 1e-9));  // from its first read to its last
+}
+
+TEST(timeman_the_decision_clock_flags_on_the_sides_clock_and_bounds_by_the_earlier) {
+  // H1's clock (detail::DecisionClock; the mutation pass's B15 and B04,
+  // written as netplay's _DecisionClock is tested): the flag reads the side's
+  // remaining clock, never the hard bound, and never the model clock; a
+  // budget's deadline is the earlier of the clock's and the game's - now,
+  // once the budget is spent.
+  using Clk = std::chrono::steady_clock;
+  ManualClock clock;
+  clock.t = 10;  // ten seconds into the decision
+  const mcts::detail::DecisionClock bound_spent{&clock, 0, 1, 600};
+  CHECK(!bound_spent.out());
+  const mcts::detail::DecisionClock clock_spent{&clock, 0, 1, 5};
+  CHECK(clock_spent.out());
+  const mcts::detail::DecisionClock model{nullptr, 0, 1, 5};
+  CHECK(!model.out());
+  const Clk::time_point before = Clk::now();
+  const auto soon = Clk::now() + std::chrono::seconds(5);
+  const auto late = Clk::now() + std::chrono::hours(1);
+  // 600 s of the side's clock from the start, 10 spent: ~590 s from now.
+  const std::optional<Clk::time_point> mine = bound_spent.within(600, std::nullopt);
+  REQUIRE(mine.has_value());
+  CHECK(*mine > Clk::now() + std::chrono::seconds(580) && *mine < Clk::now() + std::chrono::seconds(600));
+  CHECK(bound_spent.within(600, soon) == std::optional(soon));  // the game's, earlier
+  CHECK(bound_spent.within(600, late) == mine || *bound_spent.within(600, late) < late);  // the clock's, earlier
+  const std::optional<Clk::time_point> spent = bound_spent.within(1, late);  // 1 s, 10 spent: now
+  REQUIRE(spent.has_value());
+  CHECK(*spent >= before && *spent <= Clk::now());
+  CHECK(model.within(600, soon) == std::optional(soon));
+  CHECK(!model.within(600, std::nullopt).has_value());
+}
+
+TEST(timeman_the_proof_gap_is_the_largest_proven_one) {
+  // Decision 12's hook (proof_gap; the mutation pass's D06 and D03): the
+  // largest gap of the PROVEN verdicts - a settling scan's -1 against the
+  // root's value (no line child: 1.5 from 0.5), then Hunt's +1 (0.5) - never
+  // the last one's, and an unproven verdict not read.
+  const GameState root = variant("Standard");
+  std::vector<LadderVerdict> verdicts;
+  LadderVerdict settling(root);
+  settling.job = LadderJob::PvSettling;
+  settling.status = ProofStatus::Proven;
+  verdicts.push_back(settling);
+  LadderVerdict hunt(root);
+  hunt.job = LadderJob::Hunt;
+  hunt.status = ProofStatus::Proven;
+  verdicts.push_back(hunt);
+  CHECK(near(proof_gap(verdicts, 0.5, {}), 1.5, 1e-12));
+  std::vector<LadderVerdict> unproven;
+  LadderVerdict u(root);
+  u.job = LadderJob::PvSettling;
+  u.status = ProofStatus::Unknown;
+  unproven.push_back(u);
+  unproven.push_back(hunt);
+  CHECK(near(proof_gap(unproven, 0.5, {}), 0.5, 1e-12));
+  CHECK_EQ(proof_gap({}, 0.5, {}), 0.0);
+}
+
+TEST(timeman_the_hook_reads_only_proven_verdicts) {
+  // The mutation pass's D03, adopted: Hunt at Standard's start finds no mate
+  // (its verdicts not Proven) - the gap stays 0 though the uniform net's
+  // value is 0, far from Hunt's +1.
+  SearchParams sp = quiet_params();
+  sp.synchronous = true;
+  sp.hunt = true;
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  Search search(variant("Standard"), sp);
+  search.run(*uniform, Limits{64});
+  search.await_ladder();
+  std::size_t unproven = 0;
+  for (const LadderVerdict& v : search.verdicts()) unproven += v.status != ProofStatus::Proven ? 1 : 0;
+  REQUIRE(unproven >= 1);  // the premise
+  TimeParams hook;
+  hook.proof_volatility = true;
+  CHECK_EQ(snapshot(search, 0, 0, hook).proof_gap, 0.0);
+}
+
+TEST(timeman_the_forced_slice_lifts_the_roots_listing_to_the_callers_deadline) {
+  // M1's lift is of the HARD BOUND only (the mutation pass's A05, under S4):
+  // in the forced slices the root's own listing runs under the caller's
+  // persistent deadline - never none - and every other call under the bound;
+  // after them the root's listing is the bound's again, and the caller's
+  // deadline is restored at the end.
+  using Clk = std::chrono::steady_clock;
+  Search search(variant("Standard"), quiet_params());
+  const auto callers = Clk::now() + std::chrono::hours(1);
+  search.set_deadline(callers);
+  SteadyManual clock;
+  DeadlineSpy spy;
+  spy.search = &search;
+  spy.clock = &clock;
+  TimeManager tm;
+  TimeContext ctx;
+  ctx.remaining_seconds = 10;
+  run_timed(search, spy, tm, ctx, &clock);
+  REQUIRE(spy.calls >= 3);
+  CHECK(spy.listing[0] == std::optional(callers));
+  CHECK(spy.listing[1] == std::optional(callers));
+  for (std::size_t i = 0; i < spy.seen.size(); ++i) {
+    REQUIRE(spy.seen[i].has_value());
+    CHECK(*spy.seen[i] < callers);  // the bound, earlier than the caller's
+  }
+  CHECK(spy.listing.back() == spy.seen.back());
+  CHECK(search.deadline() == std::optional(callers));
+}
+
+TEST(timeman_the_model_clock_keeps_the_callers_deadline) {
+  // The mutation pass's A08, adopted: on the model clock run_timed sets no
+  // hard bound - the caller's persistent deadline reaches every batch's calls
+  // unchanged.
+  using Clk = std::chrono::steady_clock;
+  Search search(variant("Standard"), quiet_params());
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  search.run(*uniform, Limits{32});
+  const auto callers = Clk::now() + std::chrono::hours(1);
+  search.set_deadline(callers);
+  DeadlineSpy spy;
+  spy.search = &search;
+  TimeManager tm;
+  TimeContext ctx;
+  ctx.remaining_seconds = 10;
+  run_timed(search, spy, tm, ctx, nullptr);
+  REQUIRE(spy.calls >= 2);
+  for (const std::optional<Clk::time_point>& d : spy.seen) CHECK(d == std::optional(callers));
+  CHECK(search.deadline() == std::optional(callers));
+}
+
+TEST(timeman_run_timed_folds_max_seconds_into_every_slice) {
+  // The mutation pass's A09, adopted: the game's safety stop (max_seconds)
+  // reaches the calls inside every slice where it is earlier than the bound.
+  using Clk = std::chrono::steady_clock;
+  Search search(variant("Standard"), quiet_params());
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  search.run(*uniform, Limits{32});
+  SteadyManual clock;
+  DeadlineSpy spy;
+  spy.search = &search;
+  spy.clock = &clock;
+  TimeManager tm;
+  TimeContext ctx;
+  ctx.remaining_seconds = 3600;
+  const TimedRun r = run_timed(search, spy, tm, ctx, &clock, 5.0);
+  const auto after = Clk::now();
+  REQUIRE(r.plan.hard_seconds > 10);  // the premise: the bound is later than the stop
+  REQUIRE(!spy.seen.empty());
+  for (const std::optional<Clk::time_point>& d : spy.seen) {
+    REQUIRE(d.has_value());
+    CHECK(*d <= after + std::chrono::seconds(5));
+  }
 }
 
 TEST(timeman_a_flat_root_whose_listing_a_deadline_cut_never_throws_out_of_play) {

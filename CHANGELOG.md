@@ -10,6 +10,43 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - E11 review round 2, S7: the mutation pass's candidate tests adopted, the ones it described written
+
+The review's S7 (the mutation pass, SS-F2). Its candidate tests adopted, each against the survivor
+it kills, the probes renamed and placed with their kind:
+- **A05** (the forced slice's lift, under S4: the root's own listing runs under the caller's
+  deadline, every other call under the bound - observed through the new
+  `Search::root_listing_deadline()`), **A08** (the model clock keeps the caller's deadline), **A09**
+  (`max_seconds` folded into every slice), **B05** (most visited verified first), **B16** and
+  **B17** (a flagged decision charged its whole time and counting its work), **D03** (the hook
+  reads proven verdicts only) in `test_timeman.cpp`; **C01-C03** (`t5d_search_verify_within` with no
+  deadline is the exact verify under the ceiling; its seconds are seconds) in `test_capi_search.cpp`,
+  capped at a dozen children of the Q3 node; **Y01**, **Y07**, **Y09** in `test_time_management.py`,
+  **Y15** and **Y17** in `test_switch_match.py` (Y03, Y10, Y12 and Y25 came with S1 and S2).
+- **Written where the pass described them**: **B07** - an evaluator that lures the search to an
+  illegal move from a lower prior (so it sits after the legal one) under the visits rule, with the
+  hard bound the soft one so that the pick's verification is cut: the lure is proven illegal
+  against the clock and removed, and the legal move is played (checked against the mutant: with the
+  stale index another child is played). **B04** and **B15** through `detail::DecisionClock`, the
+  clocked decision's clock as netplay's `_DecisionClock` (its flag reads the side's clock, never
+  the hard bound; a budget's deadline is the earlier of the clock's and the game's). **D06**
+  through `proof_gap()`, the hook's reading pulled out of `snapshot` (the largest proven gap, not
+  the last). **B10/B11** came with S1 (`detail::cannot_move`).
+- **H1 part (6)'s test** asserts the charge (the decisions' whole time on the match clock) and the
+  overrun (the forced slice past the bound counted).
+- **One order changed with them** (found by B05's premise): the merge put decision 13's witness
+  step before H1's search against the clock, so at the Q3 node - whose verdict has a witness - the
+  witness was always played and the search never ran. A clocked decision now searches against its
+  clock first (the most visited child shown legal is the search's own choice, as `make_legal`
+  prefers the most visited child known legal to the witness) and plays the witness only when that
+  finds nothing with time left; with neither, the choice is unsettled. The same in netplay. The cost:
+  a side can spend clock where a free legal move existed - for the main loop to confirm.
+- Docs: `selfplay.hpp`, `timeman.hpp`, `mcts.hpp`, netplay's docstrings, the README.
+
+Spec: none beyond what S1-S6 named - tests, two pure functions for them, and the order of the
+clocked loop's no-child steps (H1's second exception and H22's witness: issue 458 updated). No
+proposed edit; no measured figure.
+
 ### 2026-11-24 - E11 review round 2, S6: the proposed edits point at the spec's text
 
 The review's S6 (SS-F4). Proposed edits 342, 343 and 346 pointed at the wrong text: edit 333

@@ -4575,6 +4575,10 @@ void Search::unlift_root_listing() noexcept {
   impl_->root_deadline_.reset();
 }
 
+std::optional<std::chrono::steady_clock::time_point> Search::root_listing_deadline() const noexcept {
+  return impl_->listing_deadline(impl_->root_);
+}
+
 std::optional<std::array<float, kValueBins>> Search::root_child_value(std::size_t index) const {
   const Impl& s = *impl_;
   const std::vector<std::size_t> edges = s.root_edges();

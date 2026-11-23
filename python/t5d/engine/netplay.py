@@ -48,10 +48,10 @@ mirrors the engine's ``play_game`` (``src/selfplay.cpp``; ``t5d-play``) step for
   S1), uncharged. The steps after the search follow the engine's policy (the E11 review's H1):
   the search re-run a batch at a time, the chosen move verified within the hard bound
   (``Search.verify(index, seconds=...)``) and the game loop's node budget, the most visited child
-  known legal played where it is cut, then the turn-start verdict's witness; with none of them,
-  the children verified in visit order against the side's remaining clock - the flag falls if it
-  runs out, and none shown legal with time left ends the game unscored ("choice"), never a throw
-  (M1). The turn-start verdict is charged to neither side (issue 456). Self-play takes no clock.
+  known legal played where it is cut; with none, the children verified in visit order against the
+  side's remaining clock - the flag falls if it runs out - and then the turn-start verdict's
+  witness; with neither, the game ends unscored ("choice"), never a throw (M1, S7). The
+  turn-start verdict is charged to neither side (issue 456). Self-play takes no clock.
 * **6e's steering switches** (H13, H43; spec section 11.2: "an on/off test of its own at match
   play"): ``asset_map`` (on) and ``hunt_suggest`` (off) for every search; ``search_overrides``,
   further ``t5d_search_params`` fields by name; ``side_overrides``, White's and Black's own (match
@@ -1006,9 +1006,9 @@ def _choose(
     None: the chosen move was not shown legal, no other is known legal and the witness does not
     continue - the game ends unscored. A clocked decision (``clock``; the engine's play_game's
     policy, the E11 review's H1): the search re-run one batch at a time; the verification within
-    the hard bound, then the most visited child known legal, then the witness; with none of them,
-    the children verified in visit order against the side's remaining clock, within the same node
-    budget; ``_OutOfClock`` when the clock runs out first, ``_NoMove`` when the search cannot
+    the hard bound, then the most visited child known legal; with none, the children verified in
+    visit order against the side's remaining clock, within the same node budget, and only then
+    the witness (S7); ``_OutOfClock`` when the clock runs out first, ``_NoMove`` when the search cannot
     produce a move with time left - never a throw for want of a move (the proof channel, which
     would let a root solved before any visit play its proven win as play_game does, is reserved
     here: never on)."""
@@ -1064,22 +1064,24 @@ def _choose(
         if legal:
             pick = max(legal, key=lambda c: c.visits).index
             continue
+        if clock is not None and not clock.model:  # the clock's search first, as play_game's (S7)
+            found = _legal_against_the_clock(search, cfg, res, clock)
+            if found is not None:
+                return found
         step = None if witness is None else witness(search)
         if step is not None:
             res.witness_moves += 1  # a step of the verdict's legal action: known legal
             return step
-        if clock is not None and not clock.model:
-            return _legal_against_the_clock(search, cfg, res, clock)
         return None  # H22: the game ends unscored
     return pick
 
 
 def _legal_against_the_clock(search: Search, cfg: PlayConfig, res: GameResult, clock: _DecisionClock) -> int | None:
-    """H1's second exception: no child known legal after the bound's verification and the
-    witness does not continue - the children verified in visit order against the side's remaining
-    clock, within the game loop's node budget (H22), the first shown legal returned;
-    ``_OutOfClock`` when the clock runs out first; None (an unsettled choice: the game ends
-    unscored) when every verification stopped with time left."""
+    """H1's second exception: no child known legal after the bound's verification - the children
+    verified in visit order against the side's remaining clock, within the game loop's node budget
+    (H22), the first shown legal returned; ``_OutOfClock`` when the clock runs out first; None when
+    every verification stopped with time left (then the verdict's witness, or an unsettled
+    choice)."""
     tried: set[tuple] = set()
     while True:
         children = sorted(search.children(), key=lambda c: -c.visits)

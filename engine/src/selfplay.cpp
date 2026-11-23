@@ -102,6 +102,20 @@ bool detail::cannot_move(bool added_playouts, bool still_edgeless, bool clock_ad
   return ++idle >= kNoVisitRounds;
 }
 
+bool detail::DecisionClock::out() const { return clock != nullptr && clock->now() - start >= remaining; }
+
+std::optional<std::chrono::steady_clock::time_point> detail::DecisionClock::within(
+    double budget, std::optional<std::chrono::steady_clock::time_point> game) const {
+  if (clock == nullptr) return game;
+  const auto now = std::chrono::steady_clock::now();
+  const double left = budget - (clock->now() - start);
+  const std::optional<std::chrono::steady_clock::time_point> mine =
+      left > 0 ? deadline_after(now, left, "the match clock") : std::optional(now);
+  if (!mine) return game;
+  if (!game) return mine;
+  return std::min(*game, *mine);
+}
+
 GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayParams& params) {
   const auto t0 = std::chrono::steady_clock::now();
   GameRecord g(start);
@@ -313,26 +327,17 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
         return false;
       };
       // E11, the review's H1 - a clocked decision's steps after its search, on
-      // the match clock: `budget` seconds of the side's clock from the
-      // decision's start, as a steady-clock deadline (now, once spent), and
-      // the earlier of it and the game's. The model clock has no wall time:
-      // none.
+      // the match clock (detail::DecisionClock): `budget` seconds of the side's
+      // clock from the decision's start, as a steady-clock deadline (now, once
+      // spent), and the earlier of it and the game's; the side's flag only
+      // when its clock has run out. The model clock has no wall time: none.
       using SteadyPoint = std::chrono::steady_clock::time_point;
-      const auto earlier = [](std::optional<SteadyPoint> a, std::optional<SteadyPoint> b) -> std::optional<SteadyPoint> {
-        if (!a) return b;
-        if (!b) return a;
-        return std::min(*a, *b);
-      };
-      const auto on_clock = [&](double budget) -> std::optional<SteadyPoint> {
-        if (!timed || clock == nullptr) return deadline;
-        const auto now = std::chrono::steady_clock::now();
-        const double left = budget - (clock->now() - c0);
-        return earlier(deadline, left > 0 ? deadline_after(now, left, "the match clock") : std::optional(now));
-      };
       const double clock_at_start = mc.enabled ? g.clock_remaining[static_cast<std::size_t>(side)] : 0.0;
-      const auto clock_out = [&] {  // the side's clock has run out (the wall or the test's clock)
-        return timed && clock != nullptr && clock->now() - c0 >= clock_at_start;
+      const detail::DecisionClock dc{clock, c0, timed ? timed->plan.hard_seconds : 0.0, clock_at_start};
+      const auto on_clock = [&](double budget) -> std::optional<SteadyPoint> {
+        return timed ? dc.within(budget, deadline) : deadline;
       };
+      const auto clock_out = [&] { return timed && dc.out(); };
       bool out_of_clock = false;  // the side's flag fell before it had a move (H1's second exception, M1)
       // No child to choose and the deadline passed: TimeLimit (the run may
       // have stopped Deadline, or Playouts or Finished first - M1).
@@ -418,16 +423,16 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       // A clocked decision's verification sits inside its hard bound (§8.6;
       // the E11 review's H1, the main loop's policy: no reserve): it gets what
       // the bound leaves, then the fallback below.
-      exact.deadline = timed ? on_clock(timed->plan.hard_seconds) : deadline;
+      exact.deadline = on_clock(dc.hard);
       std::vector<RootChild> children = search->root_children();
       // H1's second exception: no child known legal once the bound's
-      // verification is cut, and the verdict's witness (below) does not
-      // continue - the children verified in visit order (the most visited
-      // first; an illegal one removed) against the side's REMAINING CLOCK,
-      // within the same node budget (H22), the first shown legal played; the
-      // flag falls when the clock runs out (out_of_clock). False: none found -
-      // the clock out, or every verification stopped by the budget or the
-      // memory ceiling with time left (then unsettled, never a throw: S1).
+      // verification is cut - the children verified in visit order (the most
+      // visited first; an illegal one removed) against the side's REMAINING
+      // CLOCK, within the same node budget (H22), the first shown legal
+      // played; the flag falls when the clock runs out (out_of_clock). False:
+      // none found - the clock out, or every verification stopped by the
+      // budget or the memory ceiling with time left (then the verdict's
+      // witness, or unsettled - never a throw: S1, S7).
       const auto legal_against_the_clock = [&]() -> bool {
         LegalityOptions last = exact;
         last.deadline = on_clock(clock_at_start);
@@ -552,14 +557,19 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
           }
           if (best == children.size()) {
             if (deadline_passed()) return false;
+            // A clocked decision searches against its clock first (H1's
+            // second exception: the most visited child shown legal, the
+            // search's own choice); the verdict's witness - a legal action
+            // and no more - follows, and with neither the choice is unsettled
+            // (the E11 review's S7: this order, not the merge's).
+            if (timed && clock != nullptr) {
+              if (legal_against_the_clock()) break;
+              if (out_of_clock || deadline_passed()) return false;
+            }
             if (const std::optional<std::size_t> w = witness_step(); w.has_value()) {
               pick = *w;  // known legal: a step of the verdict's legal action
               ++g.witness_moves;
               break;
-            }
-            if (timed && clock != nullptr) {
-              if (legal_against_the_clock()) break;
-              if (out_of_clock || deadline_passed()) return false;
             }
             unsettled_choice = true;
             return false;
