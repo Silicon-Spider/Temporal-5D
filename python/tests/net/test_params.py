@@ -65,6 +65,7 @@ B15's per-axis far tables: 25,594,803 and 24,675,507.)
 
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 
 import pytest
@@ -225,14 +226,23 @@ def _fingerprint(params: dict) -> tuple[float, float, float]:
     return f[0], f[1], f[2]
 
 
-def _same(got, expected, n: int):
+def _same(got, expected, n: int, values: int | None = None):
     """``got`` is the fingerprint ``expected`` up to the last-bit differences a platform's float32
     libm leaves in the draws themselves (a GitHub runner's differ from the development machine's at
     about 1e-8 relative): 1e-5 on the plain sum, ``n`` times that on the sum weighted by rank - a
     tensor's difference enters it up to ``n`` times over, ``n`` the number of tensors - and 1e-9
-    relative on the absolute sum. A moved draw or two tensors swapped moves the sums far beyond."""
+    relative on the absolute sum. A moved draw or two tensors swapped moves the sums far beyond.
+
+    The 1e-9 is a large set's bound: over many values the per-value differences average out (the
+    whole v1's sum differed by 1.8e-11 on a runner). A set of few values has little to average -
+    B15's two far tables, 108 values here, differed by 2.0e-9 on a runner (the network job on
+    main 032db11, 2026-11-23). ``values``, the number of values fingerprinted, fits the bound to
+    what the sum holds: one float32 ulp a value (6e-8, taken as 1e-7) averaged over their square
+    root, and never under 1e-9 - 9.6e-9 for those 108, where another draw moves the sum by several
+    per cent."""
     assert got[0] == pytest.approx(expected[0], abs=1e-5) and got[1] == pytest.approx(expected[1], abs=1e-5 * n), got
-    assert got[2] == pytest.approx(expected[2], rel=1e-9), got
+    rel = 1e-9 if values is None else max(1e-9, 1e-7 / math.sqrt(values))
+    assert got[2] == pytest.approx(expected[2], rel=rel), got
 
 
 @pytest.mark.parametrize("flags", [{}, dict(opp_reply=True, optimistic_policy=True, soft_policy=False)], ids=["default", "prototypes"])

@@ -10,6 +10,32 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-23 - CI on main after the code round: a fingerprint's tolerance fitted to a small set, and the engine job's time limit
+
+The first CI on the review's code (main 032db11) passed the oracle gate's commit tier and failed
+in two places (`docs/BUILD_LOG.md`, issue 735).
+
+- **One Linux-only test failure** (network job, 1 of 2,291): the fingerprint of B15's two far
+  tables differed from the development machine's by 2.0e-9 relative in its absolute sum, past the
+  1e-9 that `_same` (`python/tests/net/test_params.py`) allows. That bound was set on large
+  parameter sets, whose per-value last-bit differences average out; the far tables are 108 values.
+  `_same` takes the number of values summed (`values=`) and fits the bound to it - 1e-7 over their
+  square root, never under 1e-9 - and `python/tests/net/test_displacement_far.py` passes it. No
+  recorded fingerprint changed, and every other caller keeps 1e-9.
+- **The engine job ran out of time on a slow runner**: `build-and-test (g++-14)` was cancelled at
+  its 30-minute limit with 655 of 724 tests run, while `(g++-13)` passed in 23 minutes on the same
+  commit. The suite is 23 to 24 minutes on a runner since today's merges (issue 535's fault
+  sweeps, with the tree form's arms under graph search now inside them, are about 8 of them; the
+  tree form's own tests about half a minute). `.github/workflows/engine.yml`: `timeout-minutes` 30
+  -> 60. No test was trimmed.
+
+**Checks**: `tests/net/test_params.py` and `tests/net/test_displacement_far.py`: 48 passed; `ruff
+check` and `ruff format --check` clean on both. The workflow's change is one value and a comment
+above it at the same indentation; it was not parsed here (no YAML parser on this machine). The
+fixes are proven only by the next CI run on Linux.
+
+Spec: no part of the spec describes this - a test's tolerance and a CI job's time limit.
+
 ### 2026-11-23 - Four answers from the user on the code round's questions: the padding's default, the human games, the two token budgets, register E12
 
 The user answered four of the questions the code round put to them (`docs/BUILD_LOG.md`, "Where

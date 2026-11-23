@@ -7767,6 +7767,27 @@ needs are proposed under "Proposed spec edits" (402 and up).*
      pool is built from the engine's own games. Nothing read them, so no code path changes. The
      user may lift this for start positions alone. Proposed: edit 415.
 
+735. **CI on main after the code round: one Linux-only failure and one job out of time** (no spec
+     section; the precedent is issue 602). The push of main 032db11 (2026-11-23) ran the first CI
+     on the review's code. (a) *The network job*, shard 1 of 4: 571 of 572 passed;
+     `test_the_far_off_arms_parameters_are_those_recorded_before_the_review` failed on the far
+     tables' fingerprint - its absolute sum 9.452122066628363 on the runner against
+     9.452122048001911 recorded on the development machine, 2.0e-9 relative, where `_same`
+     (`tests/net/test_params.py`) allowed 1e-9. The bound was set on large sets, whose per-value
+     last-bit differences average out (the whole v1's sum differed by 1.8e-11); the two far tables
+     are 108 values. Fixed: `_same(..., values=)` fits the bound to the number of values summed -
+     1e-7 over their square root, never under 1e-9: 9.6e-9 here, where another draw moves the sum
+     by several per cent. No recorded figure changed. (b) *The engine job*: `build-and-test
+     (g++-13)` passed in 22 min 54 s; `(g++-14)` was cancelled at the job's 30-minute limit with
+     655 of 724 tests run, its tests taking 37% longer than the other job's on the same commit - a
+     slower runner. The suite itself is 23 to 24 minutes on a runner now, 14 to 19 before today's
+     merges: about 8 of the added minutes are issue 535's fault sweeps - which now hold the tree
+     form's arms under graph search, not separable in a runner's log - and about half a minute the
+     tree form's own tests (ten looped over the graph, six new). Fixed: the job's limit is 60
+     minutes (`.github/workflows/engine.yml`), a backstop for a hang; no test was trimmed, and the
+     engine lane's coming deadline tests have room. The oracle gate's commit tier passed. Runs on
+     1adb029 were cancelled by 032db11's push and have no verdict of their own.
+
 ## Proposed spec edits
 
 Edits the spec or the register needs, for applying upstream. Each: where, what it
@@ -9936,3 +9957,10 @@ entry changes in the same edit as its code, which the standing rule defers to up
   (issue 724, edit 416) and register E10 becomes E12 (issue 730, edit 412). Comments and
   docstrings only in the code (`net/config.py`, `engine/pool.py`, `train/recipe.py`,
   `train/seeded.py`, `tests/net/test_kernel_pad.py`); no behaviour changed. ruff clean on the five files; the kernel-padding, recipe and pool test files 67 passed; `verify` ok. Left unstaged for the main loop to commit.
+- **2026-11-23 - CI on main after the code round** (issue 735). The first CI on the review's code
+  (main 032db11): the oracle gate's commit tier passed; the network job failed one test of 2,291
+  on Linux - the far tables' fingerprint, 2.0e-9 off on a 108-value sum against a 1e-9 bound set
+  for large sets - and the engine job's g++-14 leg ran out of its 30 minutes on a slow runner.
+  Fixed: `_same(..., values=)` in `tests/net/test_params.py`, used by `test_displacement_far.py`;
+  `timeout-minutes: 60` in `.github/workflows/engine.yml`. `tests/net/test_params.py` and
+  `test_displacement_far.py`: 48 passed; ruff clean. Left unstaged for the main loop to commit.
