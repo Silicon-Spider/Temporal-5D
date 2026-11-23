@@ -6657,6 +6657,55 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     `tests/train/test_generator_budget.py` (the budget in the record, the unknown record's round
     trip and targets, a record with no decision, the dropped partial action). Proposed edits 306
     (§11.0), 307 (§13), 308 (§16).
+414. **The review of decision 13 (`lane/engine` 193b517; three passes: spec, correctness,
+    mutation)** (register H22, I15, I3; §11.0, §12.8, §13, §16; issue 413). No HIGH; no budget hit
+    ever gave a wrong answer (5,775 budgeted verdicts, each Unknown or exact). Fixed as the main
+    loop decided, one commit per group; the numbers are this round's (issues 414-449, edits
+    309-329).
+    **X2, with L6, L8, C-L1 and F5's seam** (the witness). An unsettled choice ended the game
+    unscored though the turn-start verdict had just found a legal action - its witness - within the
+    same budget (the spec pass's four real choice endings: bare kings on three timelines at 32
+    nodes, ply and tree; Focused - Just Kings at 64). Now, at a decision with no child known legal,
+    every loop plays the witness's next step while the action's moves are its prefix (its submission
+    once they are all of it; under the flat form the whole turn). The C++ loop has `detect_mate`'s
+    own witness; Python gets it through a new C function, `t5d_game_verdict` (E4's verdict at a
+    game's turn start within a node budget and a memory ceiling, with its witness, each move
+    recorded in the state it is made in; `T5D_VERDICT_*`, static_asserts against `Outcome`;
+    `_SIGNATURES`; `Game.verdict`), asked only when needed (`netplay.TurnWitness`, the probe's
+    budget and ceiling: deterministic, the verdict's own). Where the plan said "its first move is a
+    root child", progressive widening lists only the instantiated children: a step the root has not
+    instantiated is played as a child of its own - known legal, unvisited - the C++ loop re-rooting
+    a match search on its moves (`advance_moves`), netplay's match play dropping the carried search
+    (the C API re-roots on a child or a whole action only; the side's next decision makes a fresh
+    one), the generator recording it as a further child (unvisited, so no deblunder blend:
+    `_blunder_weight` skips an unvisited played child; `replay_positions` plays it by its candidate
+    index). An instantiated witness step is marked known legal. Its choice code is
+    "verified_fallback" (a move known legal played in the chosen one's place): no new code, format
+    version 2 kept. Counted: `GameRecord::witness_moves`, `GameResult.witness_moves`. Moves are
+    compared by coordinates and promotion, as the C API's records match them: the detector's witness
+    carries other values in fields the generator sets (`aux_square`, an unused promotion) - the
+    first build compared whole moves and matched none. C-L1: the choice's Termination note now says
+    "the chosen move was not shown legal within the game loop's budget and no other is known legal".
+    L6: an unsettled question's end follows the clock, at a verdict and a choice alike - `TimeLimit`
+    once the deadline has passed, `Unknown` before, whatever stopped it (before, a memory stop after
+    the deadline was `Unknown` at a verdict and `TimeLimit` at a choice) - and the deadline is
+    checked as each verification starts. L8: the verification takes the verdict's detector (C++
+    `exact.detector`; `t5d_search_verify_budgeted` the search's) and Python's probe the generator's
+    `mate_bytes` override (`netplay.verdict_params`), as the C++ loop takes both from its search
+    parameters. F5's seam: `PlayParams::unsettle_verification_for_tests` (a verification withheld
+    from a given count on, as if the budget ran out). Tests:
+    `capi_game_verdict_answers_with_a_witness_h22`;
+    `play_with_no_child_known_legal_the_verdicts_witness_is_played_h22` (issue 406's Q3 node at
+    100,000 nodes, which ended on the choice before - one witness move, its action completed);
+    `play_every_choice_unsettled_plays_the_witness_whole_h22` (every verification withheld: the
+    action is the witness, ply and tree);
+    `play_a_choice_unsettled_off_the_witness_puts_the_game_back_after_two_moves_h22` (five
+    timelines, two steered moves off the witness, the third verification withheld: both moves taken
+    back - M18); Python: `Game.verdict` on the three verdict positions and three timelines; netplay
+    (self and match) and the generator playing the witness; the four real endings, which now play on
+    - 1 and 5 actions, each ending later on a verdict the budget cannot settle. The rollback tests
+    withhold the witness (it would continue whenever the moves played happen to be its prefix).
+    Proposed edit 309.
 
 402. **6f's settling scans: their wrapper is not on main** (§13.1 6f "verify the proof-export
     invariant under TT churn for Hunt and the settling scans (§11.3)"; §11.4 "df-pn at the
@@ -10019,6 +10068,13 @@ repository's copies, which upstream has still to take:
     ending at its turn start. A wall-clock stop (`max_seconds`) is a tool's safety stop, never
     training's." This supersedes the second half of the code round's edit 411 ("the loops' node
     budget is still to build"). Why: issue 413.
+309. **§11.0's budget paragraph: the verdict's witness (review decision 13's X2)**: now - "a choice
+    that stays unknown within it is passed over for the most visited child known to be legal — as
+    built — and with none known the game ends unscored." Proposed - "... passed over for the most
+    visited child known to be legal - as built; with none known, for the next step of the action the
+    turn start's verdict found within the same budget, while the moves played are its prefix - and
+    only once they have left it does the game end unscored." Why: issue 414 (X2) - the turn start
+    was settled; the ruling's "a turn start it cannot settle" does not describe an unsettled choice.
 
 <!-- A new list, so that the numbers from 137 render as written. -->
 

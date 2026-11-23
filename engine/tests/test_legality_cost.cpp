@@ -1239,15 +1239,35 @@ TEST(play_a_turn_start_the_budget_cannot_settle_ends_the_game_unscored_h22) {
   }
 }
 
-TEST(play_a_choice_the_budget_cannot_settle_ends_the_game_unscored_h22) {
-  // H22: "a choice that stays unknown within it is passed over for the most visited child known to
-  // be legal - as built - and with none known the game ends unscored." Issue 406's Q3 node with no
-  // legality budget in the search (every move unknown; nothing verified there), the choice steered
-  // onto a move whose exact proof needs 531,432 nodes, the game loop's budget 100,000: the
-  // verification stays unknown, no child is known legal, and the game ends Unknown at the action's
-  // turn start - its question the choice, no decision, no action, the start the final state, the
-  // record replaying to it - where before the ruling it threw (the memory ceiling's message).
-  // No clock is read: the same game twice.
+namespace {
+
+// The coordinates of a move (as the C API's records match it): the detector's witness need not
+// carry the generator's other fields.
+bool same_move(const Move& a, const Move& b) {
+  return a.from_timeline == b.from_timeline && a.from_half_turn == b.from_half_turn && a.from_square == b.from_square &&
+         a.to_timeline == b.to_timeline && a.to_half_turn == b.to_half_turn && a.to_square == b.to_square &&
+         a.promotes() == b.promotes() && (!a.promotes() || a.promotion == b.promotion);
+}
+
+// The turn-start verdict's witness the game loop sees: E4 within `nodes` and the search's ceiling.
+std::vector<Move> witness_at(const GameState& s, std::uint64_t nodes) {
+  SearchBudget b = SearchBudget::nodes(nodes);
+  b.max_bytes = mcts::PlayParams{}.search.mate_bytes;
+  const MateResult r = detect_mate(s, mcts::PlayParams{}.search.detector, b);
+  REQUIRE(r.verdict == Outcome::Ongoing);
+  return r.witness;
+}
+
+}  // namespace
+
+TEST(play_with_no_child_known_legal_the_verdicts_witness_is_played_h22) {
+  // H22, review decision 13's X2: the turn start's verdict found a legal action within the game
+  // loop's budget, so a decision with no child known legal plays its witness's next step instead
+  // of ending the game unscored. Issue 406's Q3 node, no legality budget in the search (every move
+  // unknown), the choice steered onto a move whose exact proof needs 531,432 nodes, the budget
+  // 100,000: the verification stays unknown and no child is known legal - the witness's first move
+  // is played (before X2 the game ended unscored there, its question the choice). One action:
+  // it is played and recorded legal. No clock is read: the same game twice.
   const GameState s = fixture("q3-flat-node.5dpgn", q3());
   mcts::PlayParams pp;
   pp.search = quiet(pp.search);
@@ -1257,26 +1277,106 @@ TEST(play_a_choice_the_budget_cannot_settle_ends_the_game_unscored_h22) {
   pp.match_play = true;  // the most visited child: the steered one
   pp.playouts = 2;
   pp.terminal_nodes = 100'000;
+  pp.max_actions = 1;
+  const std::vector<Move> witness = witness_at(s, pp.terminal_nodes);
   Steering steer(find_move(s, "(+2T2)Kb4(+1T1)a4"));
   mcts::GameRecord a(s);
   CHECK_NOTHROW(a = mcts::play_game(s, steer, pp));
   const mcts::GameRecord b = mcts::play_game(s, steer, pp);
-  std::fprintf(stderr, "  %.2f s (verdicts %.2f s, verification %.2f s), %s (%s), %llu verified choices, %llu decisions\n",
-               a.seconds, a.seconds_verdicts, a.seconds_search_verify, mcts::game_end_name(a.end),
-               mcts::unsettled_name(a.unsettled), static_cast<unsigned long long>(a.verified_choices),
-               static_cast<unsigned long long>(a.decisions));
-  CHECK(a.end == mcts::GameEnd::Unknown);
-  CHECK(a.unsettled == mcts::Unsettled::Choice);
-  CHECK(a.actions.empty());
-  CHECK_EQ(a.decisions, std::uint64_t{0});
-  CHECK(a.verified_choices >= 1);
-  CHECK(a.final_state == s);
-  CHECK_EQ(a.white_score(), -1.0);
-  const std::string record = tools::play_record(a, "custom");
-  CHECK(record.find("[Termination \"unknown (no move could be shown legal within the game loop's budget, H22: "
-                    "unscored)\"]") != std::string::npos);
-  PgnReplay replay(read_pgn(record), PgnOptions{}, q3());
+  std::fprintf(stderr, "  %s (%s), %llu decisions, %llu verified choices, %llu witness moves, %zu actions\n",
+               mcts::game_end_name(a.end), mcts::unsettled_name(a.unsettled),
+               static_cast<unsigned long long>(a.decisions), static_cast<unsigned long long>(a.verified_choices),
+               static_cast<unsigned long long>(a.witness_moves), a.actions.size());
+  CHECK(a.witness_moves >= 1);
+  CHECK(a.end == mcts::GameEnd::ActionLimit);
+  REQUIRE_EQ(a.actions.size(), std::size_t{1});
+  REQUIRE(!a.actions[0].empty());
+  CHECK(same_move(a.actions[0][0], witness.at(0)));
+  GameState t = s;  // the action recorded is legal: replayed and submitted under C4
+  for (const Move& m : a.actions[0]) t.apply(m);
+  CHECK(t.submission_status() == SubmitStatus::Safe);
+  CHECK(b.actions == a.actions && b.witness_moves == a.witness_moves);
+}
+
+TEST(play_every_choice_unsettled_plays_the_witness_whole_h22) {
+  // X2 to the end of the action: every verification withheld (the test seam - as if the budget
+  // never settled one), so every decision of the first action falls to the witness - the action
+  // played is the turn-start verdict's witness, move for move, then its submission (known legal).
+  // Bare kings on three timelines (no single move lets White submit), both splits that verify.
+  const GameState s = t5d_test::game({"[k7/8/8/8/8/8/8/7K:-1:1:w]", "[k7/8/8/8/8/8/8/7K:0:1:w]",
+                                      "[k7/8/8/8/8/8/8/7K:+1:1:w]"},
+                                     BoardSize{8, 8});
+  const std::vector<Move> witness = witness_at(s, mcts::kTerminalNodes);
+  REQUIRE(witness.size() >= 2);
+  for (const mcts::TurnSplit split : {mcts::TurnSplit::BoardMove, mcts::TurnSplit::Tree}) {
+    mcts::PlayParams pp;
+    pp.search = quiet(pp.search);
+    pp.search.split = split;
+    pp.search.legality = LegalityOptions::budgeted(0, 0);
+    pp.search.verify_unknown = false;
+    pp.playouts = 4;
+    pp.max_actions = 1;
+    pp.unsettle_verification_for_tests = [](std::uint64_t) { return true; };
+    const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
+    const mcts::GameRecord g = mcts::play_game(s, *ev, pp);
+    CHECK(g.end == mcts::GameEnd::ActionLimit);
+    CHECK(g.unsettled == mcts::Unsettled::None);
+    REQUIRE_EQ(g.actions.size(), std::size_t{1});
+    REQUIRE_EQ(g.actions[0].size(), witness.size());
+    for (std::size_t k = 0; k < witness.size(); ++k) CHECK(same_move(g.actions[0][k], witness[k]));
+    CHECK_EQ(g.witness_moves, std::uint64_t{witness.size()});
+    CHECK_EQ(g.decisions, std::uint64_t{witness.size() + 1});  // its moves, then the submission
+  }
+}
+
+TEST(play_a_choice_unsettled_off_the_witness_puts_the_game_back_after_two_moves_h22) {
+  // H22: a choice left unsettled once the action has left the witness ends the game unscored at the
+  // action's turn start - every move of the action under way taken back, not only the last (the
+  // review of decision 13's F5: M18). Bare kings on five timelines (two moves cannot complete
+  // White's action): two moves steered onto boards -2 and +2, neither the witness's first, shown
+  // legal; the third verification withheld (the test seam), no child known legal, and the moves
+  // played are no prefix of the witness.
+  std::vector<std::string> boards;
+  for (const char* t : {"-2", "-1", "0", "+1", "+2"}) boards.push_back(std::string("[k7/8/8/8/8/8/8/7K:") + t + ":1:w]");
+  const GameState s = t5d_test::game(boards, BoardSize{8, 8});
+  const std::vector<Move> witness = witness_at(s, mcts::kTerminalNodes);
+  MoveList moves;
+  generate_moves(s, moves);
+  const auto local_on = [&](int timeline) {
+    for (const Move& m : moves) {
+      if (m.from_timeline == timeline && m.to_timeline == timeline && m.to_half_turn == m.from_half_turn &&
+          !same_move(m, witness.at(0))) {
+        return m;
+      }
+    }
+    throw std::logic_error("no local king move");
+  };
+  const Move first = local_on(-2);
+  const Move second = local_on(2);
+  mcts::PlayParams pp;
+  pp.search = quiet(pp.search);
+  pp.search.split = mcts::TurnSplit::BoardMove;
+  pp.search.legality = LegalityOptions::budgeted(0, 0);
+  pp.search.verify_unknown = false;
+  pp.match_play = true;
+  pp.playouts = 4;
+  pp.unsettle_verification_for_tests = [](std::uint64_t made) { return made >= 2; };
+  TwoSteering steer(first, second);
+  const mcts::GameRecord g = mcts::play_game(s, steer, pp);
+  std::fprintf(stderr, "  %s (%s), %llu decisions, %llu verified choices, %llu witness moves\n",
+               mcts::game_end_name(g.end), mcts::unsettled_name(g.unsettled),
+               static_cast<unsigned long long>(g.decisions), static_cast<unsigned long long>(g.verified_choices),
+               static_cast<unsigned long long>(g.witness_moves));
+  CHECK(g.end == mcts::GameEnd::Unknown);
+  CHECK(g.unsettled == mcts::Unsettled::Choice);
+  CHECK_EQ(g.decisions, std::uint64_t{2});  // two moves played, then the game put back before both
+  CHECK_EQ(g.witness_moves, std::uint64_t{0});
+  CHECK(g.actions.empty());
+  CHECK(g.final_state == s);
+  const std::string record = tools::play_record(g, "custom");
+  CHECK(record.find("[Termination \"unknown (the chosen move was not shown legal within the game loop's budget and "
+                    "no other is known legal, H22: unscored)\"]") != std::string::npos);
+  PgnReplay replay(read_pgn(record), PgnOptions{}, RuleOptions{});
   CHECK_NOTHROW(replay.play_all());
   CHECK_EQ(replay.actions_played(), std::size_t{0});
-  CHECK(b.end == a.end && b.unsettled == a.unsettled && b.verified_choices == a.verified_choices);
 }

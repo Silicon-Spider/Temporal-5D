@@ -109,8 +109,10 @@ CANDIDATE_TURN = -2
 #: (terminal or solved), no simulation possible, or I20's KL-adaptive rule.
 STOP_CODES: tuple[str, ...] = ("playouts", "finished", "exhausted", "kl")
 #: How the played child was chosen (``DecisionRecord.choice``): sampled from the visits at the
-#: move temperature, the most visited (temperature 0), the most visited child known legal after
-#: the chosen one stayed unknown under verification, or none played (the mover resigned, I18).
+#: move temperature, the most visited (temperature 0), a child known legal played after the chosen
+#: one stayed unknown under verification - the most visited one, or with none known the next step
+#: of the turn-start verdict's witness (H22; review decision 13's X2) - or none played (the mover
+#: resigned, I18).
 CHOICE_CODES: tuple[str, ...] = ("sampled", "most_visited", "verified_fallback", "resigned")
 
 #: Each decision's scalar fields: name -> dtype (``d_<name>`` in the file).

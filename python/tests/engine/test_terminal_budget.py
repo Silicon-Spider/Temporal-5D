@@ -18,6 +18,7 @@ import torch
 
 from t5d.engine import Game, NetworkEvaluator, netplay
 from t5d.engine.capi import T5D_EVALUATOR_UNIFORM, T5D_LEGALITY_LEGAL, T5D_LEGALITY_UNKNOWN, T5D_NO_LIMIT
+from t5d.engine.errors import EngineArgumentError
 from t5d.engine.netplay import TERMINAL_NODES, UNSETTLED_NOTES, PlayConfig, network_config, play_game, turn_start_verdict
 from t5d.engine.search import Search, search_params
 from t5d.net import build_model
@@ -132,7 +133,8 @@ def test_a_choice_no_budget_settles_ends_the_game_at_its_turn_start(net, monkeyp
     its question the choice, the action under way not recorded and the game put back at that
     action's turn start (the final fingerprint the start's; the record replays to no action). A small
     test cannot make tier 2 fail by configuration, so the verification is made to answer unknown
-    after its first, real, call - and the search classifies nothing itself."""
+    after its first, real, call - and the search classifies nothing itself. The verdict's witness is
+    withheld (review decision 13's X2 would play it while the moves are its prefix; tested apart)."""
     cfg, ev = net
     real_params = netplay._decision_params
 
@@ -151,6 +153,7 @@ def test_a_choice_no_budget_settles_ends_the_game_at_its_turn_start(net, monkeyp
 
     monkeypatch.setattr(netplay, "_decision_params", unverified)
     monkeypatch.setattr(Search, "verify", verify)
+    monkeypatch.setattr(netplay.TurnWitness, "moves", lambda self: [])
     with Game.from_fen(list(THREE_BOARDS)) as start:
         fingerprint = start.snapshot().fingerprint
         assert len(start.moves()) > 0
@@ -182,3 +185,82 @@ def test_self_play_under_a_budget_is_deterministic(net):
         assert (g.record, g.end, g.actions, g.final_fingerprint) == (first.record, first.end, first.actions, first.final_fingerprint)
     assert tiny[0].end == "unknown" and tiny[0].unsettled == "verdict" and tiny[0].actions == []
     assert tiny[1].record == tiny[0].record
+
+
+# --- review decision 13's X2: the turn-start verdict's witness ----------------------------------------
+
+
+def _coordinates(m):
+    return (m.from_timeline, m.from_half_turn, m.to_timeline, m.to_half_turn, m.from_square, m.to_square, m.piece, m.promotion)
+
+
+@pytest.mark.parametrize("fen,exact", VERDICTS)
+def test_the_game_verdict_answers_with_a_legal_witness(fen, exact):
+    """``Game.verdict`` (``t5d_game_verdict``): E4's verdict at a turn start within a budget - the exact one
+    with none, "unknown" within too few nodes, never another (H37) - and for an ongoing one its witness, a
+    legal action: played move by move, its submission is legal. Deterministic; out of range refused."""
+    with Game.from_fen([fen]) as g:
+        verdict, witness = g.verdict()
+        assert verdict == (exact or "ongoing")
+        assert (len(witness) > 0) == (verdict == "ongoing")
+        assert g.verdict() == (verdict, witness)
+        assert g.verdict(1)[0] in ("unknown", verdict)
+        for bad in (-1, T5D_NO_LIMIT + 1):
+            with pytest.raises(ValueError, match="nodes"):
+                g.verdict(bad)
+        if witness:
+            with g.copy() as c:
+                for m in witness:
+                    c.apply(m)
+                c.submit()
+
+
+def test_the_witness_of_three_boards_is_a_whole_action_recorded_state_by_state():
+    """On three timelines the witness is at least two moves (no single move lets White submit); each is
+    recorded in the state it is made in, so it equals the move the game offers there. A handle in
+    mid-action is refused."""
+    with Game.from_fen(list(THREE_BOARDS)) as g:
+        verdict, witness = g.verdict(TERMINAL_NODES)
+        assert verdict == "ongoing" and len(witness) >= 2
+        with g.copy() as c:
+            for m in witness:
+                assert m in c.moves()
+                c.apply(m)
+            with pytest.raises(EngineArgumentError):
+                c.verdict()
+            c.submit()
+
+
+def _unverified_netplay(monkeypatch):
+    real_params = netplay._decision_params
+
+    def unverified(*args, **kwargs):
+        p = real_params(*args, **kwargs)
+        for name, value in UNVERIFIED.items():
+            setattr(p, name, value)
+        return p
+
+    monkeypatch.setattr(netplay, "_decision_params", unverified)
+    monkeypatch.setattr(Search, "verify", lambda self, index, **kwargs: T5D_LEGALITY_UNKNOWN)
+
+
+@pytest.mark.parametrize("mode", ["self", "match"])
+def test_with_no_child_known_legal_netplay_plays_the_witness(net, monkeypatch, mode):
+    """X2: the turn start's verdict found a legal action within the budget, so a decision with no child known
+    legal plays its witness's next step - here every verification answers unknown and the search classifies
+    nothing, so the first action is the witness, move for move, and the game goes on (before X2 it ended
+    unscored at once, its question the choice). Under match play a step the tree did not hold drops the
+    carried search (the next decision makes a fresh one). The record replays."""
+    cfg, ev = net
+    _unverified_netplay(monkeypatch)
+    with Game.from_fen(list(THREE_BOARDS)) as start:
+        witness = start.verdict(TERMINAL_NODES)[1]
+    play = PlayConfig(start_fen=THREE_BOARDS, mode=mode, playouts=4, cap_turns=0, cap_boards=0, max_actions=1, **QUIET)
+    with torch.no_grad():
+        res = play_game(ev, play, net_cfg=cfg)
+    assert (res.end, res.unsettled) == ("action_limit", "")
+    assert [_coordinates(m) for m in res.actions[0]] == [_coordinates(m) for m in witness]
+    assert res.witness_moves >= len(witness)
+    with Game.from_pgn(res.record) as replay:
+        assert replay.replay_all() == 1
+        assert replay.snapshot().fingerprint == res.final_fingerprint

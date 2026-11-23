@@ -39,8 +39,10 @@ mirrors the engine's ``play_game`` (``src/selfplay.cpp``; ``t5d-play``) step for
 * **A move is played only once known legal**: a chosen child the legality budget left
   unknown is classified first within the same node budget (``Search.verify``; H22: "the same
   budget covers the loop's other exact question") - illegal, it is removed and the choice made
-  again; still unknown, the most visited child known legal is played; with none, the game ends
-  unscored at the action's turn start (the action under way is not recorded). Every
+  again; still unknown, the most visited child known legal is played; with none, the next step of
+  the turn-start verdict's witness while the action's moves are its prefix (``TurnWitness``;
+  review decision 13's X2); and otherwise the game ends unscored at the action's turn start (the
+  action under way is not recorded). Every
   move goes through the game handle (``Game.apply`` matches it against the generated moves)
   and every submission through ``Game.submit`` (legal: C4, R1). ``GameResult.unsettled`` and
   the record's Termination header say which question went unanswered.
@@ -66,6 +68,7 @@ import sys
 import time
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field, replace
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -90,7 +93,7 @@ from .convert import relations_for
 from .evaluator import FLAT_OPTIMISTIC, Evaluator, NetworkEvaluator, policy_source, run_search
 from .expansion import Move, board_label, square_name
 from .game import Game, relation_bits
-from .search import Search, search_params
+from .search import RootChild, Search, search_params
 
 SPLITS = {"ply": T5D_SPLIT_BOARD_MOVE, "flat": T5D_SPLIT_FLAT, "tree": T5D_SPLIT_TREE}
 SPLIT_NAMES = {"ply": "board-move split", "flat": "flat form", "tree": "tree form"}
@@ -108,7 +111,7 @@ TERMINAL_NODES = 2_000_000
 #: the engine's ``tools/play_record.cpp`` writes the same).
 UNSETTLED_NOTES = {
     "verdict": " (the turn start's verdict stayed unknown within the game loop's budget, H22: unscored; never a mate)",
-    "choice": " (no move could be shown legal within the game loop's budget, H22: unscored)",
+    "choice": " (the chosen move was not shown legal within the game loop's budget and no other is known legal, H22: unscored)",
 }
 
 #: A small network for end-to-end play on a CPU (random weights; nothing is trained): two
@@ -205,6 +208,9 @@ class GameResult:
     #: "choice" (no move shown legal within it); "" for every other end.
     unsettled: str = ""
     decisions: int = 0
+    #: Moves played as steps of the turn-start verdict's witness where no root child was known legal
+    #: (H22; review decision 13's X2).
+    witness_moves: int = 0
     playouts: int = 0
     evaluations: int = 0  # leaves the network evaluated (the cache's hits not counted)
     cache_hits: int = 0
@@ -246,6 +252,7 @@ class GameResult:
             "actions": len(self.actions),
             "end": self.end,
             "unsettled": self.unsettled,
+            "witness_moves": self.witness_moves,
             "result": self.result,
             "final_boards": self.final_boards,
             "decisions": self.decisions,
@@ -336,19 +343,31 @@ def write_record(
 # --- playing ------------------------------------------------------------------------------------
 
 
-def turn_start_verdict(game: Game, cfg: PlayConfig, *, nodes: int | None = None) -> str | None:
-    """A turn start's verdict: the probe search's root classification - E4's exhaustive
-    detector within ``nodes`` (None: ``cfg.terminal_nodes``; register H22) - then I11's cap.
-    "unknown" where the budget (or the memory ceiling) stopped the detector: never a mate (H37);
-    the rules come before the cap, so an unsettled capped turn start is "unknown" too. ``cfg``:
-    a ``PlayConfig`` or the training generator's ``GeneratorConfig`` (its caps and budget)."""
-    params = search_params(
+def verdict_params(game: Game, cfg: PlayConfig, *, nodes: int | None = None):
+    """The turn-start probe's ``t5d_search_params``: E4's detector within ``nodes`` (None:
+    ``cfg.terminal_nodes``; register H22) and the memory ceiling the loop's verifications use - a
+    ``GeneratorConfig``'s ``search_overrides`` name it (``mate_bytes``), as the C++ loop takes both
+    questions' from its search parameters (the review of decision 13, L8) - and I11's caps."""
+    overrides = dict(getattr(cfg, "search_overrides", ()))
+    ceiling = {"mate_bytes": overrides["mate_bytes"]} if "mate_bytes" in overrides else {}
+    return search_params(
         game.lib,
         mate_nodes=int(cfg.terminal_nodes if nodes is None else nodes),
         turn_cap_turns=cfg.cap_turns,
         turn_cap_boards=cfg.cap_boards,
         eval_cache_entries=0,
+        **ceiling,
     )
+
+
+def turn_start_verdict(game: Game, cfg: PlayConfig, *, nodes: int | None = None) -> str | None:
+    """A turn start's verdict: the probe search's root classification - E4's exhaustive
+    detector within ``nodes`` (None: ``cfg.terminal_nodes``; register H22; ``verdict_params``) -
+    then I11's cap. "unknown" where the budget (or the memory ceiling) stopped the detector: never
+    a mate (H37); the rules come before the cap, so an unsettled capped turn start is "unknown"
+    too. ``cfg``: a ``PlayConfig`` or the training generator's ``GeneratorConfig`` (its caps,
+    budget and memory ceiling)."""
+    params = verdict_params(game, cfg, nodes=nodes)
     with Search(game, turn_start=True, params=params) as probe:
         info = probe.info()
     if info.checkmates:
@@ -386,6 +405,87 @@ def _mix(x: int) -> int:
     x = ((x ^ (x >> 30)) * 0xBF58476D1CE4E5B9) & 0xFFFFFFFFFFFFFFFF
     x = ((x ^ (x >> 27)) * 0x94D049BB133111EB) & 0xFFFFFFFFFFFFFFFF
     return x ^ (x >> 31)
+
+
+def _coordinates(m: Move) -> tuple[int, ...]:
+    """A move by its coordinates, not by the board indices a record takes from the state it was
+    recorded in: two records of one move compare equal whichever state recorded them."""
+    return (m.from_timeline, m.from_half_turn, m.to_timeline, m.to_half_turn, m.from_square, m.to_square, m.piece, m.promotion)
+
+
+class TurnWitness:
+    """Register H22 (review decision 13's X2): the turn-start verdict's witness - the legal action E4
+    found within the game loop's budget - fetched (``Game.verdict``, the probe's budget and ceiling:
+    deterministic, the verdict's own) only when a decision finds no root child known legal.
+    ``start``: a handle at the action's turn start that stays there while the action is played - its
+    copy under the board-move split and the tree form, the game itself under the flat form (whose
+    single decision comes before any move)."""
+
+    def __init__(self, start: Game, cfg: PlayConfig) -> None:
+        self._start, self._cfg, self._moves = start, cfg, None
+
+    def moves(self) -> list[Move]:
+        if self._moves is None:
+            p = verdict_params(self._start, self._cfg)
+            verdict, witness = self._start.verdict(int(p.mate_nodes), bytes=int(p.mate_bytes))
+            self._moves = witness if verdict == "ongoing" else []
+        return self._moves
+
+    def step(self, search: Search, played: Sequence[Move], flat: bool) -> int | RootChild | None:
+        """The root child that continues the witness: its next move while ``played`` (the action's
+        moves so far) is its prefix, the submission once they are all of it; under the flat form the
+        turn that is the whole witness. A step the root has not instantiated (progressive widening
+        lists only those) comes back as a child of its own (``off_tree_child``: known legal, unvisited,
+        its index past the search's children) - played outside the tree. None: the moves played have
+        left the witness (or there is none)."""
+        witness = self.moves()
+        w = [_coordinates(m) for m in witness]
+        if not w:
+            return None
+        children = search.children()
+        if flat:
+            if played:
+                return None
+            found = next((c.index for c in children if [_coordinates(m) for m in c.moves] == w), None)
+            return found if found is not None else off_tree_child(len(children), tuple(witness), submit=False)
+        k = len(played)
+        if k > len(w) or [_coordinates(m) for m in played] != w[:k]:
+            return None
+        for c in children:
+            if k == len(w) and c.submit:
+                return c.index
+            if k < len(w) and not c.submit and len(c.moves) == 1 and _coordinates(c.moves[0]) == w[k]:
+                return c.index
+        return off_tree_child(len(children), () if k == len(w) else (witness[k],), submit=k == len(w))
+
+
+def off_tree_child(index: int, moves: tuple[Move, ...], *, submit: bool) -> RootChild:
+    """A root child the search did not instantiate (review decision 13's X2: a step of the verdict's
+    witness): known legal, unvisited, no statistics - its index past the search's own children."""
+    nan = float("nan")
+    return RootChild(
+        index=index,
+        visits=0,
+        submit=submit,
+        legality=T5D_LEGALITY_LEGAL,
+        lo=-1,
+        hi=1,
+        prior=0.0,
+        q=0.0,
+        moves=moves,
+        d=0.0,
+        evaluated=False,
+        network_wdl=(nan, nan, nan),
+        network_moves_left=nan,
+        network_error=nan,
+        child_key=0,
+        prior_noise_free=0.0,
+        value_variance=0.0,
+        boost=0.0,
+        exploration_scale=1.0,
+        forced_visits=0,
+        steered_visits=0,
+    )
 
 
 def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, net_cfg: NetConfig | None = None) -> GameResult:
@@ -432,6 +532,7 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
             action: list[Move] = []
             if cfg.split != "flat":  # a choice left unsettled mid-action puts the game back here (H22)
                 turn_start = game.copy()
+            witness = TurnWitness(turn_start if turn_start is not None else game, cfg)
             if cfg.mode == "match" and carried[mover] is not None and res.actions and not _reroot(carried, mover, res.actions[-1], game):
                 res.reroot_fallbacks += 1
             while True:
@@ -452,7 +553,8 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                 stats, _ = run_search(
                     search, evaluator, playouts=cfg.playouts, batch_size=cfg.batch_size, self_play=cfg.mode != "match", **regs
                 )
-                pick = _choose(search, cfg, res, stats, evaluator, regs, rng)
+                step = partial(witness.step, played=action, flat=cfg.split == "flat")
+                pick = _choose(search, cfg, res, stats, evaluator, regs, rng, step)
                 if cfg.decision_log and pick is not None:
                     res.decision_log.append(_decision_entry(game, search, pick, len(res.actions), res.decisions, action, start.even))
                 after = search.info()
@@ -468,7 +570,7 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                 if pick is None:  # H22: no move shown legal within the budget - the game ends unscored
                     res.end, res.unsettled = "unknown", "choice"
                     break
-                child = search.child(pick)
+                child = pick if isinstance(pick, RootChild) else search.child(pick)
                 submitted = False
                 if cfg.split == "flat":
                     for m in child.moves:
@@ -482,7 +584,13 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                 else:
                     game.apply(child.moves[0])
                     action.append(child.moves[0])
-                if cfg.mode == "match":
+                if cfg.mode == "match" and isinstance(pick, RootChild):
+                    # A witness step the tree did not hold (X2): the C API re-roots on a child or a
+                    # whole action only, so the carried search goes and the side's next decision
+                    # makes a fresh one.
+                    search.close()
+                    carried[mover] = None
+                elif cfg.mode == "match":
                     search.advance(pick)
                 if submitted:
                     break
@@ -539,10 +647,11 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
 DECISIONS_FORMAT, DECISIONS_VERSION = "t5d-decisions", 1
 
 
-def _decision_entry(game: Game, search: Search, pick: int, action: int, decision: int, prefix, even: bool) -> dict:
+def _decision_entry(game: Game, search: Search, pick: int | RootChild, action: int, decision: int, prefix, even: bool) -> dict:
     info = search.info()
     children = []
-    for c in search.children():
+    played = [pick] if isinstance(pick, RootChild) else []  # a witness step the tree did not hold (X2)
+    for c in [*search.children(), *played]:
         children.append(
             {
                 "step": {"moves": [m.text(even) for m in c.moves], "submit": bool(c.submit)},
@@ -560,7 +669,7 @@ def _decision_entry(game: Game, search: Search, pick: int, action: int, decision
         "root_visits": int(info.root_visits),
         "root_q": float(info.root_q),
         "children": children,
-        "chosen": int(pick),
+        "chosen": int(pick.index if isinstance(pick, RootChild) else pick),
     }
 
 
@@ -645,10 +754,14 @@ def decision_log_lines(res: GameResult, *, demotion_share: float = 0.3) -> list[
     return lines
 
 
-def _choose(search: Search, cfg: PlayConfig, res: GameResult, stats, evaluator, regs, rng) -> int | None:
+def _choose(search: Search, cfg: PlayConfig, res: GameResult, stats, evaluator, regs, rng, witness=None) -> int | RootChild | None:
     """The decision's child: the final rule (match) or visit sampling (self-play), then made
     known legal (a chosen unknown child is classified first, within ``cfg.terminal_nodes``;
-    H22). None: no child could be shown legal within the budget - the game ends unscored."""
+    H22) - still unknown, the most visited child known legal, and with none the next step of the
+    turn-start verdict's witness (``witness(search)``, ``TurnWitness.step``; review decision 13's
+    X2) - a child index, or a ``RootChild`` of its own where the root has not instantiated that step.
+    None: the chosen move was not shown legal, no other is known legal and the witness does not
+    continue - the game ends unscored."""
 
     def visited() -> bool:
         return any(c.visits > 0 for c in search.children())
@@ -674,7 +787,10 @@ def _choose(search: Search, cfg: PlayConfig, res: GameResult, stats, evaluator, 
             continue
         legal = [c for c in search.children() if c.legality == T5D_LEGALITY_LEGAL]
         if not legal:
-            return None  # H22: with none known legal within the budget, the game ends unscored
+            step = None if witness is None else witness(search)
+            if step is not None:
+                res.witness_moves += 1  # a step of the verdict's legal action: known legal
+            return step  # None (H22): the game ends unscored
         pick = max(legal, key=lambda c: c.visits).index
     return pick
 

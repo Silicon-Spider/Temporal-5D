@@ -10,6 +10,39 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - Decision 13's review, X2: the verdict's witness is played where no child is known legal
+
+The review of decision 13 (193b517; build-log issue 414) found an unsettled choice ending the
+game unscored though the turn-start verdict had just found a legal action within the same
+budget. Every game loop now plays that witness's next step at a decision with no child known
+legal, while the action's moves are its prefix (`engine/src/selfplay.cpp`;
+`python/t5d/engine/netplay.py`'s `TurnWitness`; `python/t5d/train/selfplay.py`); a step the
+root had not instantiated is played as a child of its own (unvisited, known legal), recorded
+under the existing "verified_fallback" code. New C function `t5d_game_verdict` with
+`T5D_VERDICT_*` (`engine/include/t5d/capi_search.h`, `src/capi_search.cpp`), bound as
+`Game.verdict` (`python/t5d/engine/game.py`, `capi.py`). With it: the choice's Termination
+note reworded (C-L1; `engine/tools/play_record.cpp`, `UNSETTLED_NOTES`); an unsettled
+question's end follows the clock, at a verdict and a choice alike, the deadline checked as
+each verification starts (L6); the verification takes the verdict's detector, and Python's
+verdict probe the generator's `mate_bytes` override (L8; `netplay.verdict_params`);
+`PlayParams::unsettle_verification_for_tests`, the test seam the review asked for (F5);
+`GameRecord::witness_moves`, `GameResult.witness_moves`. Docs: `t5d/selfplay.hpp` (the header
+comment, `Unsettled`, `terminal_nodes`, `turn_cap` - L9 -, `decisions` - L7 -,
+`verified_choices` - L1), `engine/README.md`, the module docstrings, `records.py`'s choice
+codes. Tests: `engine/tests/test_capi_search.cpp`, `test_legality_cost.cpp` (the Q3 choice
+test now shows the witness played; the whole witness; a two-move rollback off it),
+`python/tests/engine/test_terminal_budget.py`, `python/tests/train/test_generator_budget.py`
+(the four real choice endings now play on; the rollback tests withhold the witness). Checks:
+the engine built at --werror; t5d-tests play, selfplay, capi_, legality and audit, 128 of 128
+(11 minutes, the machine loaded); pytest of the engine and train files that play games
+(test_terminal_budget, test_netplay, test_search_api, test_decision_log,
+test_generator_budget, test_seeded_starts, test_selfplay_pool, test_records, test_mechanics),
+245 passed (T5D_REQUIRE_ENGINE=1); ruff clean. The round's whole checks run at its end.
+
+Spec: §11.0 ("with none known the game ends unscored") - proposed edit 309; register H22 (its
+wording stands: the turn start was settled). No truth source changed (`T5D_TRUTH_SOURCES`), no
+search, prover or scanner path (`mcts.cpp` untouched); the proof channel stays off.
+
 ### 2026-11-24 - Decision 13's game loops: the terminal test within a node budget, and the unscored ending (H22)
 
 Review decision 13 (register H22, ruled binding by the user on 2026-11-23) says the game

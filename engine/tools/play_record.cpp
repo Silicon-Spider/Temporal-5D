@@ -51,7 +51,9 @@ std::string play_record(const mcts::GameRecord& game, std::string_view board, co
   if (game.unsettled == mcts::Unsettled::Verdict) {
     termination += " (the turn start's verdict stayed unknown within the game loop's budget, H22: unscored; never a mate)";
   } else if (game.unsettled == mcts::Unsettled::Choice) {
-    termination += " (no move could be shown legal within the game loop's budget, H22: unscored)";
+    termination +=
+        " (the chosen move was not shown legal within the game loop's budget and no other is known legal, H22: "
+        "unscored)";
   }
   header(out, "Termination", termination);
   for (const auto& [name, value] : extra) header(out, name, value);

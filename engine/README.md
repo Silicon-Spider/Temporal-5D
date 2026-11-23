@@ -2925,7 +2925,9 @@ signal where nothing reads it), `_child` (round 2 appends `d`,
 `evaluated`, `network_wdl`, `network_moves_left`, `network_error`; round 2c the root's
 side table - below),
 `_choose`, `_choose_by_visits`, `_verify`, `_verify_budgeted` (within checks and search
-nodes - the game loops' node budget, H22), `_advance`, `_advance_action`,
+nodes - the game loops' node budget, H22), `t5d_game_verdict` (E4's verdict at a game's turn
+start within a node budget, with its witness - one legal action, each move recorded in the
+state it is made in; the game loops' X2), `_advance`, `_advance_action`,
 `_root_game`, `_set_epoch`, `_run` (built-in evaluators) and `_run_limits` (within a
 `t5d_search_limits`: playouts, evaluations, nodes, bytes; it reports the
 `T5D_STOP_*` reason), `_new_sharing` (a new search sharing another's evaluation cache:
@@ -2995,10 +2997,16 @@ draw, counted: `GameRecord::cap_bound`, `search_turn_caps`). Every move is check
 pseudo-legal and every submission legal before it is made; a chosen child the legality
 budget left unknown is classified first within the same budget
 (`GameRecord::verified_choices`) - still unknown, the most visited child known legal is
-played, and with none the game ends `Unknown` at the action's turn start (`unsettled` =
-`Choice`; the action under way is not recorded; before the ruling it threw), the record's
-Termination saying which question went unanswered. Python's play loops (`netplay`, the
-training generator) do the same through `t5d_search_verify_budgeted`. The visits a decision's
+played; with none, the next step of the turn-start verdict's witness while the action's moves
+are its prefix (review decision 13's X2: the verdict found that legal action within the same
+budget; a step the root has not instantiated is played as a child of its own, match play
+re-rooting on its moves; `GameRecord::witness_moves`); and otherwise the game ends `Unknown`
+at the action's turn start (`unsettled` = `Choice`; the action under way is not recorded;
+before the ruling it threw), the record's Termination saying which question went unanswered.
+An unsettled question's end follows the clock: `TimeLimit` once `max_seconds`' deadline has
+passed, `Unknown` before it, whatever stopped it (the review's L6). Python's play loops
+(`netplay`, the training generator) do the same through `t5d_search_verify_budgeted` and
+`t5d_game_verdict` (`netplay.TurnWitness`). The visits a decision's
 root already held (`reused_visits`: C12's reuse in match play, 0 in self-play) are
 counted. Under the board-move split an action is its
 moves and then a submit decision (never automatic); actions are counted at

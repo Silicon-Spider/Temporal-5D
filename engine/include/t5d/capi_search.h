@@ -660,6 +660,26 @@ T5D_API t5d_status t5d_search_verify(t5d_search* search, size_t index, int32_t* 
 T5D_API t5d_status t5d_search_verify_budgeted(t5d_search* search, size_t index, uint64_t checks,
                                               uint64_t nodes, int32_t* legality, char** error);
 
+/* E4's verdicts at a turn start (t5d/state.hpp's Outcome). */
+#define T5D_VERDICT_UNKNOWN 0
+#define T5D_VERDICT_ONGOING 1
+#define T5D_VERDICT_CHECKMATE 2
+#define T5D_VERDICT_STALEMATE 3
+
+/* E4's verdict at `game`'s position, a turn start (detect_mate with the searches' detector,
+ * hypercuboid; H37), within `nodes` search nodes (T5D_NO_LIMIT: none) and the memory ceiling
+ * `bytes` (T5D_NO_LIMIT: none): *verdict T5D_VERDICT_*, Unknown where a budget stopped it. For
+ * an ongoing one its witness - one legal action, its moves in an order in which they can be
+ * played, each recorded in the state it is made in - goes into `witness`, up to `capacity`
+ * moves; *count is the witness's length (0 unless ongoing), which may exceed `capacity`: call
+ * again with room. Deterministic. The game loops' turn-start question with the action its
+ * answer found (register H22; review decision 13's X2: where no root child is known legal
+ * within the loop's budget, the loops play the witness's next move). A game in mid-action is
+ * refused. */
+T5D_API t5d_status t5d_game_verdict(const t5d_game* game, uint64_t nodes, uint64_t bytes,
+                                    int32_t* verdict, t5d_move* witness, size_t capacity,
+                                    size_t* count, char** error);
+
 /* Re-roots on root child `index` (C12): its statistics carried, every node the
  * new root cannot reach deleted, cached evaluations kept. */
 T5D_API t5d_status t5d_search_advance(t5d_search* search, size_t index, char** error);

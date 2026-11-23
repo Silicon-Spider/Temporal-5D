@@ -150,7 +150,10 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
     if (deadline) verdict_budget.max_time = time_left(*deadline);
     const MateResult r = detect_mate(s, sp.detector, verdict_budget);
     g.seconds_verdicts += std::chrono::duration<double>(std::chrono::steady_clock::now() - v0).count();
-    if (r.verdict == Outcome::Unknown && !r.stats.stopped_by_memory && deadline_passed()) {
+    // An unsettled question's end follows the clock, at a verdict as at a choice: TimeLimit
+    // once the deadline has passed, Unknown before it - whatever stopped it, the node budget,
+    // the memory ceiling or the deadline (the review of decision 13, L6).
+    if (r.verdict == Outcome::Unknown && deadline_passed()) {
       g.end = GameEnd::TimeLimit;  // the safety stop, at this turn start
       break;
     }
@@ -293,13 +296,81 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       // turn start: Unknown (H22), or TimeLimit with the deadline passed.
       LegalityOptions exact = LegalityOptions::nodes(params.terminal_nodes);
       exact.max_bytes = sp.mate_bytes;
+      exact.detector = sp.detector;  // the verdict's ceiling and detector (the review of decision 13, L8)
       exact.deadline = deadline;
       std::vector<RootChild> children = search->root_children();
-      // False: no child known legal - unsettled_choice set unless the deadline
-      // passed - or the deadline passed with no choice left to make.
+      // H22 (review decision 13's X2): the root child that continues the turn-start verdict's
+      // witness - a legal action found within the same budget. While the action's moves so far
+      // are its prefix, its next move (or, once they are all of it, the submission); under the
+      // flat form the turn that is the whole witness. A step the root has not instantiated
+      // (progressive widening lists only those) becomes a child of its own - known legal,
+      // unvisited, the generator's own moves - played outside the tree (off_tree: match play
+      // re-roots on its moves). None: the moves have left the witness.
+      // Moves compared as the C API's records match them - squares, boards and promotion (the
+      // detector's witness need not carry the generator's other fields).
+      const auto same = [](const Move& a, const Move& b) {
+        return a.from_timeline == b.from_timeline && a.from_half_turn == b.from_half_turn &&
+               a.from_square == b.from_square && a.to_timeline == b.to_timeline &&
+               a.to_half_turn == b.to_half_turn && a.to_square == b.to_square && a.promotes() == b.promotes() &&
+               (!a.promotes() || a.promotion == b.promotion);
+      };
+      const auto generated = [&](const GameState& at, const Move& m) {
+        MoveList moves;
+        generate_moves(at, moves);
+        for (const Move& x : moves) {
+          if (same(x, m)) return x;
+        }
+        throw std::logic_error("play: the verdict's witness holds a move the generator does not offer");
+      };
+      bool off_tree = false;
+      const auto witness_step = [&]() -> std::optional<std::size_t> {
+        const std::vector<Move>& w = r.witness;
+        if (w.empty()) return std::nullopt;
+        const bool flat = sp.split == TurnSplit::Flat;
+        if (flat) {
+          for (std::size_t i = 0; i < children.size(); ++i) {
+            const std::vector<Move>& t = children[i].moves;
+            if (t.size() == w.size() && std::equal(t.begin(), t.end(), w.begin(), same)) return i;
+          }
+        } else {
+          if (action.size() > w.size() || !std::equal(action.begin(), action.end(), w.begin(), same)) {
+            return std::nullopt;
+          }
+          const bool whole = action.size() == w.size();
+          for (std::size_t i = 0; i < children.size(); ++i) {
+            RootChild& c = children[i];
+            if (whole ? c.submit : (!c.submit && c.moves.size() == 1 && same(c.moves[0], w[action.size()]))) {
+              c.legality = MoveLegality::Legal;  // known legal: a step of the verdict's legal action
+              return i;
+            }
+          }
+        }
+        RootChild step;  // not instantiated: a child of its own
+        if (flat) {
+          GameState at = s;
+          for (const Move& m : w) {
+            step.moves.push_back(generated(at, m));
+            at.apply(step.moves.back());
+          }
+        } else if (action.size() == w.size()) {
+          step.submit = true;
+        } else {
+          step.moves.push_back(generated(s, w[action.size()]));
+        }
+        step.legality = MoveLegality::Legal;
+        children.push_back(std::move(step));
+        off_tree = true;
+        return children.size() - 1;
+      };
+      // False: the deadline passed (no choice after it, M1; it is checked as each verification
+      // starts), or no child is known legal and the witness does not continue - unsettled_choice.
       const auto make_legal = [&]() -> bool {
+        off_tree = false;
         while (children.at(pick).legality != MoveLegality::Legal) {
-          const MoveLegality v = search->verify(pick, exact);
+          if (deadline_passed()) return false;
+          const bool unsettled = params.unsettle_verification_for_tests &&
+                                 params.unsettle_verification_for_tests(g.verified_choices);  // tests only
+          const MoveLegality v = unsettled ? MoveLegality::Unknown : search->verify(pick, exact);
           ++g.verified_choices;
           children = search->root_children();
           if (v == MoveLegality::Legal) break;
@@ -318,7 +389,13 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
             }
           }
           if (best == children.size()) {
-            unsettled_choice = !deadline_passed();
+            if (deadline_passed()) return false;
+            if (const std::optional<std::size_t> w = witness_step(); w.has_value()) {
+              pick = *w;  // known legal: a step of the verdict's legal action
+              ++g.witness_moves;
+              break;
+            }
+            unsettled_choice = true;
             return false;
           }
           pick = best;
@@ -428,7 +505,13 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
         play_checked(s, m, scratch);
         action.push_back(m);
       }
-      if (params.match_play) search->advance(pick);
+      if (params.match_play) {
+        if (off_tree) {
+          search->advance_moves(c.moves);  // a witness step the tree did not hold (X2)
+        } else {
+          search->advance(pick);
+        }
+      }
       if (!submitted) ++moves_made;
     }
     if (timed_out) {

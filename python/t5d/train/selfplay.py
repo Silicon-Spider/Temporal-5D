@@ -9,13 +9,15 @@ writes, per decision, the record ``train.records`` defines (register I15, spec s
 ``netplay.play_game`` plays the same way and writes a 5dpgn, and no record.
 
 * **The unscored ending (register H22, review decision 13)**: a turn start whose verdict the budget
-  does not reach, or a decision with no child shown legal within it, ends the game "unknown" -
-  never a mate. The record's ``end`` is "unknown" and its Termination says which question went
-  unanswered (``netplay.UNSETTLED_NOTES``); an unsettled choice drops the action under way (its
-  decisions, their positions and resignation events), the record ending at that action's turn
-  start (a partial action has no place in format version 2). ``train.targets`` masks such a game's
-  outcome-derived targets (I15) and keeps its search-derived ones. The budget enters the header
-  through ``generator_config``.
+  does not reach ends the game "unknown" - never a mate. A decision with no child shown legal within
+  it plays the next step of that verdict's witness while the action's moves are its prefix (review
+  decision 13's X2; a "verified_fallback"; a step the root had not instantiated is recorded as a
+  further child, unvisited), and otherwise ends the game "unknown" too. The record's ``end`` is
+  "unknown" and its Termination says which question went unanswered (``netplay.UNSETTLED_NOTES``);
+  an unsettled choice drops the action under way (its decisions, their positions and resignation
+  events), the record ending at that action's turn start (a partial action has no place in format
+  version 2). ``train.targets`` masks such a game's outcome-derived targets (I15) and keeps its
+  search-derived ones. The budget enters the header through ``generator_config``.
 
 * **D2's arms**: the board-move split (``"ply"``), the tree form (``"tree"``) and the flat form
   (``"flat"``). Under the flat form a decision is a whole turn: its root children are turns (record
@@ -88,6 +90,7 @@ import math
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field, replace
+from functools import partial
 
 import numpy as np
 
@@ -105,7 +108,7 @@ from ..engine.convert import Position, relations_for
 from ..engine.evaluator import Evaluation, Evaluator, policy_source, run_search
 from ..engine.expansion import Move
 from ..engine.game import Game, relation_bits
-from ..engine.netplay import TERMINAL_NODES, UNSETTLED_NOTES, turn_start_verdict, write_record
+from ..engine.netplay import TERMINAL_NODES, UNSETTLED_NOTES, TurnWitness, turn_start_verdict, write_record
 from ..engine.search import RootChild, Search, search_params
 from ..net.config import NetConfig
 from ..net.quant import TRUNK_QUANT_FIELDS, trunk_format
@@ -403,14 +406,25 @@ def network_info(evaluator, net_cfg: NetConfig, *, seed: int | None = None, swa_
 
 
 def _choose(
-    search: Search, temperature: float, random: float, rerun: Callable[[], None], *, nodes: int = T5D_NO_LIMIT
-) -> tuple[int | None, str, int]:
+    search: Search,
+    temperature: float,
+    random: float,
+    rerun: Callable[[], None],
+    *,
+    nodes: int = T5D_NO_LIMIT,
+    witness: Callable[[Search], int | None] | None = None,
+) -> tuple[int | RootChild | None, str, int]:
     """The decision's child: sampled from the visits at ``temperature`` (<= 0: the most visited),
     then made known legal - a chosen unknown child is classified first within ``nodes`` (the game
     loop's budget, H22; illegal: removed and the choice made again; still unknown: the most visited
-    child known legal). The pick, how it was chosen (``records.CHOICE_CODES``) and the children found
-    illegal on the way; the pick None (and no choice) when no child could be shown legal within the
-    budget - the game ends unscored."""
+    child known legal, and with none the next step of the turn-start verdict's witness -
+    ``witness(search)``, ``netplay.TurnWitness``; review decision 13's X2). The pick, how it was
+    chosen (``records.CHOICE_CODES``: a witness step is a "verified_fallback", a move known legal
+    played in the chosen one's place) and the children found illegal on the way. The pick is a child
+    index, or for a witness step a ``RootChild`` - the child marked known legal, or one of its own
+    where the root had not instantiated the step (recorded as a further child, unvisited); None (and
+    no choice) when the chosen move was not shown legal, no other is known legal and the witness does
+    not continue - the game ends unscored."""
     illegal = 0
 
     def choose_now() -> int:
@@ -430,7 +444,12 @@ def _choose(
             continue
         legal = [c for c in search.children() if c.legality == T5D_LEGALITY_LEGAL]
         if not legal:
-            return None, "", illegal  # H22: none known legal within the budget - the game ends unscored
+            step = None if witness is None else witness(search)
+            if step is None:
+                return None, "", illegal  # H22: the game ends unscored
+            if isinstance(step, int):  # an instantiated child: known legal as the witness's step (X2) - recorded so
+                step = replace(search.child(step), legality=T5D_LEGALITY_LEGAL)
+            return step, "verified_fallback", illegal  # a step of the verdict's legal action (X2)
         pick, choice = max(legal, key=lambda c: c.visits).index, "verified_fallback"
         break
     return pick, choice, illegal
@@ -618,6 +637,8 @@ def generate_game(
             first = len(decisions)  # the action's first decision (dropped with it if a choice stays unsettled)
             if not flat:
                 turn_start = game.copy()
+            witness = TurnWitness(turn_start if turn_start is not None else game, cfg)
+            step = partial(witness.step, played=action, flat=flat)
             while True:
                 d = len(decisions)
                 ginfo = game.info()
@@ -652,12 +673,20 @@ def generate_game(
                 if resigning:
                     pick, choice, illegal = -1, "resigned", 0
                 else:
-                    pick, choice, illegal = _choose(search, t, decision_random(cfg.seed, d, SALT_CHOICE), rerun, nodes=cfg.terminal_nodes)
+                    pick, choice, illegal = _choose(
+                        search, t, decision_random(cfg.seed, d, SALT_CHOICE), rerun, nodes=cfg.terminal_nodes, witness=step
+                    )
                     if pick is None:  # H22: no move shown legal within the budget - the game ends unscored
                         unsettled = "choice"
                         break
                 info = search.info()
                 children = search.children()
+                if isinstance(pick, RootChild):  # a witness step (X2): recorded known legal - a further child if not instantiated
+                    if pick.index < len(children):
+                        children[pick.index] = pick
+                    else:
+                        children.append(pick)
+                    pick = pick.index
                 best = search.choose_by_visits(0.0, 0.5)
                 index = candidate_index(position)
                 playable = playable_boards(game, position)

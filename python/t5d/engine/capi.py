@@ -324,6 +324,8 @@ T5D_FINAL_VISITS, T5D_FINAL_LCB = 0, 1
 T5D_VALUE_PROBABILITIES, T5D_VALUE_LOGITS = 0, 1
 T5D_EVALUATOR_UNIFORM, T5D_EVALUATOR_RANDOM, T5D_EVALUATOR_MATERIAL = 0, 1, 2
 T5D_LEGALITY_LEGAL, T5D_LEGALITY_ILLEGAL, T5D_LEGALITY_UNKNOWN = 0, 1, 2
+#: E4's verdicts at a turn start (``t5d_game_verdict``; t5d/state.hpp's Outcome).
+T5D_VERDICT_UNKNOWN, T5D_VERDICT_ONGOING, T5D_VERDICT_CHECKMATE, T5D_VERDICT_STALEMATE = 0, 1, 2, 3
 T5D_CHOICE_PROVEN_WIN, T5D_CHOICE_SECURE_CHILD, T5D_CHOICE_LCB, T5D_CHOICE_VISITS, T5D_CHOICE_ALL_LOST = 0, 1, 2, 3, 4
 T5D_STOP_PLAYOUTS, T5D_STOP_EVALUATIONS, T5D_STOP_FINISHED, T5D_STOP_EXHAUSTED = 0, 1, 2, 3
 T5D_STOP_NODES, T5D_STOP_MEMORY, T5D_STOP_DEADLINE = 4, 5, 6
@@ -728,6 +730,10 @@ _SIGNATURES: dict[str, tuple[object, list[object]]] = {
     "t5d_search_choose_by_visits": (c_int32, [_SEARCH, c_double, c_double, POINTER(c_size_t), _ERR]),
     "t5d_search_verify": (c_int32, [_SEARCH, c_size_t, POINTER(c_int32), _ERR]),
     "t5d_search_verify_budgeted": (c_int32, [_SEARCH, c_size_t, c_uint64, c_uint64, POINTER(c_int32), _ERR]),
+    "t5d_game_verdict": (
+        c_int32,
+        [_GAME, c_uint64, c_uint64, POINTER(c_int32), POINTER(MoveRecord), c_size_t, POINTER(c_size_t), _ERR],
+    ),
     "t5d_search_advance": (c_int32, [_SEARCH, c_size_t, _ERR]),
     "t5d_search_advance_action": (c_int32, [_SEARCH, POINTER(MoveRecord), c_size_t, _ERR]),
     "t5d_search_root_game": (c_int32, [_SEARCH, POINTER(_GAME), _ERR]),

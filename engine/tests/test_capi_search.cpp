@@ -1266,6 +1266,63 @@ TEST(capi_search_verifies_a_chosen_move_within_a_budget_h22) {
   CHECK_EQ(t5d_search_verify_budgeted(waiting.get(), 0, 0, 0, &legality, nullptr), T5D_ERR_ARGUMENT);
 }
 
+TEST(capi_game_verdict_answers_with_a_witness_h22) {
+  // t5d_game_verdict (H22; review decision 13's X2): E4's verdict at a turn start within a budget -
+  // exact with none, Unknown within too few nodes (never another, H37) - and for an ongoing one its
+  // witness, a legal action, each move recorded in the state it is made in: applied through the game
+  // handle in turn, then submitted. *count is the witness's length whatever the capacity; a NULL
+  // argument, a NULL witness with a capacity, and a game in mid-action are refused.
+  struct Case {
+    const char* fen;
+    int32_t exact;
+  };
+  for (const Case& c : {Case{"[8/8/8/8/8/5k2/6q1/7K:0:1:w]", T5D_VERDICT_CHECKMATE},
+                        Case{"[k7/8/8/8/8/6q1/8/7K:0:1:w]", T5D_VERDICT_STALEMATE},
+                        Case{"[k7/8/8/8/8/8/8/7K:0:1:w]", T5D_VERDICT_ONGOING}}) {
+    const char* boards[] = {c.fen};
+    t5d_game* raw = nullptr;
+    REQUIRE_EQ(t5d_game_new_from_fen(boards, 1, 8, 8, T5D_PARITY_INFER, T5D_TO_MOVE_INFER, T5D_RULES_STANDARD, &raw,
+                                     nullptr),
+               T5D_OK);
+    const Game g(raw);
+    int32_t verdict = -1;
+    std::size_t count = 99;
+    REQUIRE_EQ(t5d_game_verdict(g.get(), T5D_NO_LIMIT, T5D_NO_LIMIT, &verdict, nullptr, 0, &count, nullptr), T5D_OK);
+    CHECK_EQ(verdict, c.exact);
+    CHECK_EQ(count > 0, c.exact == T5D_VERDICT_ONGOING);
+    REQUIRE_EQ(t5d_game_verdict(g.get(), 1, T5D_NO_LIMIT, &verdict, nullptr, 0, &count, nullptr), T5D_OK);
+    CHECK((verdict == T5D_VERDICT_UNKNOWN && count == 0) || verdict == c.exact);
+  }
+  const char* three[] = {"[k7/8/8/8/8/8/8/7K:-1:1:w]", "[k7/8/8/8/8/8/8/7K:0:1:w]", "[k7/8/8/8/8/8/8/7K:+1:1:w]"};
+  t5d_game* raw = nullptr;
+  REQUIRE_EQ(t5d_game_new_from_fen(three, 3, 8, 8, T5D_PARITY_INFER, T5D_TO_MOVE_INFER, T5D_RULES_STANDARD, &raw,
+                                   nullptr),
+             T5D_OK);
+  const Game g(raw);
+  int32_t verdict = -1;
+  std::size_t count = 0;
+  t5d_move one{};
+  REQUIRE_EQ(t5d_game_verdict(g.get(), std::uint64_t{2'000'000}, T5D_NO_LIMIT, &verdict, &one, 1, &count, nullptr), T5D_OK);
+  CHECK_EQ(verdict, T5D_VERDICT_ONGOING);
+  REQUIRE(count >= 2);  // no single move lets White submit on three timelines
+  std::vector<t5d_move> witness(count);
+  REQUIRE_EQ(t5d_game_verdict(g.get(), std::uint64_t{2'000'000}, T5D_NO_LIMIT, &verdict, witness.data(), witness.size(),
+                              &count, nullptr),
+             T5D_OK);
+  CHECK(std::memcmp(&one, &witness[0], sizeof one) == 0);  // deterministic: the same first move
+  t5d_game* copy = nullptr;
+  REQUIRE_EQ(t5d_game_copy(g.get(), &copy), T5D_OK);
+  const Game played(copy);
+  for (const t5d_move& m : witness) REQUIRE_EQ(t5d_game_apply(copy, &m, nullptr), T5D_OK);
+  CHECK_EQ(t5d_game_verdict(copy, T5D_NO_LIMIT, T5D_NO_LIMIT, &verdict, nullptr, 0, &count, nullptr),
+           T5D_ERR_ARGUMENT);  // mid-action
+  CHECK_EQ(t5d_game_submit(copy, nullptr), T5D_OK);
+  CHECK_EQ(t5d_game_verdict(nullptr, 1, 1, &verdict, nullptr, 0, &count, nullptr), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_game_verdict(g.get(), 1, 1, nullptr, nullptr, 0, &count, nullptr), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_game_verdict(g.get(), 1, 1, &verdict, nullptr, 0, nullptr, nullptr), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_game_verdict(g.get(), 1, 1, &verdict, nullptr, 4, &count, nullptr), T5D_ERR_ARGUMENT);
+}
+
 TEST(capi_search_takes_the_moves_made_from_the_game_a6) {
   // Register A6: a search's root takes the game handle's count of moves made
   // in its action; turn_start must agree with it; every leaf's expansion

@@ -15,6 +15,7 @@ import pytest
 import torch
 
 import t5d.train.selfplay as selfplay
+from t5d.engine import netplay
 from t5d.engine.capi import T5D_LEGALITY_UNKNOWN, T5D_NO_LIMIT
 from t5d.engine.evaluator import NetworkEvaluator
 from t5d.engine.game import Game
@@ -117,6 +118,7 @@ def test_a_choice_that_cannot_be_settled_drops_its_action(evaluator, monkeypatch
         return real(self, index, **kwargs) if len(calls) == 1 else T5D_LEGALITY_UNKNOWN
 
     monkeypatch.setattr(Search, "verify", verify)
+    monkeypatch.setattr(netplay.TurnWitness, "moves", lambda self: [])  # X2's witness withheld: tested apart
     overrides = (("legality_checks", 0), ("legality_nodes", 0), ("verify_unknown", 0), ("hunt", 0), ("settling", 0))
     cfg = replace(BASE, start_fen=THREE_BOARDS, cap_turns=0, cap_boards=0, search_overrides=overrides)
     with Game.from_fen(list(THREE_BOARDS)) as start:
@@ -132,3 +134,65 @@ def test_a_choice_that_cannot_be_settled_drops_its_action(evaluator, monkeypatch
     assert record_differences(rec, back) == [] and replay_positions(back) == []
     with Game.from_pgn(rec.header["pgn"]) as replay:
         assert replay.replay_all() == 0
+
+
+# --- review decision 13's X2: the turn-start verdict's witness ----------------------------------------
+
+UNVERIFIED_OVERRIDES = (("legality_checks", 0), ("legality_nodes", 0), ("verify_unknown", 0), ("hunt", 0), ("settling", 0))
+
+
+def _coordinates(m):
+    return (m.from_timeline, m.from_half_turn, m.to_timeline, m.to_half_turn, m.from_square, m.to_square, m.piece, m.promotion)
+
+
+def test_the_generator_plays_the_witness_where_no_child_is_known_legal(evaluator, monkeypatch, tmp_path):
+    """X2 in the generator: every verification unknown and nothing classified by the search, so each decision
+    of the first action plays the turn-start verdict's witness's next step - a "verified_fallback", the move
+    known legal (a step the root had not instantiated is recorded as a further child, unvisited) - and the
+    action is the witness. The record writes, reads back and replays; its targets build."""
+    monkeypatch.setattr(Search, "verify", lambda self, index, **kwargs: T5D_LEGALITY_UNKNOWN)
+    cfg = replace(BASE, start_fen=THREE_BOARDS, cap_turns=0, cap_boards=0, max_actions=1, search_overrides=UNVERIFIED_OVERRIDES)
+    with Game.from_fen(list(THREE_BOARDS)) as start:
+        witness = start.verdict(TERMINAL_NODES)[1]
+    g = _generate(evaluator, cfg, keep_positions=True)
+    rec = g.record
+    assert (rec.end, rec.n_actions) == ("action_limit", 1)
+    assert [_coordinates(m) for m in g.actions[0]] == [_coordinates(m) for m in witness]
+    moves = [d for d in rec.decisions if d.choice == "verified_fallback"]
+    assert len(moves) >= len(witness)
+    assert all(d.children.legality[d.played_child] == 0 for d in rec.decisions)  # every played child known legal
+    back = read_game(write_game(tmp_path / "witness.npz", rec))
+    assert record_differences(rec, back) == []
+    assert len(replay_positions(back)) == len(rec.decisions)
+    assert len(g.targets.kl) == len(rec.decisions)
+
+
+@pytest.mark.parametrize("split", ["ply", "tree"])
+@pytest.mark.parametrize(
+    "start,nodes,actions",
+    [
+        (dict(start_fen=THREE_BOARDS), 32, 1),
+        (dict(variant="Focused - Just Kings"), 64, 5),
+    ],
+)
+def test_the_reviews_four_choice_endings_now_play_on(evaluator, split, start, nodes, actions):
+    """The four real unsettled choices the review of decision 13 found (its spec pass; no patching): each at
+    an action's first decision, right after the turn start's verdict had found a legal action within the
+    same budget. With X2 the witness is played instead: the game goes on and ends later, at a turn start the
+    budget cannot settle - never on the choice."""
+    cfg = GeneratorConfig(
+        playouts=6,
+        batch_size=3,
+        cap_turns=4,
+        cap_boards=30,
+        seed=3,
+        split=split,
+        terminal_nodes=nodes,
+        search_overrides=UNVERIFIED_OVERRIDES,
+        max_actions=12,
+        **start,
+    )
+    rec = _generate(evaluator, cfg).record
+    assert (rec.end, rec.n_actions) == ("unknown", actions)
+    assert f'[Termination "unknown{UNSETTLED_NOTES["verdict"]}"]' in rec.header["pgn"]
+    assert any(d.choice == "verified_fallback" for d in rec.decisions)
