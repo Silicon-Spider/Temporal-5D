@@ -22,6 +22,13 @@ kernel's work over every key it is handed, masked or not. The counted figure the
 includes what the cost model leaves out on purpose - masked scores the chunked path
 computes anyway, the global-register merge's extra key, padded value widths - and is the
 implementation's FLOP count, beside the model's.
+
+**Register G11's kernel widths** (``kernel_widths``; section 10.2, "Kernel-friendly widths"). The
+formula above takes each call's shapes as the kernel is handed them, so the counted figure
+follows the widths: a fast-path call at the as-built width 45 (33 on the rows without file and
+rank) counts ``4 B H L_q L_k x 45`` - queries, keys and values all at the widened width - and
+under ``NetConfig.attn_pad_multiple = 8`` the same call counts 48 (40): the padded columns are
+work the kernel does. The analytic model is section 9.1's at ``d_head`` and does not move.
 """
 
 from __future__ import annotations
@@ -53,6 +60,41 @@ def count_flops(fn: Callable[[], object]) -> tuple[object, int]:
     with FlopCounterMode(display=False) as counter:
         result = fn()
     return result, int(counter.get_total_flops())
+
+
+def kernel_widths(cfg: NetConfig) -> dict[str, dict[str, int]]:
+    """The feature widths ``cfg``'s network hands its attention kernel, as built and as padded
+    (register G11, section 10.2; ``NetConfig.attn_pad_multiple``): ``call -> {"as_built", "padded"}``.
+
+    The fast paths ("block_sparse", "chunked", "sdpa"; ``attention._KernelKeys``) make two kinds of
+    call, queries, keys and values all at one width:
+
+    * ``"all_axes"`` - the rows that have every axis: ``d_head`` rotated dims, plus the unrotated
+      file/rank dims that score a key without them when the network has per-board registers (B8:
+      every dim some head rotates on file or rank - 12 at the v1's allocation), plus one for the
+      extra key that carries the global registers' merge when it has global registers: 45;
+    * ``"time_only"`` - the rows without file and rank (per-board registers; absent without
+      them): ``d_head`` dims rotated on timeline and time only, plus the merge's one: 33.
+
+    B14's score function ("flex", ``flex.py``) pads queries and keys only - the values stay at
+    ``d_head``: ``"flex_all_axes"`` (the all-axes features and, with global registers, the
+    unrotated dims that score them: 76), ``"flex_time_only"`` (64) and ``"flex_global"`` (the
+    global registers' own rows, unrotated: 32). "explicit" and "dense" call no kernel."""
+    from .attention import padded_width
+    from .rope import rope_tables, spatial_dims
+
+    d = cfg.d_head
+    registers, merged = cfg.regs_per_board > 0, cfg.global_regs > 0
+    file_rank = int(spatial_dims(rope_tables(cfg)[0]).any(dim=0).sum()) if registers else 0
+    widths = {"all_axes": d + file_rank + merged}
+    if registers:
+        widths["time_only"] = d + merged
+    widths["flex_all_axes"] = d + file_rank + (d if merged else 0)
+    if registers:
+        widths["flex_time_only"] = d + (d if merged else 0)
+    if merged:
+        widths["flex_global"] = d
+    return {call: {"as_built": w, "padded": padded_width(w, cfg.attn_pad_multiple)} for call, w in widths.items()}
 
 
 def attention_flops(t_query: int, t_key: int, cfg: NetConfig) -> int:
@@ -107,7 +149,9 @@ def layout_flops(n_boards: int, n_tokens: int, cfg: NetConfig) -> dict[str, int]
     term), the merge ``2 C d`` per token (every token: registers' are masked after) and the FFN
     ``4 d^2 r`` per token (``layout_ffn_ratio`` r; 0 without it). Norms, the one-hot and the gather
     are no multiply-adds. Every term is zero when ``cfg``'s flag (``board_layout_embedding``) is
-    off: the network then has no A8.
+    off: the network then has no A8. The width r is part of the arm (section 2.2, register A8):
+    at 44 boards (T = 2,920) the FFN is 6.124 GF at the placeholder's 8x and 0.765 GF at ablation
+    6p's 1x, the arm 6.286 GF (4.5% of section 9.1's attention) and 0.928 GF (0.66%).
 
     The FFN is per token, so it is paid wherever a position's tokens are embedded: in the dense
     pass over every token, and in the cached configuration at every node - ``CachedEvaluator.

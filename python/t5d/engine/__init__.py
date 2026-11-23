@@ -29,6 +29,8 @@ the network as the evaluator - end to end, with random weights.
 * ``switch_match.py`` - 6e's on/off match test's plumbing (H13, H43): one steering switch on for
   one side and off for the other, each start played with the colours swapped, one network on both
   sides; ``python -m t5d.engine.switch_match``.
+* ``pool.py`` - register G12's self-play pool: batches planned to a padded-token budget, and many
+  concurrent games' searches behind one shared evaluator (match play's batching is not built).
 * ``bench.py`` - conversion and forward-pass timings on real positions.
 
 The engine's rules are its own: nothing here computes a rule, and nothing here reads the

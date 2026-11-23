@@ -408,7 +408,7 @@ class CSearchParams(ctypes.Structure):
         ("dirichlet_shaping_share", c_double),
         ("dirichlet_shaping_cap", c_double),
         ("root_policy_temperature", c_double),  # the root's softmax temperature, before the noise (1: off)
-        # D2's tree form (split T5D_SPLIT_TREE only; refused with graph - spec issue 301): placeholders
+        # D2's tree form (split T5D_SPLIT_TREE only; with graph only evaluated nodes are graph nodes - section 8.5): placeholders
         ("tree_gates", c_uint32),  # T5D_TREE_GATE_* mask; 0: the network only at turn starts and the root
         ("tree_still_to_move", c_int32),  # T5D_STILL_TO_MOVE_*
         ("tree_capture", c_int32),  # T5D_CAPTURE_*

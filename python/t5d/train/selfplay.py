@@ -55,6 +55,19 @@ one's evaluation cache (C14), root noise on, a chosen child made known legal bef
   decay before the cutoff is an option (``decay_to``, off). A turn is one player's action (issue
   305). The root policy temperature KataGo's 1.25 decaying to 1.1 over 60 turns (register I19). All
   placeholders, SPSA-tuned later (G7); each decision records the temperatures it ran at.
+* **Seeded starts (I22, section 12; provisional, behind ``SeededStartConfig.enabled``, off - the
+  pilot run plays without them, section 15.7)**: a share of games (``fraction``, a placeholder: one
+  in ten) begins from a stored position instead of the start - drawn by the game's seed, uniformly
+  from the pool the caller gives (``generate_game(stored=...)``; ``train.seeded``: a 5dpgn record
+  and the number of its actions replayed, set up by the engine's reader) - and is played out and
+  scored as usual. It keeps its source's turn count: both temperature schedules read the source's
+  turn plus the game's own actions (in actions - one player's turn each, issue 305), and I11's cap
+  already reads the state's own present. Each decision's ``action`` stays the game's own count. The
+  record names its origin in the optional header key ``seeded_start`` (``train.records``), and
+  ``replay_positions`` sets the start up from it. The generator's test-scale caps (``cap_turns``
+  6, ``cap_boards`` 80) end a late or large stored position at once as ``turn_cap``: whoever seeds
+  such positions raises them - and the turn-start verdict has no node budget yet (H22, review
+  decision 13), which large positions wait on.
 
 Nothing here trains (the untrained build's rule): the generator only plays and records.
 """
@@ -63,7 +76,7 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field, replace
 
 import numpy as np
@@ -86,6 +99,7 @@ from ..engine.search import RootChild, Search, search_params
 from ..net.config import NetConfig
 from ..net.quant import TRUNK_QUANT_FIELDS, trunk_format
 from .records import CANDIDATE_SUBMIT, CANDIDATE_TURN, RECORD_VERSION, Children, DecisionRecord, GameRecord, network_id, params_dict
+from .seeded import StoredPosition, open_position
 from .targets import GameTargets, TargetConfig, build_targets
 
 #: D2's arms the generator plays (module docstring).
@@ -116,6 +130,8 @@ def decision_random(game_seed: int, decision: int, salt: int) -> float:
 
 #: The draws' salts (``decision_seed``).
 SALT_SEARCH, SALT_CHOICE, SALT_PCR, SALT_RESIGN = 0, 1, 2, 3
+#: I22's seeded-start draws - whether, and which stored position (4 is ``sampler.SALT_SAMPLE``).
+SALT_START = 5
 
 
 @dataclass(frozen=True)
@@ -150,6 +166,15 @@ class ResignConfig:
     consecutive: int = 2  # of the mover's turn starts in a row
     disabled_fraction: float = 0.1  # I18: AlphaGo Zero's protocol
     ranges: tuple[int, ...] = (50, 100, 200)  # board-count ranges the false-resign rate is reported in (6b's)
+
+
+@dataclass(frozen=True)
+class SeededStartConfig:
+    """Register I22's seeded starts (module docstring; provisional): OFF - the pilot run plays
+    without them (section 15.7; review decision 22)."""
+
+    enabled: bool = False
+    fraction: float = 0.1  # PLACEHOLDER (section 16; review decision 23): one self-play game in ten starts from a stored position
 
 
 @dataclass(frozen=True)
@@ -192,6 +217,7 @@ class GeneratorConfig:
     kl: KLAdaptiveConfig = KLAdaptiveConfig()  # I20
     resign: ResignConfig = ResignConfig()  # I18
     schedule: TemperatureSchedule = TemperatureSchedule()  # I19
+    seeded_starts: SeededStartConfig = SeededStartConfig()  # I22: off
     #: Further ``t5d_search_params`` fields by name, for every search (e.g. the legality budget).
     search_overrides: tuple[tuple[str, object], ...] = ()
 
@@ -220,6 +246,8 @@ class GeneratorConfig:
         moves = (t.start, t.endgame) + (() if t.decay_to is None else (t.decay_to,))
         if min(moves) < 0 or min(t.root_start, t.root_end) <= 0 or min(t.decay_turns, t.root_decay_turns, t.cutoff_turn) < 1:
             raise ValueError("I19: temperatures non-negative (root temperatures positive), the cutoff and decay spans positive")
+        if not 0.0 <= self.seeded_starts.fraction <= 1.0:
+            raise ValueError("I22: the seeded share of games (seeded_starts.fraction) is in [0, 1]")
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -417,6 +445,41 @@ def resign_enabled(cfg: GeneratorConfig) -> bool:
     return cfg.resign.threshold is not None and decision_random(cfg.seed, -1, SALT_RESIGN) >= cfg.resign.disabled_fraction
 
 
+def pick_start(cfg: GeneratorConfig, pool: Sequence[StoredPosition] | None) -> tuple[int, StoredPosition] | None:
+    """I22: the stored position this game starts from - its index in ``pool`` and itself - or None
+    for a game from the start: always None with seeded starts off; on, a ``fraction`` of games by
+    the seed, each taking one position uniformly from the pool (both draws re-derivable from the
+    game's seed). ``ValueError`` when seeded starts are on and the pool is empty or not given."""
+    if not cfg.seeded_starts.enabled:
+        return None
+    if not pool:
+        raise ValueError("I22: seeded starts are on and no stored position was given (generate_game(stored=...))")
+    if decision_random(cfg.seed, -1, SALT_START) >= cfg.seeded_starts.fraction:
+        return None
+    index = min(len(pool) - 1, int(decision_random(cfg.seed, -2, SALT_START) * len(pool)))
+    return index, pool[index]
+
+
+def seeded_start_header(picked: tuple[int, StoredPosition], turn: int, start, pool_size: int) -> dict:
+    """A seeded game's ``seeded_start`` header (I22; ``train.records``): where its start came from
+    (``source``; ``kind`` "pgn" with the 5dpgn, the actions replayed and the ruleset encoding, or
+    "fen" - the boards are the header's ``start_fen``), the source's turn count there (``turn``, in
+    actions), the start as the engine set it up (``start``: its snapshot - the H30 ``fingerprint``
+    and ``n_boards``) and the draw (the pool's size and the position's index in it)."""
+    index, p = picked
+    return {
+        "source": p.source,
+        "kind": p.kind,
+        "pgn": p.pgn,
+        "actions": int(p.actions),
+        "rules": int(p.rules),
+        "turn": int(turn),
+        "fingerprint": start.fingerprint,
+        "n_boards": len(start.boards),
+        "pool": {"size": int(pool_size), "index": int(index)},
+    }
+
+
 def _visit_shares(search: Search) -> dict[tuple, float]:
     children = search.children()
     total = float(sum(c.visits for c in children))
@@ -471,8 +534,11 @@ def generate_game(
     keep_positions: bool = False,
     target_config: TargetConfig | None = None,
     on_decision: Callable[[Search, DecisionRecord, Position], None] | None = None,
+    stored: Sequence[StoredPosition] | None = None,
 ) -> GeneratedGame:
-    """Play one self-play game and record it (module docstring). ``network``: the record's
+    """Play one self-play game and record it (module docstring). ``stored``: the pool of stored
+    positions seeded starts draw from (I22, ``pick_start``; read only when
+    ``cfg.seeded_starts.enabled``). ``network``: the record's
     network condition (``network_info``; None: from the evaluator's model). ``target_config``:
     the target builder's configuration (``train.targets``; None: its defaults at the network's
     short-term horizons) - the game's targets are built at generation, each decision's
@@ -489,9 +555,15 @@ def generate_game(
     relations = relation_bits(relations_for(net_cfg))
     regs = dict(regs_per_board=net_cfg.regs_per_board, global_regs=net_cfg.global_regs)
     flat = cfg.split == "flat"
-    game = Game.variant(cfg.variant) if cfg.start_fen is None else Game.from_fen(list(cfg.start_fen))
+    picked = pick_start(cfg, stored)  # I22: None unless seeded starts are on and this game's draw takes a stored position
+    if picked is not None:
+        game = open_position(picked[1])
+    else:
+        game = Game.variant(cfg.variant) if cfg.start_fen is None else Game.from_fen(list(cfg.start_fen))
+    turn0 = 0 if picked is None else picked[1].turn_count  # a seeded game keeps its source's turn count (section 12)
     start = game.info()
-    start_boards = [fen for _, _, fen in game.snapshot().boards] if cfg.start_fen is not None else []
+    start_snap = game.snapshot() if cfg.start_fen is not None or picked is not None else None
+    start_boards = [fen for _, _, fen in start_snap.boards] if start_snap is not None else []
     decisions: list[DecisionRecord] = []
     positions: list[Position] = []
     actions: list[list[Move]] = []
@@ -525,7 +597,8 @@ def generate_game(
                 cap = cfg.playouts if full else cfg.pcr.cheap_cap(cfg.playouts)
                 noise = cfg.root_noise if full else cfg.pcr.cheap_root_noise
                 seed = decision_seed(cfg.seed, d, SALT_SEARCH)
-                params = search_parameters(game, cfg, relations, seed=seed, noise=noise, root_temperature=root_temperature(cfg, a))
+                root_t = root_temperature(cfg, turn0 + a)
+                params = search_parameters(game, cfg, relations, seed=seed, noise=noise, root_temperature=root_t)
                 search = Search(game, params=params, share=shared)
                 if shared is not None:
                     shared.close()  # the cache lives on in the new search
@@ -533,7 +606,7 @@ def generate_game(
                 stop = _run(search, evaluator, cfg, full=full, cap=cap, regs=regs)
                 position = root_position(game, params, net_cfg, cfg.window_k)
                 raw: Evaluation = evaluator([position])[0]
-                t = move_temperature(cfg, a)
+                t = move_temperature(cfg, turn0 + a)
                 resigning = False
                 if ginfo.moves_made == 0 and cfg.resign.threshold is not None:
                     value = search.info().root_q  # the search's value, the mover's view
@@ -633,14 +706,22 @@ def generate_game(
         decided = "1-0" if winner == 0 else "0-1"
         result = {"checkmate": decided, "resign": decided, "stalemate": "1/2-1/2"}.get(end, "*")
         termination = end + (" (self-play's convention, I11: scored as a draw; not a game rule)" if end == "turn_cap" else "")
+        # The start as the record names it. A seeded game's 5dpgn (I22) is the continuation from its
+        # start's 5DFEN boards - as lossy as 5DFEN is; its exact start is header["seeded_start"].
+        if picked is not None:
+            variant, start_fen = ("seeded", None) if picked[1].fen is None else ("custom", list(picked[1].fen))
+            origin = [("Seeded", f"{picked[1].source or 'a stored position'}; turn {turn0}")]
+        else:
+            variant, start_fen = (cfg.variant, None) if cfg.start_fen is None else ("custom", list(cfg.start_fen))
+            origin = []
         pgn = write_record(
-            cfg.variant if cfg.start_fen is None else "custom",
+            variant if start_snap is None else "custom",
             actions,
             even=start.even,
             first_turn=start.present // 2,
             result=result,
             termination=termination,
-            extra=[("White", "t5d selfplay"), ("Black", "t5d selfplay"), ("Engine", f"t5d training generator, seed {cfg.seed}")],
+            extra=[("White", "t5d selfplay"), ("Black", "t5d selfplay"), ("Engine", f"t5d training generator, seed {cfg.seed}"), *origin],
             first_player=start.to_move,
             size=(start.width, start.height),
             boards=start_boards,
@@ -649,8 +730,8 @@ def generate_game(
             "record_version": RECORD_VERSION,
             "engine_version": game.lib.version,
             "generator": "t5d.train.selfplay",
-            "variant": cfg.variant if cfg.start_fen is None else "custom",
-            "start_fen": None if cfg.start_fen is None else list(cfg.start_fen),
+            "variant": variant,
+            "start_fen": start_fen,
             "ruleset": start.ruleset,
             "rules": start.rules,
             "width": start.width,
@@ -683,6 +764,8 @@ def generate_game(
             "proof_refs": [],
             "target_config": None,
         }
+        if picked is not None:  # I22: the game's origin (``records``: the optional header key)
+            header["seeded_start"] = seeded_start_header(picked, turn0, start_snap, len(stored))
     finally:
         if shared is not None:
             shared.close()
@@ -775,9 +858,15 @@ def replay_positions(
         if kind in h["search"]:
             s = h["search"][kind]
             budget[kind] = (bool(s["legal_moves_only"]), int(s["legality_checks"]), int(s["legality_nodes"]))
-    game = Game.variant(h["variant"]) if h["start_fen"] is None else Game.from_fen(list(h["start_fen"]))
+    seeded = h.get("seeded_start")  # I22: a seeded game's exact start is its stored position, set up as at generation
+    if seeded is not None and seeded["kind"] == "pgn":
+        game = open_position(StoredPosition(pgn=seeded["pgn"], actions=int(seeded["actions"]), rules=int(seeded["rules"])))
+    else:
+        game = Game.variant(h["variant"]) if h["start_fen"] is None else Game.from_fen(list(h["start_fen"]))
     out: list[Position] = []
     try:
+        if seeded is not None and game.snapshot().fingerprint != seeded["fingerprint"]:
+            raise ValueError("the record's seeded start is not the position the engine sets up from it (I22)")
         info = game.info()
         for key in ("ruleset", "rules"):
             if key in h and int(h[key]) != int(getattr(info, key)):
@@ -816,9 +905,11 @@ __all__ = [
     "KLAdaptiveConfig",
     "PCRConfig",
     "ResignConfig",
+    "SeededStartConfig",
     "TemperatureSchedule",
     "GeneratedGame",
     "GeneratorConfig",
+    "SALT_START",
     "candidate_index",
     "children_record",
     "decision_random",
@@ -830,11 +921,13 @@ __all__ = [
     "mix",
     "move_temperature",
     "network_info",
+    "pick_start",
     "playable_boards",
     "replay_positions",
     "resign_enabled",
     "root_temperature",
     "root_position",
     "search_parameters",
+    "seeded_start_header",
     "turn_moves",
 ]

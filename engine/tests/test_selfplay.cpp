@@ -198,7 +198,6 @@ TEST(selfplay_match_play_carries_the_tree) {
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Random, 4);
   for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat, TurnSplit::Tree}) {
     for (const bool graph : {false, true}) {
-      if (split == TurnSplit::Tree && graph) continue;  // refused (build-log spec issue 301)
       PlayParams p = quick(split, 9);
       p.match_play = true;
       p.search.graph = graph;

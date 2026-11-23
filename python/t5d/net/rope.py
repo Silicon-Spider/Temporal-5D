@@ -54,7 +54,8 @@ mask it carries (near-NoPE on the move-graph heads, the B4 split elsewhere).
 displacements (1, 1) and (2, 2) while disfavouring (1, 2) and (2, 1), so diagonals and knight
 moves are inexpressible as position. That joint-axis geometry is B15's - the 4D displacement
 bias beside RoPE (``displacement.py``), which superseded B6's binned Delta-time/Delta-timeline
-biases (CHECKPOINT 6; B6 and its "RoPE for near-time" arm are removed).
+biases (CHECKPOINT 6; B6's "RoPE for near-time" arm is removed) and keeps B6's two per-axis
+tables for the pairs beyond its exact classes (the 2026-11-15 review; ``NetConfig.disp_far_axis``).
 """
 
 from __future__ import annotations

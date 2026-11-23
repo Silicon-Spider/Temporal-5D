@@ -131,6 +131,8 @@ def test_parameters_default_and_override():
         {"split": T5D_SPLIT_FLAT},
         {"split": T5D_SPLIT_TREE},
         {"split": T5D_SPLIT_TREE, "tree_gates": 0, "root_noise": 1},
+        {"split": T5D_SPLIT_TREE, "graph": 1},
+        {"split": T5D_SPLIT_TREE, "graph": 1, "tree_gates": 0},
         {"root_noise": 1},
         {"root_noise": 1, "dirichlet_shaping": 1, "root_policy_temperature": 1.3},
         {"root_noise": 1, "dirichlet_concentration": 0.0},
@@ -142,6 +144,8 @@ def test_parameters_default_and_override():
         "flat",
         "tree-form",
         "tree-form-no-gates",
+        "tree-form-graph",
+        "tree-form-graph-no-gates",
         "noise",
         "noise-shaped-tempered",
         "noise-per-child",
@@ -240,6 +244,8 @@ def _random_digests(game: Game, turn_start: bool, flags: dict, evaluator_seed: i
         {"split": T5D_SPLIT_FLAT},
         {"split": T5D_SPLIT_TREE},
         {"split": T5D_SPLIT_TREE, "tree_gates": 0, "root_noise": 1},
+        {"split": T5D_SPLIT_TREE, "graph": 1},
+        {"split": T5D_SPLIT_TREE, "graph": 1, "tree_gates": 0},
         {"root_noise": 1},
         {"root_noise": 1, "dirichlet_shaping": 1, "root_policy_temperature": 1.3},
         {"root_noise": 1, "dirichlet_concentration": 0.0},
@@ -251,6 +257,8 @@ def _random_digests(game: Game, turn_start: bool, flags: dict, evaluator_seed: i
         "flat",
         "tree-form",
         "tree-form-no-gates",
+        "tree-form-graph",
+        "tree-form-graph-no-gates",
         "noise",
         "noise-shaped-tempered",
         "noise-per-child",
@@ -314,12 +322,13 @@ def _off_sign(search: Search, root_player: int) -> list[float]:
 
 
 @pytest.mark.parametrize("graph", [0, 1], ids=["tree", "graph"])
-@pytest.mark.parametrize("split", [T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_FLAT], ids=["ply", "flat"])
+@pytest.mark.parametrize("split", [T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_FLAT, T5D_SPLIT_TREE], ids=["ply", "flat", "tree-form"])
 @pytest.mark.parametrize("variant", ["Standard", "Standard - Two Timelines"])
 def test_the_value_is_the_acting_players(variant, split, graph):
     """A value that says White wins, given from each leaf's acting player, backs up through the
     engine as White's win: every visited root child's q is +1 for White at the root - leaves past
-    the shift included (the board-move split meets them after the move that shifts the present)."""
+    the shift included (the board-move split meets them after the move that shifts the present).
+    Under D2's tree form too, in a tree and a graph (section 8.5): through its inherited nodes."""
     with Game.variant(variant) as g:
         s = Search(g, params=search_params(seed=1, split=split, graph=graph))
         ev = WhiteWins()
@@ -710,6 +719,28 @@ def test_the_network_drives_a_search_deterministically(split):
     assert digests[0] == digests[1] != digests[2]
 
 
+def _row_15_2(root: str, synchronous: int, legality: dict, graph: int, playouts: int = 40):
+    """The ply split's search and the tree form's with every gate firing, with the network at
+    random weights through the C step API: one search, bit for bit. Returns their summaries."""
+    net = NetworkEvaluator(_small_net(5), max_batch=8)
+    digests, infos = [], []
+    for flags in ({"split": T5D_SPLIT_BOARD_MOVE}, {"split": T5D_SPLIT_TREE, "tree_gates": T5D_TREE_GATE_ALWAYS}):
+        g = _shifted_game_with_moves(seed=3) if root == "past-the-shift" else Game.variant(root)
+        with g:
+            params = search_params(seed=7, synchronous=synchronous, graph=graph, **flags, **legality)
+            s = Search(g, turn_start=root != "past-the-shift", params=params)
+            run_search(s, net, playouts=playouts, batch_size=8)
+            digests.append(s.digest())
+            infos.append(s.info())
+            s.close()
+    assert digests[0] == digests[1]
+    ply, tree = infos
+    assert ply.evaluations == tree.evaluations and ply.playouts == tree.playouts == playouts
+    assert tree.inherited_nodes == 0 and tree.gate_always > 0
+    assert (tree.gate_between, tree.gate_capture, tree.gate_check, tree.gate_present) == (0, 0, 0, 0)
+    return ply, tree
+
+
 @pytest.mark.parametrize(
     "legality",
     [{}, {"legality_checks": T5D_NO_LIMIT, "legality_nodes": T5D_NO_LIMIT}, {"legal_moves_only": 0}],
@@ -722,21 +753,20 @@ def test_d2_the_tree_form_with_every_gate_firing_is_the_ply_split_with_the_netwo
     with every interaction gate firing (the ``ALWAYS`` seam) builds the ply split's search bit for
     bit (H15's digest) - inheritance is its only difference - with the same evaluations; every
     mid-turn leaf a gate's, nothing inherited."""
-    net = NetworkEvaluator(_small_net(5), max_batch=8)
-    digests, infos = [], []
-    for flags in ({"split": T5D_SPLIT_BOARD_MOVE}, {"split": T5D_SPLIT_TREE, "tree_gates": T5D_TREE_GATE_ALWAYS}):
-        g = _shifted_game_with_moves(seed=3) if root == "past-the-shift" else Game.variant(root)
-        with g:
-            s = Search(g, turn_start=root != "past-the-shift", params=search_params(seed=7, synchronous=synchronous, **flags, **legality))
-            run_search(s, net, playouts=40, batch_size=8)
-            digests.append(s.digest())
-            infos.append(s.info())
-            s.close()
-    assert digests[0] == digests[1]
-    ply, tree = infos
-    assert ply.evaluations == tree.evaluations and ply.playouts == tree.playouts == 40
-    assert tree.inherited_nodes == 0 and tree.gate_always > 0
-    assert (tree.gate_between, tree.gate_capture, tree.gate_check, tree.gate_present) == (0, 0, 0, 0)
+    ply, tree = _row_15_2(root, synchronous, legality, graph=0)
+    assert ply.transposition_hits == tree.transposition_hits == 0
+
+
+@pytest.mark.parametrize("synchronous", [0, 1], ids=["batched", "synchronous"])
+@pytest.mark.parametrize("root", ["Standard - Two Timelines", "Misc - Timeline Battleground"])
+def test_d2_the_tree_form_with_every_gate_firing_is_the_ply_splits_graph_search_with_the_network(root, synchronous):
+    """The row under graph search (section 8.5, register C11 with D2; the 2026-11-15 review): with
+    every gate firing every mid-turn node is evaluated, so every node is a graph node and the
+    search is the ply split's graph search bit for bit - where it merges (the transposition hits
+    equal and above zero; 6 to 16 of them at 120 playouts when written), not only where it is
+    still a tree."""
+    ply, tree = _row_15_2(root, synchronous, {}, graph=1, playouts=120)
+    assert ply.transposition_hits == tree.transposition_hits > 0
 
 
 class _Counts:
@@ -820,10 +850,29 @@ def test_d2_a_carried_root_the_tree_form_inherited_is_evaluated(gates):
         s.close()
 
 
-def test_d2_the_tree_form_is_refused_under_graph_search():
-    """Spec issue 301: under MCGS an inherited node's priors would depend on the path that made it."""
-    with Game.variant("Standard") as g, pytest.raises(EngineArgumentError, match="301"):
-        Search(g, params=search_params(split=T5D_SPLIT_TREE, graph=1))
+def test_d2_the_tree_form_under_graph_search_merges_at_evaluated_nodes():
+    """Section 8.5 (register C11 with D2; the 2026-11-15 review, settling spec issue 301 - the
+    combination was refused before): under MCGS only evaluated nodes are graph nodes. Through the
+    step API with no gate and no evaluation cache, the search runs to its playouts; the states
+    inside a turn are inherited - each its path's own node, never merged - and never reach the
+    evaluator; the two orders of a turn meet at its turn start (transposition hits); and no (key,
+    moves made) is asked about twice: a graph node is evaluated once. The same search in a tree
+    does ask twice - there the two orders reach two nodes - so the last assertion can fail."""
+    asked = {}
+    for graph in (1, 0):
+        with Game.variant("Standard - Two Timelines") as g:
+            s = Search(g, params=search_params(seed=2, split=T5D_SPLIT_TREE, graph=graph, tree_gates=0, eval_cache_entries=0))
+            ev = _Leaves(UniformEvaluator())
+            ev.driver = CStepDriver(s, playouts=300)
+            serve(ev.driver, ev, batch_size=8)
+            info = s.info()
+            s.close()
+        assert info.playouts == 300 and info.inherited_nodes > 0
+        assert ev.leaves and all(made == 0 for _, made in ev.leaves)
+        assert (info.transposition_hits > 0) == bool(graph)
+        asked[graph] = ev.leaves
+    assert len(set(asked[1])) == len(asked[1])
+    assert len(set(asked[0])) < len(asked[0])
 
 
 def test_the_network_past_the_shift():
