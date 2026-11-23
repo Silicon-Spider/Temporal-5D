@@ -11941,8 +11941,10 @@ entry changes in the same edit as its code, which the standing rule defers to up
     H1 part 5 left to `lane/engine`'s decision 13 (issue 456). Issues 456, 458, 467; edit 346.
   - The reviewers' survivors re-run on the reconciled tree (this lane's runner; ten adapted to
     the rewritten code): 37 killed, Y02 obsolete (decision 12 removed its refusal), L02
-    equivalent (issue 406's per-move gate before every search; the root's single search given no
+    "equivalent" (issue 406's per-move gate before every search; the root's single search given no
     time left settles nothing) - the M4 test gained the reviewers' 120-board position for it.
+    (Corrected by the E11 review's S8: equivalent in practice only - the state's own searches reach
+    the guard, and the Budgeter runs up to 64 nodes before it reads its clock; made testable.)
   - Checks on b75209a: engine 834 of 834 (`--werror`), long_detectors 2 of 2, the Lazy SMP test
     x3 (table above; a quiet machine), ruff clean, pytest 222 passed (the time, search-API,
     netplay, decision-log, switch-match and pool files), verify ok, gate commit ok (smoke test
@@ -12060,3 +12062,6 @@ entry changes in the same edit as its code, which the standing rule defers to up
     C01-C03, D03, Y01, Y07, Y09, Y15, Y17) and the described ones written (B07; B04 and B15 through
     `detail::DecisionClock`; D06 through `proof_gap`); H1 part (6)'s charge and overrun asserted. The
     clocked no-child order changed: the clock's search before the witness (issue 458).
+  - **S8**: L02's guard kept, `LegalityStats::root_searches_past_deadline` counting the state's own
+    searches it refuses; the M4 test asserts it; the phase-2 CHANGELOG's reason corrected
+    ("equivalent in practice": up to 64 nodes before the Budgeter reads its clock).

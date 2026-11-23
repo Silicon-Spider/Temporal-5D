@@ -10,6 +10,20 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - E11 review round 2, S8: L02's guard kept and made testable
+
+The review's S8 (SS-F13). L02 - `legal.cpp`'s search starting past the deadline - was called
+equivalent in phase 2; it is equivalent only in practice: the state's own searches (before tier 1
+and in tier 3) reach the guard, and with no time left the Budgeter still runs up to 64 nodes
+before it first reads its clock. The guard stays and is now visible:
+`LegalityStats::root_searches_past_deadline` counts those searches it refuses (a move's search is
+never reached past the deadline: its loop stops first). The M4 test's four positions refuse some,
+with no tier-3 node spent - L02's mutant leaves the count at 0. The phase-2 entry's reason for the
+guard is corrected in place.
+
+Spec: none - a classification statistic and its test (issue 406's deadline, §11.0's rules engine
+unchanged). No proposed edit; no measured figure.
+
 ### 2026-11-24 - E11 review round 2, S7: the mutation pass's candidate tests adopted, the ones it described written
 
 The review's S7 (the mutation pass, SS-F2). Its candidate tests adopted, each against the survivor
@@ -251,10 +265,12 @@ Y04, M01, L01, L02, L03, S05, S07). 37 KILLED - the phase-1 tests, M3's (T04, T0
 Y04), M4's and issue 406's (M01, L01; M03 and L03 by lane/engine's lazy-verification and tier-3
 tests, which run long under them), the seam's (S05, S07). Y02 is obsolete: decision 12 removed
 the refusal it mutated (the hook is now taken; tested). L02 (a tier-3 search started past the
-deadline) survives as EQUIVALENT: since the merge issue 406's own gate stops every per-move search
-past the deadline (`legal.cpp`'s loop), and the one other caller, the root's single search, is given
-no time left and settles nothing - the M4 test's four positions (120 boards of random play added,
-the reviewers' own) classify alike with and without it. Phase 2's checks on b75209a, all green:
+deadline) survived as "EQUIVALENT" - wrongly: issue 406's own gate stops every per-move search past
+the deadline (`legal.cpp`'s loop), but the state's own searches (two callers, before tier 1 and in
+tier 3) reach it, and given no time left the Budgeter still runs up to 64 nodes before it reads its
+clock (`>`, every 64 nodes - search_internal.hpp): the guard saves that work, and no test could see
+it. (Corrected by the E11 review's S8, which made it testable: `LegalityStats::
+root_searches_past_deadline`.) Phase 2's checks on b75209a, all green:
 the whole engine suite, long_detectors, the Lazy SMP test x3, ruff, the engine-driving Python files
 and `test_pool.py`, verify and gate commit (the build log's session entry).
 

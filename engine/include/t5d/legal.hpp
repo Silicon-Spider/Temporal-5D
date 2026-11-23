@@ -143,6 +143,10 @@ struct LegalityStats {
   std::size_t searched_illegal = 0;   // tier 3
   std::size_t unknown = 0;            // tier 3, the budget (or memory ceiling) spent
   std::uint64_t search_nodes = 0;     // spent by tier 3
+  /// tier 3: searches from the state itself (before tier 1, or with no move
+  /// legal yet) not started because the deadline had passed (the E11 review's
+  /// S8) - a move's search is not reached past it (its loop stops first)
+  std::size_t root_searches_past_deadline = 0;
   std::size_t scans = 0;              // royal-capture scans of tier 1 (stripped and destination)
   bool bulk = false;                  // tier 1's stripped multiverse was capture-free
   std::size_t kept_blockers = 0;      // pieces tier 1 kept

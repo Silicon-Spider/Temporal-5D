@@ -2503,6 +2503,7 @@ TEST(timeman_past_the_deadline_the_classification_is_the_cheap_tiers_alone) {
   spec.target_active = 6;
   spec.seed = 5;
   positions.push_back(synthetic::play_until_reached(spec).state);
+  std::size_t refused = 0;
   for (const GameState& s : positions) {
     MoveList all;
     generate_moves(s, all);
@@ -2518,7 +2519,11 @@ TEST(timeman_past_the_deadline_the_classification_is_the_cheap_tiers_alone) {
     CHECK_EQ(st.search_nodes, std::uint64_t{0});
     CHECK(std::count(cut.begin(), cut.end(), MoveLegality::Unknown) >
           std::count(full.begin(), full.end(), MoveLegality::Unknown));  // the premise: tiers 2-3 settle more
+    refused += st.root_searches_past_deadline;
   }
+  // The E11 review's S8 (L02's guard): the state's own searches are reached
+  // past the deadline and refused - counted, none started (search_nodes 0).
+  CHECK(refused > 0);
 }
 
 TEST(timeman_past_the_deadline_a_mating_turn_start_is_not_terminal) {
