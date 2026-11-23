@@ -148,7 +148,7 @@ TEST(play_exe_records_replay_through_the_gate_adapter) {
   // lines off; --hunt-suggest --no-assets the reverse, and the game replays.
   CHECK(plain.header("Engine")->find("asset map") != std::string::npos);
   CHECK(plain.header("Engine")->find("hunt suggestions") == std::string::npos);
-  const t5d::PgnRecord suggested = play_and_gate({"--variant", "Very Small - Open", "--hunt-suggest", "--no-assets",
+  const t5d::PgnRecord suggested = play_and_gate({"--variant", "Very Small - Open", "--hunt-suggest", "--no-assets", "--match",
                                                   "--synchronous", "--playouts", "16", "--cap-turns", "4", "--seed", "2"},
                                                  {});
   REQUIRE(suggested.header("Engine") != nullptr);
@@ -233,6 +233,18 @@ TEST(play_exe_takes_its_rules_through_the_shared_option_reader) {
   namespace fs = std::filesystem;
   const fs::path dir = fs::path(T5D_TEST_SCRATCH) / "play-exe";
   CHECK_EQ(run(T5D_PLAY_EXE, {"--rules", "nonsense"}, {}, dir / "o.txt", dir / "e.txt"), 2);
+}
+
+TEST(play_exe_refuses_hunt_suggest_outside_match_play) {
+  // The E11 review's L9: Hunt's suggestions steer match play only - self-play
+  // does not steer as built (register I2).
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::path(T5D_TEST_SCRATCH) / "play-exe";
+  fs::create_directories(dir);
+  CHECK_EQ(run(T5D_PLAY_EXE, {"--variant", "Very Small - Open", "--hunt-suggest", "--playouts", "4"}, {}, dir / "o.txt",
+               dir / "e.txt"),
+           2);
+  CHECK(read_all(dir / "e.txt").find("--hunt-suggest: match play only") != std::string::npos);
 }
 
 TEST(play_exe_command_line) {

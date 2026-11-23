@@ -40,7 +40,8 @@
 // df-pn settling scans under 50 boards (--no-settling; --settling-ms, 50), the
 // asset map's boosts (--no-assets), the provers on --verification-threads
 // threads (5); --hunt-suggest switches Hunt's suggested lines on (H43, off:
-// 6e's on/off match test). Their proofs change play only with --proof-channel. Guard (H42)
+// 6e's on/off match test; match play only - self-play does not steer as built,
+// register I2). Their proofs change play only with --proof-channel. Guard (H42)
 // is adopted in no range: --guard-final switches its hook at submission on,
 // for experiments, and needs --proof-channel. The Engine header names them.
 // --decision-log FILE writes the game's decisions for the offline audit lane
@@ -52,7 +53,10 @@
 // decision run by the side's time manager instead of --playouts - 6o's arms:
 // --allocator (the moves-left integral by default), --no-signals (the
 // stop/extend table off); --model-clock prices each decision's work by the
-// cost model instead of the wall clock (deterministic). A side whose clock runs
+// cost model instead of the wall clock - deterministic, except where Hunt's
+// suggestions (--hunt-suggest) or the proof hook (the time manager's
+// proof_volatility) read the ladder's threaded jobs, whose timing is the wall
+// clock's: add --synchronous for a reproducible game with them. A side whose clock runs
 // out loses on time ("flag", result "*") - only then: a side whose search cannot
 // produce a move with time left ends the game unscored ("unknown", the
 // Termination header saying why; the E11 review's S1). The turn
@@ -387,6 +391,10 @@ int main(int argc, char** argv) {
     }
     if (params.clock.enabled && !params.match_play) {
       throw std::invalid_argument("--time: match play's clock - it needs --match (self-play's budgets are PCR's)");
+    }
+    if (params.search.hunt_suggest && !params.match_play) {
+      throw std::invalid_argument(
+          "--hunt-suggest: match play only - self-play does not steer as built (register I2; the E11 review's L9)");
     }
   } catch (const std::exception& e) {
     std::fprintf(stderr, "t5d-play: %s\n", e.what());

@@ -651,13 +651,16 @@ TimedRun run_timed(Search& search, Evaluator& evaluator, TimeManager& tm, const 
   const std::uint64_t e0 = st.evaluations;
   const std::uint64_t p0 = st.playouts;
   const std::uint64_t b0 = st.batches;
-  out.plan = tm.begin(search, ctx);
-  const double t0 = clock != nullptr ? clock->now() : 0.0;
-  const auto start = std::chrono::steady_clock::now();
   // The caller's own deadline (max_seconds: a game's safety stop - THE
   // DEADLINE in t5d/mcts.hpp), given to each slice as its Limits::seconds:
   // it stops the run between batches and reaches the calls inside them.
-  const std::optional<std::chrono::steady_clock::time_point> cap = deadline_after(start, max_seconds, "max_seconds");
+  // Validated before the decision begins (the E11 review's L2: a refusal
+  // leaves the manager as it was).
+  const std::optional<std::chrono::steady_clock::time_point> cap =
+      deadline_after(std::chrono::steady_clock::now(), max_seconds, "max_seconds");
+  out.plan = tm.begin(search, ctx);
+  const double t0 = clock != nullptr ? clock->now() : 0.0;
+  const auto start = std::chrono::steady_clock::now();
   // The hard bound inside a batch, on the steady clock: the search's
   // persistent deadline (the earlier of it and one the caller set), the
   // caller's restored when the run returns, however it returns (M3). A 0 s

@@ -10,6 +10,44 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - E11 review round 2, the LOW findings L1-L9
+
+The review's nine LOW findings, each as the main loop decided.
+- **L1** (SC-L1): the model clock charges a decision's whole work since it began - the timed run,
+  the re-runs and no-visit rounds after it, Guard's re-search - at its plan's price, in `play_game`
+  and netplay (it charged the timed run's alone, so a flagged decision could leave its clock
+  positive).
+- **L2** (SC-L3): `run_timed` validates `max_seconds` before `tm.begin` - a refusal leaves the
+  manager out of a decision (E8's reference uncounted).
+- **L3** (SC-L4, SS-F11): netplay's Steering header is written for `asset_map` off too, and the
+  Engine header names non-default `time_overrides` (e.g. `proof_volatility`); `switch_match`
+  refuses `--switch asset_map` with `--no-assets`, which it silently overrode.
+- **L4** (SC-L5): `suggestion_edges` counts an edge once, and only where `hunt_suggest_boost x
+  weight > 0` raised it - in both the board-move and the flat paths.
+- **L5** (SC-L6): `--model-clock` is deterministic unless Hunt's suggestions or the proof hook read
+  the ladder's threaded jobs; making only the ladder synchronous under the model clock reaches into
+  how the search runs its jobs (the ladder's options must match the search's) - not local, so
+  t5d-play's help and the README state the condition and point at `--synchronous`.
+- **L6** (SS-F6): netplay bounds each wall-clock no-visit round by the side's clock inside the
+  batch (`set_deadline` around it, the caller's deadline restored with `set_deadline_at`), as
+  `play_game` does.
+- **L7** (SS-F9): the README's stale "TimeManager's own refusal of the proof hook" is gone.
+- **L8** (SS-F10): Guard's scan after the search (the proof channel on only) gets no more than the
+  hard bound leaves, on a clock with wall time; the synchronous mode's scan stays node-budgeted.
+- **L9** (SS-F12): `hunt_suggest` is refused outside match play - t5d-play's `--hunt-suggest`
+  without `--match`, netplay's self mode, an override included (register I2 and decision 14: self-play
+  does not steer as built); issue 477 and the H43 row record it.
+- Tests: the model clock's charge equal to the decision's whole work at the plan's price (C++,
+  netplay - on a decision with nothing after its timed run, so the test pins the formula; the case
+  with work after the run is not built here); `run_timed`'s refusal of `max_seconds` NaN leaving the manager out of a decision; the
+  headers and the switch_match refusal; `suggestion_edges` with a zero boost and with two
+  suggestions sharing an edge; netplay's wall-clock round under the clock's deadline; the
+  `hunt_suggest` refusals (t5d-play, netplay). L8 has no test: a Guard scan long enough to time.
+
+Spec: register I2 and §11.2's 6e (L9's refusal - as built, the register's own words; no edit);
+§8.6's hard bound as built (L8: Guard no exception to it - issue 458's two exceptions stand). No
+proposed edit; no measured figure.
+
 ### 2026-11-24 - E11 review round 2, S8: L02's guard kept and made testable
 
 The review's S8 (SS-F13). L02 - `legal.cpp`'s search starting past the deadline - was called

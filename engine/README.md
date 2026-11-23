@@ -4750,8 +4750,11 @@ reference is a log-mean, so the spend is not neutral over a game; reading A plan
 
 **Clocks.** `WallClock` is the steady clock. With none (`nullptr`; Python's
 `model_clock=True`; C's `elapsed` NaN) the MODEL CLOCK stands in: a decision's time is its
-work at the cost model's price, the scale never updated - a node-limited search,
-bit-reproducible (H15; tested, the synchronous mode too). Self-play takes no clock: its
+work at the cost model's price (a decision's whole work, its timed run and what ran after it -
+the E11 review's L1), the scale never updated - a node-limited search, bit-reproducible (H15;
+tested, the synchronous mode too) unless Hunt's suggestions (`hunt_suggest`) or the proof hook
+(`proof_volatility`) read the ladder's threaded jobs, whose timing is the wall clock's: with
+either, only the synchronous mode is reproducible (L5). Self-play takes no clock: its
 budgets are PCR's (§12.5).
 
 **Match play's clock** (`PlayParams::clock`, `MatchClock`, off; t5d-play's `--time BASE
@@ -4804,7 +4807,7 @@ Python building `run_timed`'s tree, on the model clock and on an elapsed time th
 supplies under each of 6o's switches (the integral arm with the signals on and off, both flat
 arms - which that clock tells apart); the C API's switches, its flags (`wont_resolve`,
 `converged`) and its wall clock (the scale measured); Python's `ALLOCATORS` the header's
-constants, and `TimeManager`'s own refusal of the proof hook; the cost shape equal to
+constants; the cost shape equal to
 `net/cost.py`'s `dense_flops` at three board counts (Python); match play on a clock under each
 arm (legal, replayed by the reader and the gate) and with the hard bound the plan itself (every
 decision stopped on it, none charged past it), the increment credited, a flag at the first

@@ -2206,13 +2206,18 @@ struct Search::Impl {
       std::vector<detail::Coord> mine;
       for (const Move& m : moves) mine.push_back(detail::coord_of(m));
       std::sort(mine.begin(), mine.end());
+      bool counted = false;  // an edge counted once, and only where the boost raised it (the E11 review's L4)
       for (const HuntSuggestion& s : root_suggestions_) {
         std::vector<detail::Coord> theirs;
         for (const Move& m : s.action) theirs.push_back(detail::coord_of(m));
         std::sort(theirs.begin(), theirs.end());
         if (theirs == mine) {
-          b += params_.hunt_suggest_boost * s.weight;
-          ++stats_.suggestion_edges;
+          const double add = params_.hunt_suggest_boost * s.weight;
+          b += add;
+          if (add > 0 && !counted) {
+            ++stats_.suggestion_edges;
+            counted = true;
+          }
         }
       }
     }
@@ -2396,15 +2401,20 @@ struct Search::Impl {
       }
     }
     if (id == root_ && params_.hunt_suggest) {
+      std::vector<char> counted(n.edges.size(), 0);  // an edge counted once, a positive boost only (L4)
       for (const HuntSuggestion& s : root_suggestions_) {
         if (s.action.empty()) continue;
         const detail::Coord c = detail::coord_of(s.action.front());
         for (std::size_t i = 0; i < n.edges.size(); ++i) {
           const Edge& e = n.edges[i];
           if (e.submit || e.pruned || detail::coord_of(e.move) != c) continue;
-          b[i] += params_.hunt_suggest_boost * s.weight;
-          any = any || params_.hunt_suggest_boost * s.weight > 0;
-          ++stats_.suggestion_edges;
+          const double add = params_.hunt_suggest_boost * s.weight;
+          b[i] += add;
+          any = any || add > 0;
+          if (add > 0 && counted[i] == 0) {
+            ++stats_.suggestion_edges;
+            counted[i] = 1;
+          }
           break;
         }
       }

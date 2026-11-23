@@ -43,7 +43,7 @@ from t5d.engine.capi import (
     load_library,
 )
 from t5d.engine.evaluator import ServeStats, run_timed_search
-from t5d.engine.netplay import GameResult, PlayConfig, check_replay, network_config, play_game, replay_with_gate
+from t5d.engine.netplay import GameResult, PlayConfig, check_replay, network_config, play_game, replay_with_gate, steering_header
 from t5d.engine.search import ALLOCATORS, Search, TimeManager, search_params, time_params
 from t5d.net import build_model
 from t5d.net.config import NetConfig
@@ -385,12 +385,23 @@ def _fake_no_visit_search(monkeypatch, limit: int):
     class FakeSearch:
         def __init__(self):
             self.p = 0
+            self.deadlines: list[float] = []  # the rounds' deadlines (the E11 review's L6)
+            self.restored: list[int] = []
 
         def children(self):
             return [types.SimpleNamespace(visits=0, legality=T5D_LEGALITY_LEGAL, index=0)]
 
         def info(self):
             return types.SimpleNamespace(playouts=self.p)
+
+        def deadline(self):
+            return 12345, 1e9
+
+        def set_deadline(self, seconds):
+            self.deadlines.append(seconds)
+
+        def set_deadline_at(self, steady_ns):
+            self.restored.append(steady_ns)
 
     calls: list[int] = []
 
@@ -426,6 +437,10 @@ def test_netplay_the_no_visit_cap_holds_on_a_clock_that_does_not_advance_only(mo
     with pytest.raises(_OutOfClock):
         _choose(fake, cfg, res, ServeStats(), None, {}, None, clock=wall)
     assert len(calls) > 1 + netplay._NO_VISIT_ROUNDS
+    # L6: each wall-clock round ran under the side's clock (what is left of it) and the caller's
+    # deadline was set back after it; the model clock's rounds set none.
+    assert len(fake.deadlines) == len(calls) - 1 and all(0 < d <= 0.05 for d in fake.deadlines)
+    assert fake.restored == [12345] * len(fake.deadlines)
 
 
 def test_netplay_an_out_of_clock_decision_is_the_flag(monkeypatch):
@@ -451,6 +466,62 @@ def test_netplay_an_out_of_clock_decision_is_the_flag(monkeypatch):
             assert res.winner == 1 and res.clock_remaining[0] > 0  # the charge alone would not have flagged
         else:
             assert res.winner is None and res.unsettled == "search" and res.clock_remaining == [600.0, 600.0]
+
+
+def test_netplay_the_model_clock_charges_the_decisions_whole_work():
+    """The E11 review's L1 in netplay: on the model clock a decision is charged its whole work at
+    its plan's price - one flat-form decision: its search's work times s(N) at the root."""
+    from t5d.net.config import NetConfig
+
+    cfg = PlayConfig(
+        variant="Standard",
+        split="flat",
+        mode="match",
+        max_actions=1,
+        hunt=False,
+        settling=False,
+        asset_map=False,
+        time=30.0,
+        model_clock=True,
+    )
+    res = play_game(UniformEvaluator(), cfg, net_cfg=NetConfig())
+    assert res.timed_decisions == 1 and len(res.actions) == 1
+    tp = time_params()
+    with Game.variant("Standard") as g, Search(g, params=search_params(hunt=0, settling=0)) as s, TimeManager(tp) as tm:
+        plan = tm.begin(s, remaining=30.0)
+    work = max(res.evaluations, res.playouts / tp.playouts_per_evaluation_cap)
+    assert 30.0 - res.clock_remaining[0] == pytest.approx(work * plan.seconds_per_evaluation, rel=1e-9)
+
+
+def test_netplay_headers_name_the_asset_map_off_and_the_time_overrides():
+    """The E11 review's L3: the Steering header is written when the asset map is off, and the
+    Engine header names the time manager's non-default overrides."""
+    from t5d.net.config import NetConfig
+
+    assert "asset_map=0" in (steering_header(PlayConfig(asset_map=False)) or "")
+    cfg = PlayConfig(
+        variant="Standard",
+        split="flat",
+        mode="match",
+        max_actions=1,
+        hunt=False,
+        settling=False,
+        time=30.0,
+        model_clock=True,
+        time_overrides=(("proof_volatility", 1),),
+    )
+    res = play_game(UniformEvaluator(), cfg, net_cfg=NetConfig())
+    assert "proof_volatility 1" in res.record
+
+
+def test_netplay_refuses_hunt_suggest_outside_match_play():
+    """The E11 review's L9: Hunt's suggestions steer match play only (register I2: self-play does
+    not steer as built) - the switch or an override."""
+    with pytest.raises(ValueError, match="hunt_suggest: match play only"):
+        PlayConfig(mode="self", hunt_suggest=True).validate()
+    with pytest.raises(ValueError, match="hunt_suggest: match play only"):
+        PlayConfig(mode="self", search_overrides=(("hunt_suggest", 1),)).validate()
+    PlayConfig(mode="match", hunt_suggest=True).validate()
 
 
 def _clocked_game(nets, **kw):

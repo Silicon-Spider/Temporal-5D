@@ -385,13 +385,23 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
         const double t = g.decisions < params.temperature_decisions ? params.temperature : 0.0;
         return search->choose_by_visits(t, uniform());
       };
+      // E11 (the E11 review's L1): a decision's time on the model clock - its
+      // whole work since it began (the timed run, the re-runs and no-visit
+      // rounds after it, Guard's re-search) at its plan's price.
+      const auto model_spent = [&] {
+        const SearchStats& now = search->stats();
+        const double cap = tms[static_cast<std::size_t>(side)].params().playouts_per_evaluation_cap;
+        const double work = std::max(static_cast<double>(now.evaluations - before.evaluations),
+                                     static_cast<double>(now.playouts - before.playouts) / cap);
+        return work * timed->plan.seconds_per_evaluation;
+      };
       // The decision charged to the side's clock and its flag where its clock
       // ran out before it had a move (H1, M1): the decision counts, its
       // charge is its whole time.
       const auto flag_now = [&] {
         add_totals();
         ++g.decisions;
-        const double spent = clock != nullptr ? clock->now() - c0 : timed->seconds;
+        const double spent = clock != nullptr ? clock->now() - c0 : model_spent();
         if (spent > timed->plan.hard_seconds) {
           ++g.hard_overruns;
           g.max_overrun_seconds = std::max(g.max_overrun_seconds, spent - timed->plan.hard_seconds);
@@ -602,7 +612,14 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
           go.threads = 1;
         } else {
           if (params.guard_nodes > 0) budget.max_nodes = params.guard_nodes;
-          budget.max_time = std::chrono::nanoseconds(static_cast<std::int64_t>(params.guard_ms * 1e6));
+          double guard_seconds = params.guard_ms / 1000.0;
+          if (timed && clock != nullptr) {
+            // E11 (the E11 review's L8): Guard's scan is no exception to the
+            // hard bound - it gets what the bound leaves (the proof channel
+            // on, experiments only; the synchronous mode's is node-budgeted).
+            guard_seconds = std::min(guard_seconds, std::max(dc.hard - (clock->now() - c0), 1e-6));
+          }
+          budget.max_time = std::chrono::nanoseconds(static_cast<std::int64_t>(guard_seconds * 1e9));
         }
         ++g.guard_runs;
         GuardResult gr = guard(action_start, full, budget, go);
@@ -679,8 +696,9 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       ++g.decisions;
       if (timed) {
         // E11: the decision charged to the side's clock - its whole wall time
-        // (search, choice, verification), or on the model clock its work.
-        const double spent = clock != nullptr ? clock->now() - c0 : timed->seconds;
+        // (search, choice, verification), or on the model clock its whole work
+        // (L1).
+        const double spent = clock != nullptr ? clock->now() - c0 : model_spent();
         if (spent > timed->plan.hard_seconds) {
           ++g.hard_overruns;
           g.max_overrun_seconds = std::max(g.max_overrun_seconds, spent - timed->plan.hard_seconds);

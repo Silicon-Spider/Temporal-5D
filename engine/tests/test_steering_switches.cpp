@@ -221,6 +221,35 @@ TEST(steering_hunt_suggest_on_raises_only_the_suggested_lines) {
   }
 }
 
+TEST(steering_suggestion_edges_counts_a_raised_edge_once) {
+  // The E11 review's L4: the summary's suggestion_edges counts a root edge
+  // once, however many of Hunt's suggestions begin with its move (or are its
+  // turn), and only where hunt_suggest_boost x weight raised it - with a zero
+  // boost, none.
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
+    for (const double boost : {0.25, 0.0}) {
+      SearchParams p = hunt_lines(split, true);
+      p.hunt_suggest_boost = boost;
+      Search on(asset_position(), p);
+      on.run(*uniform, Limits{200});
+      on.await_ladder();
+      const LadderVerdict* v = root_hunt(on);
+      REQUIRE(v != nullptr);
+      REQUIRE(!v->suggestions.empty());
+      std::uint64_t boosted = 0;
+      for (const RootChild& c : on.root_children()) boosted += c.boost > 0 ? 1 : 0;
+      if (boost > 0) {
+        CHECK(on.stats().suggestion_edges >= 1);
+        CHECK(on.stats().suggestion_edges <= boosted);  // once an edge (the asset map off: every boost a suggestion's)
+      } else {
+        CHECK_EQ(on.stats().suggestion_edges, std::uint64_t{0});
+        CHECK_EQ(boosted, std::uint64_t{0});
+      }
+    }
+  }
+}
+
 TEST(steering_a_proven_mate_raises_no_prior_and_decides_nothing_before_the_sign_off) {
   // Decision 12 (issue 180): before the sign-off a proof may raise a prior,
   // but no hook for it is built - with hunt_suggest on, a Hunt that proves the

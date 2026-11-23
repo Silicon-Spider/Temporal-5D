@@ -204,3 +204,11 @@ def test_a_sides_own_override_wins_and_hunt_suggest_alone_is_named():
     assert _search_settings(cfg, 1)["asset_map"] == 0
     header = steering_header(PlayConfig(mode="match", hunt_suggest=True))
     assert header is not None and "hunt_suggest=1" in header
+
+
+def test_the_switch_match_refuses_the_asset_maps_own_switch_with_no_assets():
+    """The E11 review's L3: ``--switch asset_map --no-assets`` - the match would turn the asset
+    map on for one side, silently overriding ``--no-assets`` - is refused."""
+    with pytest.raises(SystemExit) as e:
+        main(["--switch", "asset_map", "--no-assets", "--no-replay"])
+    assert e.value.code == 2

@@ -246,6 +246,8 @@ class PlayConfig:
         if self.allocator not in ALLOCATORS:
             raise ValueError(f"allocator must be one of {sorted(ALLOCATORS)}")
         fields = {name for name, _ in CTimeParams._fields_}
+        if self.mode != "match" and (self.hunt_suggest or _search_settings(self, None).get("hunt_suggest")):
+            raise ValueError("hunt_suggest: match play only - self-play does not steer as built (register I2; the E11 review's L9)")
         for entry in self.time_overrides:
             if not (isinstance(entry, tuple) and len(entry) == 2 and isinstance(entry[0], str)):
                 raise ValueError(f"time_overrides: (field name, value) pairs, not {entry!r}")
@@ -521,8 +523,8 @@ def _decision_params(game: Game, cfg: PlayConfig, relations: int, *, seed: int, 
 def steering_header(cfg: PlayConfig) -> str | None:
     """The record's ``Steering`` header - each side's steering switches and overrides as it
     searched - or None where every search took the defaults (default records stay as they were)."""
-    if not (cfg.hunt_suggest or cfg.search_overrides or any(cfg.side_overrides)):
-        return None
+    if not (cfg.hunt_suggest or not cfg.asset_map or cfg.search_overrides or any(cfg.side_overrides)):
+        return None  # the E11 review's L3: the asset map off is a setting the record names
 
     def side(k: int) -> str:
         settings = _search_settings(cfg, k if cfg.mode == "match" else None)
@@ -742,7 +744,14 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                     # The decision charged to the side's clock: its whole wall time, or its model time
                     # (an unsettled choice, or a search that cannot move, ends the game unscored and
                     # uncharged, as play_game's does).
-                    spent = timed.seconds if cfg.model_clock else time.perf_counter() - d0
+                    if cfg.model_clock:  # its whole work at the plan's price (the E11 review's L1)
+                        work = max(
+                            after.evaluations - before.evaluations,
+                            (after.playouts - before.playouts) / clocks[mover].params.playouts_per_evaluation_cap,
+                        )
+                        spent = work * timed.plan.seconds_per_evaluation
+                    else:
+                        spent = time.perf_counter() - d0
                     if spent > timed.plan.hard_seconds:
                         res.hard_overruns += 1
                     res.clock_remaining[mover] -= spent
@@ -797,7 +806,9 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
         res.final_fingerprint = snap.fingerprint
         budget = (
             f"clock {cfg.time:g} s + {cfg.increment:g} s per action ({cfg.allocator} allocator, "
-            f"signals {'on' if cfg.signals else 'off'}, {'model' if cfg.model_clock else 'wall'} clock)"
+            f"signals {'on' if cfg.signals else 'off'}, {'model' if cfg.model_clock else 'wall'} clock"
+            + "".join(f", {name} {value:g}" for name, value in cfg.time_overrides)  # L3: the overrides named
+            + ")"
             if cfg.time > 0
             else f"{cfg.playouts} playouts per decision"
         )
@@ -1032,7 +1043,16 @@ def _choose(
                     raise _OutOfClock
                 before = search.info().playouts
                 edgeless = not search.children()
-                search_more(cfg.batch_size)
+                if clock.model:
+                    search_more(cfg.batch_size)
+                else:
+                    # The round bounded by the side's clock inside the batch, as play_game's (L6).
+                    held, _ = search.deadline()
+                    search.set_deadline(clock.left(clock.remaining))
+                    try:
+                        search_more(cfg.batch_size)
+                    finally:
+                        search.set_deadline_at(held)
                 if visited():
                     break
                 if search.info().playouts == before or (edgeless and not search.children()):

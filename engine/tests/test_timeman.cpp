@@ -2352,6 +2352,45 @@ TEST(timeman_run_timed_folds_max_seconds_into_every_slice) {
   }
 }
 
+TEST(timeman_the_model_clock_charges_the_decisions_whole_work) {
+  // The E11 review's L1: on the model clock a decision is charged its whole
+  // work since it began - the timed run and whatever ran after it - at its
+  // plan's price: one flat-form decision, the charge its search's work
+  // (max(evaluations, playouts / the cap)) times s(N) at the root.
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  PlayParams p;
+  p.search = quiet_params();
+  p.search.split = TurnSplit::Flat;
+  p.match_play = true;
+  p.max_actions = 1;
+  p.clock.enabled = true;
+  p.clock.model_clock = true;
+  p.clock.base_seconds = 30;
+  const GameState s = variant("Standard");
+  const GameRecord g = play_game(s, *uniform, p);
+  REQUIRE_EQ(g.timed_decisions, std::uint64_t{1});
+  REQUIRE_EQ(g.actions.size(), std::size_t{1});
+  const TimeManager tm(p.clock.time);
+  const double work = std::max(static_cast<double>(g.evaluations),
+                               static_cast<double>(g.playouts) / p.clock.time.playouts_per_evaluation_cap);
+  const double price = tm.seconds_per_evaluation(static_cast<double>(s.multiverse().board_count()));
+  CHECK(near(p.clock.base_seconds - g.clock_remaining[0], work * price, 1e-9));
+}
+
+TEST(timeman_run_timed_refuses_a_bad_max_seconds_before_the_decision_begins) {
+  // The E11 review's L2: max_seconds is validated before tm.begin - a refusal
+  // leaves the manager out of a decision.
+  Search search(variant("Standard"), quiet_params());
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  TimeManager tm;
+  TimeContext ctx;
+  ctx.remaining_seconds = 10;
+  for (const double bad : {std::numeric_limits<double>::quiet_NaN(), -1.0}) {
+    CHECK_THROWS_AS(run_timed(search, *uniform, tm, ctx, nullptr, bad), std::invalid_argument);
+    CHECK(!tm.in_decision());
+  }
+}
+
 TEST(timeman_a_flat_root_whose_listing_a_deadline_cut_never_throws_out_of_play) {
   // M1, E11's part (the re-listing itself is issue 406's, tested on main): a
   // clocked flat game whose every node falls back to the listing

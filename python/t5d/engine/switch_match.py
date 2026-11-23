@@ -159,6 +159,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, help="write each record here (a directory)")
     parser.add_argument("--no-replay", action="store_true", help="do not replay the records through t5d-gate")
     args = parser.parse_args(argv)
+    if args.switch == "asset_map" and args.no_assets:
+        # The E11 review's L3: the asset map's own match sets it per side - never a silent override.
+        parser.error("--no-assets with --switch asset_map: that match turns the asset map on for one side")
     torch.set_num_threads(args.threads)
     net_cfg = network_config(args.net)
     evaluator = NetworkEvaluator(build_model(net_cfg, seed=args.seed).eval(), max_batch=args.batch)
