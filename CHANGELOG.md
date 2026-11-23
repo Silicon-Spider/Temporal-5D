@@ -10,6 +10,63 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-23 - The review of 0e7d2ed..d86f363, verified: the survivors re-run, the probes re-run, the round's final checks
+
+The review round (build-log issue 410) closed with its verification, recorded in
+`docs/BUILD_LOG.md` (issue 410, the session log), and one test added for M09,
+`search_deadline_does_not_reach_a_re_root` (`engine/tests/test_mcts.cpp`; `engine/README.md`'s
+list of the deadline's tests). The probes behind the findings, re-run on the final tree
+(e79ea70; the reviewers' sources compiled against it, 2026-11-23): H1 - vf_search after,
+before2, single, repeat, dup, dup8 and ctrl: 0 of 429 searches threw in each (before the fix
+137, 95, 8, 87, 51, 1 and 0); vf_play 0 of 520 games with the ladder off and 0 of 156 with it
+on (15 and 11 before); 120 `t5d-play --max-seconds` runs, every one exit 0 with its record (6
+exited 1 before). H2 - at P0 the literal-class prover answers unknown at depth 3 and stores
+nothing at R'' (win 3 proven and loss 2 stored before); at R the checker decides neither the
+false Loss(2) nor the true Draw (an agreement and a spurious contradiction before); at
+mutation-F7's position the literal prover answers unknown. M1 - f2probe P2: the cut root stops
+Deadline, not stuck, and a later run lists 51 turns, after which choose() works (stuck,
+Finished for good, both choices throwing before); P3, P5 and P6: every play_game ends
+time_limit (threw before). M2 - probe_f3: Search::run and play_game at 9.25e9 s, 1e10 s and
+infinity give the same as no limit (every classification cut before); the Python probe the
+same; its conversion and wrap sections reproduce the old arithmetic in their own code, which
+the engine no longer runs. (H2 is issue 411, its own commit.) The survivors re-run with the
+reviewers' runner against a fresh copy of the final tree (two test workers; re-anchored where
+the fixes moved their code - M02, M11, S06, S08): KILLED - L03
+(legality_cost_exe_reports_each_fixture, legality_deadline_cuts_one_long_search,
+ply_lazy_verification_deadline), L04 and L05
+(legality_deadline_with_time_to_spare_settles_everything, search_far_deadline_changes_nothing,
+play_fallback_after_a_cut_verification_plays_a_child_known_legal), M02, M04 and M05
+(search_turn_start_checks_take_the_deadline; M02 and M05 also
+flat_root_emptied_by_a_cut_listing_is_listed_by_a_later_run), M06
+(tree_form_inherited_expansions_take_the_deadline), M07
+(search_deadline_cuts_the_roots_classification, search_cache_keeps_a_cut_candidate_list_apart,
+play_flat_with_exact_legality_ends_on_its_stop), M08 (ply_lazy_verification_deadline,
+tree_form_inherited_expansions_take_the_deadline), M09
+(search_deadline_does_not_reach_a_re_root - added at the re-run: the adopted test no longer
+killed it, since run() sets its deadline at its start, but a re-root between runs builds a
+node and its turn-start check outside run()), M11
+(deadline_from_1e9_seconds_or_infinite_is_none, search_far_deadline_changes_nothing,
+play_totals_count_a_timed_out_decision, play_deadline_reaches_a_turn_start_verdict), S04
+(play_no_move_is_played_after_the_deadline), S05 and S06
+(play_no_child_known_legal_at_the_deadline_ends_time_limit,
+play_no_move_is_played_after_the_deadline, play_totals_count_a_timed_out_decision), S08
+(play_late_verdict_gets_the_time_left), K05 (both default MT-01 tests' inner-claim caps), C01
+and C14 (mcts_solver_derives_the_least_win_after_verify), T02, T03, T04, T07 and T08
+(legality_cost_exe_reports_each_fixture). Not killed, optional in the findings: S02 (a memory
+stop after the deadline within one 64-node window - the review accepted it as not reliably
+constructible) and S09 (Guard's re-search timing out - guard_final with the proof channel on,
+experiments only; not written). Final checks on e79ea70 and this commit: engine 736 of 736
+(`--werror`, the M09 test included); long_detectors 2 of 2 (7 minutes); the long MT-01 twin
+(52.8 minutes) and the long churn twin (18 minutes), run on the same engine code; the Lazy SMP
+test x3 (1 thread 293 / 293 / 293, 5 threads 318 / 317 / 318, load 26% then 18%); ruff clean
+(check, format); pytest test_decision_log.py, test_netplay.py and test_search_api.py, 143
+passed (T5D_REQUIRE_ENGINE=1, the executables beside the library); verify ok; gate commit ok;
+gate nightly ok (oracle layer ok; engine differential PASSED, Half Reflected and Reversed
+Royalty gated as before; proof channel DISABLED; 15 minutes) - the nightly owed for issue
+406's and issue 411's truth sources, run on the lane's final tree.
+
+Spec: none - the round's edits 304 and 305 stand as proposed; the proof channel stays off (H41).
+
 ### 2026-11-23 - The review of 0e7d2ed..d86f363, the rest: the truth sources recorded, C01 and C14 killed, "beyond" an overflow only, the long MT-01 twin floored, the solver check's per-rule counts shown (M5, L1, L3, L4, L8)
 
 The review's remaining findings (build-log issue 410), fixed as the main loop decided - resumed

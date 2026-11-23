@@ -5320,3 +5320,34 @@ TEST(mcts_solver_derives_the_least_win_after_verify) {
     CHECK_EQ(after.distance, claim.distance - 1);
   }
 }
+
+TEST(search_deadline_does_not_reach_a_re_root) {
+  // A run's deadline is its own (DeadlineScope; the review of 2026-11-09's M09, re-run 2026-11-23:
+  // since run() sets the deadline at its start, a leftover is overwritten before any batch - but
+  // a re-root between runs builds the new root's node, and its turn-start check, outside run()).
+  // A run whose deadline passes at once, then the mating action played into the search: the new
+  // root is the checkmate (E4's verdict), not left Unknown by the passed deadline.
+  const GameState s = t5d_test::solver::mate_in_one(RuleOptions{});
+  std::vector<Move> mate;
+  for (const LegalAction& a : list_legal_actions(s, 1000, Detector::Hypercuboid).actions) {
+    if (detect_mate(a.result, Detector::Hypercuboid, SearchBudget::nodes(1'000'000)).verdict == Outcome::Checkmate) {
+      mate = a.moves;
+      break;
+    }
+  }
+  REQUIRE(!mate.empty());
+  SearchParams p = fast();
+  p.hunt = p.settling = false;
+  p.asset_map = false;
+  const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+  Search search(s, p);
+  Limits first;
+  first.playouts = std::uint64_t{1} << 40;
+  first.seconds = 1e-6;
+  search.run(*ev, first);
+  search.advance_action(mate);
+  std::fprintf(stderr, "  the re-rooted position: terminal %d, unknown verdicts %llu\n",
+               static_cast<int>(search.node(search.root()).terminal),
+               static_cast<unsigned long long>(search.stats().unknown_verdicts));
+  CHECK(search.node(search.root()).terminal == Terminal::Checkmate);
+}

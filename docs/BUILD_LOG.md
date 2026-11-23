@@ -1020,6 +1020,7 @@ threads reach at least one thread's sum (one retry on a shared machine).
 | 2026-11-08 | MT-01/02/03 review fixes (the prover's TT refuses solved entries, behaviour-preserving; tests and tools) | lane/engine 573dc88 + the review fixes, the tree before the commit | dev-r, 24 logical; other lanes' jobs and this lane's long twins running; load 100% before and after | 32 | 292 / 291 / 289 | 301 / 299 / 304 | none | pass x3 |
 | 2026-11-09 | The review round's deadline path (H1, M1, M2: the cache's candidate digest, the flat form's re-listing, run()'s deadline through deadline_after) | lane/engine 2c12be8 + group 1, the tree before the commit | dev-r, 24 logical; load 12% before, 14% after | 32 | 293 / 293 / 293 | 316 / 314 / 315 | none | pass x3 |
 | 2026-11-09 | The review's H2 (prover.cpp's list_children not complete under Q3; certificate.cpp's Q3 defender check) | lane/engine 46a121a + H2, the tree before the commit | dev-r, 24 logical; other lanes' jobs starting; load 53% before, 87% after | 32 | 293 / 292 / 291 | 311 / 311 / 312 | none | pass x3 |
+| 2026-11-23 | The review round's final tree (issue 411's truth sources; main af0c19b merged) | lane/engine e79ea70 | dev-r, 24 logical; load 26% before, 18% after | 32 | 293 / 293 / 293 | 318 / 317 / 318 | none | pass x3 |
 
 ## Environment
 
@@ -5872,6 +5873,49 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
       The long MT-01 twin floored per rule and on searches and inner claims, its unknown
       ceiled; the default tests' inner claims capped. (L8) t5d-solver-check's RANGE lines print
       the merged per-rule counts and inner claims, which the test holds to sum to the tally.
+    - **Afterwards.** The probes behind the findings, re-run on the final tree (e79ea70; the
+      reviewers' sources compiled against it, 2026-11-23): H1 - vf_search after, before2,
+      single, repeat, dup, dup8 and ctrl: 0 of 429 searches threw in each (before the fix 137,
+      95, 8, 87, 51, 1 and 0); vf_play 0 of 520 games with the ladder off and 0 of 156 with it
+      on (15 and 11 before); 120 `t5d-play --max-seconds` runs, every one exit 0 with its
+      record (6 exited 1 before). H2 - at P0 the literal-class prover answers unknown at depth
+      3 and stores nothing at R'' (win 3 proven and loss 2 stored before); at R the checker
+      decides neither the false Loss(2) nor the true Draw (an agreement and a spurious
+      contradiction before); at mutation-F7's position the literal prover answers unknown. M1 -
+      f2probe P2: the cut root stops Deadline, not stuck, and a later run lists 51 turns, after
+      which choose() works (stuck, Finished for good, both choices throwing before); P3, P5 and
+      P6: every play_game ends time_limit (threw before). M2 - probe_f3: Search::run and
+      play_game at 9.25e9 s, 1e10 s and infinity give the same as no limit (every
+      classification cut before); the Python probe the same; its conversion and wrap sections
+      reproduce the old arithmetic in their own code, which the engine no longer runs. (H2 is
+      issue 411, its own commit.) The survivors re-run with the reviewers' runner against a
+      fresh copy of the final tree (two test workers; re-anchored where the fixes moved their
+      code - M02, M11, S06, S08): KILLED - L03 (legality_cost_exe_reports_each_fixture,
+      legality_deadline_cuts_one_long_search, ply_lazy_verification_deadline), L04 and L05
+      (legality_deadline_with_time_to_spare_settles_everything,
+      search_far_deadline_changes_nothing,
+      play_fallback_after_a_cut_verification_plays_a_child_known_legal), M02, M04 and M05
+      (search_turn_start_checks_take_the_deadline; M02 and M05 also
+      flat_root_emptied_by_a_cut_listing_is_listed_by_a_later_run), M06
+      (tree_form_inherited_expansions_take_the_deadline), M07
+      (search_deadline_cuts_the_roots_classification,
+      search_cache_keeps_a_cut_candidate_list_apart,
+      play_flat_with_exact_legality_ends_on_its_stop), M08 (ply_lazy_verification_deadline,
+      tree_form_inherited_expansions_take_the_deadline), M09
+      (search_deadline_does_not_reach_a_re_root - added at the re-run: the adopted test no
+      longer killed it, since run() sets its deadline at its start, but a re-root between runs
+      builds a node and its turn-start check outside run()), M11
+      (deadline_from_1e9_seconds_or_infinite_is_none, search_far_deadline_changes_nothing,
+      play_totals_count_a_timed_out_decision, play_deadline_reaches_a_turn_start_verdict), S04
+      (play_no_move_is_played_after_the_deadline), S05 and S06
+      (play_no_child_known_legal_at_the_deadline_ends_time_limit,
+      play_no_move_is_played_after_the_deadline, play_totals_count_a_timed_out_decision), S08
+      (play_late_verdict_gets_the_time_left), K05 (both default MT-01 tests' inner-claim caps),
+      C01 and C14 (mcts_solver_derives_the_least_win_after_verify), T02, T03, T04, T07 and T08
+      (legality_cost_exe_reports_each_fixture). Not killed, optional in the findings: S02 (a
+      memory stop after the deadline within one 64-node window - the review accepted it as not
+      reliably constructible) and S09 (Guard's re-search timing out - guard_final with the
+      proof channel on, experiments only; not written).
 411. **Under Q3's play activation E4's listing keeps one successor state per action key, and the
     verification layer took it for every successor - a false proof that check_certificate
     confirmed** (§11.1, §11.3, §13.1 6f; register H19, H37, H41; issues 169 - the search's half,
@@ -9462,3 +9506,50 @@ struck through, where nothing of it is left to apply); the others stand as writt
   README). No conflict; nothing under `engine/` changed. Checks: verify ok (exit 0); gate commit ok
   (oracle layer ok; engine differential smoke test passed, baseline 41 compared, 0 declined; proof
   channel DISABLED). The round's final checks run on this tree.
+- **2026-11-23 - The review round's verification** (`lane/engine`; issue 410). The probes behind the
+  findings, re-run on the final tree (e79ea70; the reviewers' sources compiled against it,
+  2026-11-23): H1 - vf_search after, before2, single, repeat, dup, dup8 and ctrl: 0 of 429 searches
+  threw in each (before the fix 137, 95, 8, 87, 51, 1 and 0); vf_play 0 of 520 games with the ladder
+  off and 0 of 156 with it on (15 and 11 before); 120 `t5d-play --max-seconds` runs, every one exit
+  0 with its record (6 exited 1 before). H2 - at P0 the literal-class prover answers unknown at
+  depth 3 and stores nothing at R'' (win 3 proven and loss 2 stored before); at R the checker
+  decides neither the false Loss(2) nor the true Draw (an agreement and a spurious contradiction
+  before); at mutation-F7's position the literal prover answers unknown. M1 - f2probe P2: the cut
+  root stops Deadline, not stuck, and a later run lists 51 turns, after which choose() works (stuck,
+  Finished for good, both choices throwing before); P3, P5 and P6: every play_game ends time_limit
+  (threw before). M2 - probe_f3: Search::run and play_game at 9.25e9 s, 1e10 s and infinity give the
+  same as no limit (every classification cut before); the Python probe the same; its conversion and
+  wrap sections reproduce the old arithmetic in their own code, which the engine no longer runs. (H2
+  is issue 411, its own commit.) The survivors re-run with the reviewers' runner against a fresh
+  copy of the final tree (two test workers; re-anchored where the fixes moved their code - M02, M11,
+  S06, S08): KILLED - L03 (legality_cost_exe_reports_each_fixture,
+  legality_deadline_cuts_one_long_search, ply_lazy_verification_deadline), L04 and L05
+  (legality_deadline_with_time_to_spare_settles_everything, search_far_deadline_changes_nothing,
+  play_fallback_after_a_cut_verification_plays_a_child_known_legal), M02, M04 and M05
+  (search_turn_start_checks_take_the_deadline; M02 and M05 also
+  flat_root_emptied_by_a_cut_listing_is_listed_by_a_later_run), M06
+  (tree_form_inherited_expansions_take_the_deadline), M07
+  (search_deadline_cuts_the_roots_classification, search_cache_keeps_a_cut_candidate_list_apart,
+  play_flat_with_exact_legality_ends_on_its_stop), M08 (ply_lazy_verification_deadline,
+  tree_form_inherited_expansions_take_the_deadline), M09 (search_deadline_does_not_reach_a_re_root -
+  added at the re-run: the adopted test no longer killed it, since run() sets its deadline at its
+  start, but a re-root between runs builds a node and its turn-start check outside run()), M11
+  (deadline_from_1e9_seconds_or_infinite_is_none, search_far_deadline_changes_nothing,
+  play_totals_count_a_timed_out_decision, play_deadline_reaches_a_turn_start_verdict), S04
+  (play_no_move_is_played_after_the_deadline), S05 and S06
+  (play_no_child_known_legal_at_the_deadline_ends_time_limit,
+  play_no_move_is_played_after_the_deadline, play_totals_count_a_timed_out_decision), S08
+  (play_late_verdict_gets_the_time_left), K05 (both default MT-01 tests' inner-claim caps), C01 and
+  C14 (mcts_solver_derives_the_least_win_after_verify), T02, T03, T04, T07 and T08
+  (legality_cost_exe_reports_each_fixture). Not killed, optional in the findings: S02 (a memory stop
+  after the deadline within one 64-node window - the review accepted it as not reliably
+  constructible) and S09 (Guard's re-search timing out - guard_final with the proof channel on,
+  experiments only; not written). Final checks on e79ea70 and this commit: engine 736 of 736
+  (`--werror`, the M09 test included); long_detectors 2 of 2 (7 minutes); the long MT-01 twin (52.8
+  minutes) and the long churn twin (18 minutes), run on the same engine code; the Lazy SMP test x3
+  (1 thread 293 / 293 / 293, 5 threads 318 / 317 / 318, load 26% then 18%); ruff clean (check,
+  format); pytest test_decision_log.py, test_netplay.py and test_search_api.py, 143 passed
+  (T5D_REQUIRE_ENGINE=1, the executables beside the library); verify ok; gate commit ok; gate
+  nightly ok (oracle layer ok; engine differential PASSED, Half Reflected and Reversed Royalty gated
+  as before; proof channel DISABLED; 15 minutes) - the nightly owed for issue 406's and issue 411's
+  truth sources, run on the lane's final tree.
