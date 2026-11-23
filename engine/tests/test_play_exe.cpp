@@ -11,6 +11,7 @@
 #include <iterator>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #if !defined(_WIN32)
@@ -143,6 +144,16 @@ TEST(play_exe_records_replay_through_the_gate_adapter) {
                                               {});
   REQUIRE(solved.header("Engine") != nullptr);
   CHECK(solved.header("Engine")->find(", proof channel ON") != std::string::npos);
+  // H13, H43 (6e's switches): the asset map on by default and Hunt's suggested
+  // lines off; --hunt-suggest --no-assets the reverse, and the game replays.
+  CHECK(plain.header("Engine")->find("asset map") != std::string::npos);
+  CHECK(plain.header("Engine")->find("hunt suggestions") == std::string::npos);
+  const t5d::PgnRecord suggested = play_and_gate({"--variant", "Very Small - Open", "--hunt-suggest", "--no-assets", "--match",
+                                                  "--synchronous", "--playouts", "16", "--cap-turns", "4", "--seed", "2"},
+                                                 {});
+  REQUIRE(suggested.header("Engine") != nullptr);
+  CHECK(suggested.header("Engine")->find("hunt suggestions") != std::string::npos);
+  CHECK(suggested.header("Engine")->find("asset map") == std::string::npos);
   // Root noise: on in self-play by default (E1, §8.4), --no-noise turns it off,
   // match play has none.
   CHECK(plain.header("Engine")->find("root noise") != std::string::npos);
@@ -153,6 +164,48 @@ TEST(play_exe_records_replay_through_the_gate_adapter) {
     REQUIRE(quiet.header("Engine") != nullptr);
     CHECK(quiet.header("Engine")->find("root noise") == std::string::npos);
   }
+}
+
+TEST(play_exe_plays_match_play_on_a_clock) {
+  // Stage E11: --match --time, on the wall clock and on the model clock, under
+  // each of 6o's arms and with the signals off; the records replay through the
+  // gate, and the Engine header names the clock.
+  const t5d::PgnRecord wall = play_and_gate({"--variant", "Standard - Two Timelines", "--match", "--time", "4",
+                                             "--increment", "0.05", "--cap-turns", "4", "--no-hunt", "--no-settling"},
+                                            {});
+  REQUIRE(wall.header("Engine") != nullptr);
+  CHECK(wall.header("Engine")->find("clock 4 s + 0.05 s per action (integral allocator, signals on, wall clock)") !=
+        std::string::npos);
+  for (const auto& [arm, name] : {std::pair{"flat-evals", "flat_evals"}, std::pair{"flat-wall-clock", "flat_wall_clock"}}) {
+    const t5d::PgnRecord r = play_and_gate(
+        {"--match", "--time", "3", "--allocator", arm, "--model-clock", "--cap-turns", "3", "--split", "flat"}, {});
+    // The arm parsed is the arm named (on the model clock the two flat arms play alike).
+    REQUIRE(r.header("Engine") != nullptr);
+    CHECK(r.header("Engine")->find(std::string("(") + name + " allocator") != std::string::npos);
+  }
+  const t5d::PgnRecord off = play_and_gate(
+      {"--variant", "Very Small - Open", "--match", "--time", "3", "--no-signals", "--model-clock", "--cap-turns", "4"},
+      {});
+  // E8 behind its flag: the built-in evaluators predict no effort, so it is inert - the record
+  // says it was on.
+  const t5d::PgnRecord e8 = play_and_gate({"--variant", "Very Small - Open", "--match", "--time", "3",
+                                           "--difficulty-weighting", "--model-clock", "--cap-turns", "3"},
+                                          {});
+  REQUIRE(e8.header("Engine") != nullptr);
+  CHECK(e8.header("Engine")->find("model clock, difficulty weighting)") != std::string::npos);
+  REQUIRE(off.header("Engine") != nullptr);
+  CHECK(off.header("Engine")->find("signals off, model clock") != std::string::npos);
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::path(T5D_TEST_SCRATCH) / "play-exe";
+  fs::create_directories(dir);
+  // The clock is match play's, and its options need it.
+  CHECK_EQ(run(T5D_PLAY_EXE, {"--time", "5"}, {}, dir / "o.txt", dir / "e.txt"), 2);
+  CHECK(read_all(dir / "e.txt").find("--match") != std::string::npos);
+  CHECK_EQ(run(T5D_PLAY_EXE, {"--match", "--no-signals"}, {}, dir / "o.txt", dir / "e.txt"), 2);
+  CHECK_EQ(run(T5D_PLAY_EXE, {"--match", "--difficulty-weighting"}, {}, dir / "o.txt", dir / "e.txt"), 2);
+  CHECK_EQ(run(T5D_PLAY_EXE, {"--match", "--time", "0"}, {}, dir / "o.txt", dir / "e.txt"), 2);
+  CHECK_EQ(run(T5D_PLAY_EXE, {"--match", "--time", "5", "--allocator", "sideways"}, {}, dir / "o.txt", dir / "e.txt"),
+           2);
 }
 
 TEST(play_exe_takes_its_rules_through_the_shared_option_reader) {
@@ -180,6 +233,18 @@ TEST(play_exe_takes_its_rules_through_the_shared_option_reader) {
   namespace fs = std::filesystem;
   const fs::path dir = fs::path(T5D_TEST_SCRATCH) / "play-exe";
   CHECK_EQ(run(T5D_PLAY_EXE, {"--rules", "nonsense"}, {}, dir / "o.txt", dir / "e.txt"), 2);
+}
+
+TEST(play_exe_refuses_hunt_suggest_outside_match_play) {
+  // The E11 review's L9: Hunt's suggestions steer match play only - self-play
+  // does not steer as built (register I2).
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::path(T5D_TEST_SCRATCH) / "play-exe";
+  fs::create_directories(dir);
+  CHECK_EQ(run(T5D_PLAY_EXE, {"--variant", "Very Small - Open", "--hunt-suggest", "--playouts", "4"}, {}, dir / "o.txt",
+               dir / "e.txt"),
+           2);
+  CHECK(read_all(dir / "e.txt").find("--hunt-suggest: match play only") != std::string::npos);
 }
 
 TEST(play_exe_command_line) {

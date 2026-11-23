@@ -770,14 +770,22 @@ pushed after every commit, taking main by merge, never rebase (re-check with `gi
   terminal test and the unscored ending in the C++ loop, netplay and the generator,
   `t5d_search_verify_budgeted`; edits 306-308) and its review fixed (issue 414: the verdict's
   witness played where no child is known legal, `t5d_game_verdict`; the missing tests; edits
-  309-311) - to merge after the review round's report. MT-02's records into the corpus wait for
-  the user (issue 405).
+  309-311) - merged 2026-11-24 (main b18a7b3). MT-02's records into the corpus wait for the user
+  (issue 405). Next: register E12, the Gumbel root search (the hand-over's plan), after
+  `lane/search`'s merge.
 - `lane/search` (from main 2b752ba, 2026-10-23) - E10 redone and merged (Hunt under 100
   boards, the settling scans under 50, the asset map - off in self-play until I2's steered
   visits are validated, issue 450 - Guard's hook built and off, H44's audit-lane tooling;
-  issues 177-197, 450-451, edits 137-146, 330); next E11 (E7 with 6o's arms, no root-scan
-  reserve while Guard is offline - issue 306) and E8 behind its flag, then MT-03's
-  settling-scan part.
+  issues 177-197, 450-451, edits 137-146, 330). **E11 and E8 merged 2026-11-24** (E7 with 6o's
+  arms, no root-scan reserve while Guard is offline - issue 306; E8 behind its flag), with the
+  review's fixes in three phases and a second review round (1 HIGH, 7 MEDIUM, 9 LOW, all fixed; 27
+  of 27 survivors killed), decision 12's extension before the sign-off, the H13/H43 steering
+  switches on every driver, and H1 part 5 under decision 13 (a clocked turn start's verdict on the
+  node budget, uncharged, unsettled ending the game unscored); issues 452-483, edits 331-346. A
+  flag falls only when a clock has run out; a search that cannot move with time left ends the game
+  unscored (issue 480). For the user: issues 453, 456, 472. Next: MT-03's settling-scan part
+  through the ladder, and two tests the round left weak (L1's charge on a decision with work after
+  its timed run; L8's capped Guard scan).
 - `lane/audit` (from main 01ebbe5, 2026-11-01) - the done-means audit merged (2026-11-08): section 15.2 row by row, section 15.4 invariant by invariant, the committed-class rows and section 15.5 clause by clause, checked adversarially by a five-agent workflow and corrected (section "Done-means audit"; issues 535-538, edits 364-366).
 - `lane/fix535` (from main d8a54d3, 2026-11-02) - issue 535 resolved by issue 600 and merged (2026-11-09, with its review round: no HIGH; 3 MEDIUM and 14 LOW fixed, all 24 surviving mutants killed, the normal path bit-identical to 03eca7a on the review's three twins): the flat form, a node's creation and a re-root exception-safe under an allocation failure, gather's request list and run's buffer inside their rollbacks, the tree form's inheritance and re-evaluation rolled back, the ladder's verdict take and the asset map's lookup safe under `std::bad_alloc`. Issues 603 (this machine's g++ 16.2 breaks `std::deque`'s exception safety under its default `-fassume-sane-operators-new-delete`) and 604 (a `std::bad_alloc` in a synchronous ladder job reported as a contradiction) are the main loop's, in the quiet-machine block. The lane is idle.
 - `lane/net` - A5 (piece-centric tokens, dense scope only, behind its flag, off) merged with
@@ -1375,19 +1383,29 @@ threads reach at least one thread's sum (one retry on a shared machine).
 | 2026-10-23 | MT-03 (H19 under TT churn; prover and Hunt tests only, no scanner, prover or search code changed) | lane/engine 8b53d43 + MT-03, the tree before the commit | dev-r, 24 logical; other lanes running; load 94% before, 99% after | 32 | 292 / 293 / 293 | 306 / 305 / 303 | none | pass x3 |
 | 2026-10-23 | MT-02's engine side (t5d-proof-records; tools and tests only, no scanner, prover or search code changed) | lane/engine 48a13a5 + MT-02, the tree before the commit | dev-r, 24 logical; other lanes and this lane's pytest running; load 99% before, 94% after | 32 | 291 / 292 / 292 | 304 / 302 / 310 | none | pass x3 |
 | 2026-10-24 | E10 (the search wiring and H44's audit lane; reviewed, 703ca97; main 529098d merged in, fcedc2e) | main bf5ef64 + lane/search fcedc2e, merged tree before the commit | dev-r, 24 logical; the engine, network and gate lanes running; load 90-99% before, 84-99% after | 32 | 292 / 292 / 291 | 309 / 308 / 310 | none | pass x3; the lane's merge of main ran the nightly gate (525 s, Half Reflected and Reversed Royalty gated) on the same engine code |
+| 2026-10-24 | E11, time management (the search lane, step 2; before review) | lane/search fcedc2e + E11, the tree before the commit (it touches no scanner or search.* file; run as the brief asks; main 84ffecc, merged in after, changed no engine file) | dev-r, 24 logical; other lanes' jobs running; load 91-99% before, 91-94% after | 32 | 292 / 291 / 292 | 304 / 310 / 310 | none | pass x3 |
+| 2026-11-01 | E11, time management (the search lane, step 2; before review), resumed | main cb72413 + E11, the tree before the commit | dev-r, 24 logical; other lanes' jobs running; load 96-100% before, 96-100% after | 32 | 291 / 292 / 293 | 303 / 311 / 310 | none | pass x3 |
 | 2026-11-01 | main b73d073 into lane/engine (E10 and the rest of main; the step-2 solver searches with the ladder off) | lane/engine d2fcc88 + main b73d073, merged tree before the commit | dev-r, 24 logical; other lanes' jobs and this lane's measurements running; load 100% before and after | 32 | 288 / 289 / 289 | 300 / 299 / 301 | none | pass x3 |
 | 2026-11-02 | issue 535's fix (the search's exception safety, issue 600; the scanner untouched; before review) | lane/fix535 on main d8a54d3, the tree before the commit (its final `--werror` build) | dev-r, 24 logical; other lanes' jobs (a node process on about 11 cores, two pytest runs) and this branch's serial pytest; load 100% before and after | 32 | 289 / 288 / 289 | 211 / 210 / 297 | runs 1 and 2 (5 threads 198 < 287, 225 < 288) | fail, fail, pass - the 5 threads starved: see the next two rows |
 | 2026-11-02 | issue 535's fix, again, run alternately with the control below | the same tree | dev-r, 24 logical; the same jobs; load 100% before and after | 32 | 290 / 290 / 290 | 311 / 305 / 298 | none | pass x3 |
 | 2026-11-02 | control for the two rows above: the base, main d8a54d3 (the scanner identical), run alternately with the fix | main's own build of d8a54d3 | dev-r, 24 logical; the same jobs; load 100% before and after | 32 | 292 / 288 / 289 | 304 / 211 / 307 | run 2 (5 threads 196 < 288) | pass, fail, pass - the base fails the same way under this load: the failures above are the machine's, not the change's |
+| 2026-11-02 | E11, time management (the search lane, step 2; before review), main d8a54d3 merged in | main d8a54d3 + E11, the tree before the commit | dev-r, 24 logical; other lanes' jobs running; load 99-100% before and after | 32 | 292 / 291 / 289 | 303 / 305 / 303 | none | pass x3 |
 | 2026-11-02 | issue 406 (deadlines reach the rules engine's calls: legality, the search's in-batch calls, the play loop; t5d-legality-cost) | lane/engine efdb8bd + issue 406, the tree before the commit | dev-r, 24 logical; other lanes' jobs and this lane's pytest running; load 100% before and after | 32 | 290 / 292 / 292 | 303 / 309 / 312 | none | pass x3 |
 | 2026-11-08 | issue 535's fix with main 03eca7a taken in (a fast-forward; before review) | lane/fix535: main 03eca7a + the fix, the tree before the commit (its final `--werror` build) | dev-r, 24 logical; this branch's Python suite in two shards, another lane's pytest, two other lanes' engine runs, mutation runs; load 100% before and after | 32 | 290 / 289 / 290 | 305 / 311 / 304 | none | pass x3 |
+| 2026-11-08 | E11, time management (the search lane, step 2; before review), main 03eca7a merged in | main 03eca7a + E11, the tree before the commit | dev-r, 24 logical; other lanes' jobs running; load 100% before and after | 32 | 289 / 291 / 289 | 302 / 304 / 305 | none | pass x3 |
+| 2026-11-08 | E11, time management (the search lane, step 2; before review), main d6cbdb7 merged in | main d6cbdb7 + E11, the tree before the commit | dev-r, 24 logical; quiet - load 25% / 13% / 5% before, 30% / 18% / 2% after | 32 | 293 / 293 / 293 | 315 / 314 / 314 | none | pass x3 |
 | 2026-11-08 | MT-01/02/03 review fixes (the prover's TT refuses solved entries, behaviour-preserving; tests and tools) | lane/engine 7a6fefb + the review fixes, the tree before the commit | dev-r, 24 logical; other lanes' jobs and this lane's long twins running; load 100% before and after | 32 | 292 / 291 / 289 | 301 / 299 / 304 | none | pass x3 |
 | 2026-11-09 | issue 535's fix into main (the main loop's merge battery) | main faaa64e + lane/fix535 8c4f905 (pre-rewrite 05afde5 + d44a7af), merged tree before the commit | dev-r, 24 logical; the engine and search lanes' fix rounds running | 32 | 293 | 317 / 315 / 315 | none | pass x3 |
+| 2026-11-09 | E8 behind its flag (the search lane, step 2; before review) | lane/search 6bdd838 (E11, main faaa64e in) + E8, the tree before the commit | dev-r, 24 logical; other lanes' jobs running; load 30-54% before, 39-62% after | 32 | 292 / 293 / 293 | 316 / 314 / 315 | none | pass x3 |
 | 2026-11-09 | The review round's deadline path (H1, M1, M2: the cache's candidate digest, the flat form's re-listing, run()'s deadline through deadline_after) | lane/engine c58a574 + group 1, the tree before the commit | dev-r, 24 logical; load 12% before, 14% after | 32 | 293 / 293 / 293 | 316 / 314 / 315 | none | pass x3 |
 | 2026-11-09 | The review's H2 (prover.cpp's list_children not complete under Q3; certificate.cpp's Q3 defender check) | lane/engine 3bb8ffa + H2, the tree before the commit | dev-r, 24 logical; other lanes' jobs starting; load 53% before, 87% after | 32 | 293 / 292 / 291 | 311 / 311 / 312 | none | pass x3 |
 | 2026-11-23 | the review's code round into main (the tree form under graph search, G11's network side; the main loop's check) | main d760019 + the round, the working tree before its commit | dev-r, 24 logical; the engine lane's and search lane's checks running | 32 | 293 / 289 / 291 | 301 / 303 / 304 | none | pass x3 |
+| 2026-11-23 | main 032db11 into lane/search (`mcts.cpp` combined: issue 535's fix and the tree form under graph search beside E11's deadline) | lane/search eb7353b (the merge 8903439 and the cited-ids update), inside its checks after the whole `--werror --test` run | dev-r, 24 logical; the engine lane's checks running; load 99-100% before and after | 32 | 293 / 293 / 293 | 315 / 314 / 313 | none | pass x3 |
+| 2026-11-24 | main d4c7fb9 into lane/search and phase 2 of E11's review (`mcts.cpp`: one deadline mechanism, `run()`'s scope; no scanner or search.* file) | lane/search b75209a, inside its checks after the whole `--werror --test` run | dev-r, 24 logical; quiet - load 11 / 21 / 6% before, 16 / 9 / 26% after | 32 | 293 / 293 / 293 | 316 / 314 / 316 | none | pass x3 |
+| 2026-11-24 | main b18a7b3 into lane/search and round 2 of E11's review (`mcts.cpp`: S4's root-listing lift, S5's re-check of a deadline-cut turn start, L4's count; no scanner or search.* file) | lane/search 941af12, inside its checks after the whole `--werror --test` run | dev-r, 24 logical; quiet - load 21 / 4 / 9% before, 16 / 12 / 5% after | 32 | 293 / 293 / 293 | 315 / 318 / 317 | none | pass x3 |
 | 2026-11-23 | The review round's final tree (issue 411's truth sources; main af0c19b merged) | lane/engine e79ea70 | dev-r, 24 logical; load 26% before, 18% after | 32 | 293 / 293 / 293 | 318 / 317 / 318 | none | pass x3 |
 | 2026-11-23 | the engine lane into main (issue 411's truth sources, issue 412; the main loop's merge battery) | main 4e9267e + lane/engine 76501de, merged tree before the commit | dev-r, 24 logical; the net lane's fixer running | 32 | 293 | 317 / 315 / 315 | none | pass x3 |
+| 2026-11-24 | the search lane into main (E11/E8 with both review rounds; `mcts.cpp`'s deadline, root-listing lift and re-check; the main loop's merge battery) | main b18a7b3 + lane/search 485921e, merged tree before the commit | dev-r, 24 logical; both lanes held to reading and writing; load not read (the probe printed nothing) | 32 | 293 / 293 / 293 | 312 / 314 / 317 | none | pass x3 |
 
 ## Environment
 
@@ -2140,11 +2158,11 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | H10 | reduced, built | Rung 1 dropped (6b); rungs 3 and 5 retired, not built (M5); rung 2's promotion side is Guard, its demotion audit the audit lane; rung 4, the asset map, built (E9). The reduced ladder as H14 restates it: Hunt, the asset map and the settling scans under 50 boards - Guard offline (adopted nowhere, 6b″) |
 | H11 | superseded | By Guard (promotion) and the audit lane (demotion audit) |
 | H12 | retired | With the NNUE and the per-node scans |
-| H13 | built, wired (E10) | The asset map (E9) as the register records it: the material estimate, 4 plies and 128 nodes per board, flagged at 300, boost 0.25 × min(1, value/900), every number a placeholder (issue 106). Wired (E10, 2026-10-23): its boost enters every node's priors after the softmax and before k0 and the root noise, never the cached evaluation - (P + b) / (1 + Σb), a multiplicative arm (issue 178); one map per game, shared by its fresh searches (each board assessed once in the game, tested); the root's unsteered priors and steered visits recorded for I2 (issue 179). With a uniform evaluator it dominates flat priors: self-play then branches heavily (issue 178). **E10 review (2026-10-23):** the additive rule is now monotone and capped (`boost_cap` 0.5 of the unboosted mass, a placeholder; issue 178(a)); the flat form steers after its noise, k0 unsteered (178(b)); **off in self-play** (`self_play_search_defaults()`, Python's `GeneratorConfig.asset_map`) until I2's steered visits are validated - on in the search's default and match play (issues 179, 450) |
-| H14 | built (E10; placeholders) | Restated at CHECKPOINT 6: budgets for the reduced ladder - Hunt, the asset map, the settling scans under 50 boards (Guard offline) - against shared movegen, on M13's five cores. Built (E10, 2026-10-23): one worker per game's ladder, the jobs one at a time in the order asked (the root's Hunt, its settling scan, PV changes' scans - issue 182), each prover on `verification_threads` (5) threads under 50 ms (6b″'s configuration) or a node cap; at most 4 PV scans a decision; the asset map on the search's thread (once per board, 128 nodes); the synchronous mode by nodes (25,000) inline. A decision's end cancels its jobs (`ProveBudget::cancel`; issue 187). Where the jobs' time sits in E7's allocation waits for E11. **E10 review (2026-10-23):** the root's Hunt or its settling scan (not both, issue 181), then PV changes'; verdicts tagged by decision, a search taking its own (issue 183); a decision's end tested to cancel a running job (issue 187); the ladder's counts `answered` (taken), `cancelled`, `discarded`, `contradictions` (a job that throws, reported on stderr); every parallel self-play game's ladder has a worker and five prover threads - oversubscribing M13's five cores (issue 451) |
+| H13 | built, wired (E10) | The asset map (E9) as the register records it: the material estimate, 4 plies and 128 nodes per board, flagged at 300, boost 0.25 × min(1, value/900), every number a placeholder (issue 106). Wired (E10, 2026-10-23): its boost enters every node's priors after the softmax and before k0 and the root noise, never the cached evaluation - (P + b) / (1 + Σb), a multiplicative arm (issue 178); one map per game, shared by its fresh searches (each board assessed once in the game, tested); the root's unsteered priors and steered visits recorded for I2 (issue 179). With a uniform evaluator it dominates flat priors: self-play then branches heavily (issue 178). **E10 review (2026-10-23):** the additive rule is now monotone and capped (`boost_cap` 0.5 of the unboosted mass, a placeholder; issue 178(a)); the flat form steers after its noise, k0 unsteered (178(b)); **off in self-play** (`self_play_search_defaults()`, Python's `GeneratorConfig.asset_map`) until I2's steered visits are validated - On in the search's default and match play (issues 179, 450). **6e's switch (2026-11-23, phase 1B):** reachable from every driver - `asset_map` in t5d-play (`--no-assets`), netplay's config and its per-side `side_overrides`; off on both sides is the game without the map (tested in C++ and Python); `t5d.engine.switch_match` plays the on/off match (paired colours, one network; its size, starts and pass rule pre-registered before a trained network exists) |
+| H14 | built (E10; placeholders) | Restated at CHECKPOINT 6: budgets for the reduced ladder - Hunt, the asset map, the settling scans under 50 boards (Guard offline) - against shared movegen, on M13's five cores. Built (E10, 2026-10-23): one worker per game's ladder, the jobs one at a time in the order asked (the root's Hunt, its settling scan, PV changes' scans - issue 182), each prover on `verification_threads` (5) threads under 50 ms (6b″'s configuration) or a node cap; at most 4 PV scans a decision; the asset map on the search's thread (once per board, 128 nodes); the synchronous mode by nodes (25,000) inline. A decision's end cancels its jobs (`ProveBudget::cancel`; issue 187). Where the jobs' time sits in E7's allocation: nowhere - nothing waits for them, so they cost the move no time; they end at the re-root after the move (or their own budgets), not at the hard bound; nothing deducted (E11; issue 466, reworded at E11's review, L11). **E10 review (2026-10-23):** the root's Hunt or its settling scan (not both, issue 181), then PV changes'; verdicts tagged by decision, a search taking its own (issue 183); a decision's end tested to cancel a running job (issue 187); the ladder's counts `answered` (taken), `cancelled`, `discarded`, `contradictions` (a job that throws, reported on stderr); every parallel self-play game's ladder has a worker and five prover threads - oversubscribing M13's five cores (issue 451) |
 | H41 | built, tested | `SearchParams::proof_channel` (C `proof_channel`, `t5d-play --proof-channel`) - the switch the register now names: propagation of solved status (marking nodes solved, pruning siblings, secure-child selection) and export, off by rule; game ends are scored as results. **The cross-check against df-pn (§15.4, MT-01) - built 2026-10-23 (`lane/engine`)**: `tools/solver_proofs.hpp` derives each solved node's claim (Win(k), Loss(k), Draw) from the solved subtree and holds every solved turn start to df-pn's literal class (1 thread, node budget), every df-pn proof certified by E4 alone; `mcts_solver_agrees_with_df_pn_on_constructed_mates`, `..._under_every_ruleset` and a `long_` twin, under the ply split, the tree form and the flat form (the ply split and flat form as graphs too): no contradiction (issue 400); `t5d-solver-check`, the offline mode, built and tested on engine-written records - not run over 6b's 805 roots, whose records are only under `oracles/` (issue 401). **The oracle cross-check's engine side (MT-02) - built 2026-10-23**: `t5d-proof-records` writes each proof's root-to-mate lines as 5dpgn records (every defence checked against E4's listing, every line replayed to E4's checkmate; custom set-ups or whole games; `FILES.tsv`), tested by replaying its records through `t5d-gate` (issue 404). Not yet: the harness side - the records added to the corpus, `verify`, the golden files re-recorded on a quiet machine - a separate reviewed change after the gate with the engine is redone, and whether engine-written lines may enter the pinned corpus is put to the user (issue 405). **Since MT-01/02's review (2026-11-01; fixed 2026-11-02, issue 409):** the checker's rules held to seeded faults (one false claim per rule, each a contradiction), all fourteen constructed roots held to their claims (four new losses whose defences lose at different speeds, three new draws), coverage floored per rule and on df-pn's distinct searches and the claims inside the proofs, each record's line as long as its claim, a failing root reported and the run continued |
 | H42 | built, tested; not adopted | Guard (E9): depth 1 completes in 65.1 / 15.8 / 5.2 / 0.0% of roots against 95% (6b″) - adopted in no range; §13: the chosen move goes unguarded. Built and kept (the audit lane's shallow-mate report uses its question offline; the search's re-search hook stays unwired-by-adoption). Its five-thread depth-1 test failed once in CI (run 37146667584): a thread that read the root's proof from a helper's export - its tree empty - was the one reported, so the refutation's line was empty. Fixed in the prover's report (2026-10-17, `lane/engine`): the line of a thread that searched, complete at depth 1; the test pins the race and checks the line's contract at depth 2. What Guard decides is unchanged. Beyond depth 1 the line keeps its contract (it can stop where a node was solved from the store): a certificate holds the attacker's proving actions only, so the line could take the attacker's step past such a node from one but not the defender's longest defence, which needs an enumeration of the defender's actions (the first record of this fix gave another reason - that 6b″ ran Guard without certificates; it ran with them, for its cross-check against E4) |
-| H43 | built, tested; adopted under 100 boards; wired (E10) | (6f, 2026-10-23: Hunt's mates found, lines complete and certified under a 1-entry TT; its prover never writes a disproof - issue 403.) Hunt (E9): 69.0% / 63.6% of the truth's mates under 50 / 50-99 boards (6b″) - adopted there; 35.0% at 100-199 and 0 of 1 at 200+ - not adopted; §13: proofs there come only from the search's solver. Export refused until H41/H23. Wired (E10, 2026-10-23): asked at turn-start roots under 100 boards at 50 ms on 5 threads; its mate carried through the action's decisions under the ply split; withheld while the proof channel is off (issue 180); the soft priors built behind `hunt_suggest`, off, counted as steering (issue 186). **E10 review (2026-10-23):** under 50 boards the root's settling scan asks its question in its place (same class and depth; `hunt_with_settling` off - issue 181), so Hunt itself runs at 50-99 boards (and below 50 with its suggestions on); its silence with suggestions on would leak a mate (issue 186(a)) |
+| H43 | built, tested; adopted under 100 boards; wired (E10) | (6f, 2026-10-23: Hunt's mates found, lines complete and certified under a 1-entry TT; its prover never writes a disproof - issue 403.) Hunt (E9): 69.0% / 63.6% of the truth's mates under 50 / 50-99 boards (6b″) - adopted there; 35.0% at 100-199 and 0 of 1 at 200+ - not adopted; §13: proofs there come only from the search's solver. Export refused until H41/H23. Wired (E10, 2026-10-23): asked at turn-start roots under 100 boards at 50 ms on 5 threads; its mate carried through the action's decisions under the ply split; withheld while the proof channel is off (issue 180); the soft priors built behind `hunt_suggest`, off, counted as steering (issue 186). **E10 review (2026-10-23):** under 50 boards the root's settling scan asks its question in its place (same class and depth; `hunt_with_settling` off - issue 181), so Hunt itself runs at 50-99 boards (and below 50 with its suggestions on); its silence with suggestions on would leak a mate (issue 186(a)). **6e's switch (2026-11-23, phase 1B):** `hunt_suggest` on every driver - t5d-play `--hunt-suggest`, netplay's `hunt_suggest` and per-side overrides, `switch_match`; the summary's `suggestion_edges` shows the arm acted; off is the search without Hunt's lines; on, only the suggested lines are raised; a proven mate raises nothing and decides nothing before the sign-off (186(a) settled by decision 12 - issue 478); a carried root already expanded takes no suggestions (issue 477); match play only - refused in self-play (the E11 review's L9; I2: self-play does not steer as built). The pre-sign-off hooks: the extend hook built (E11, `proof_volatility`, off; extend-only without the channel since decision 12), the proof-to-prior hook not built (issue 479) |
 | H44 | built (tooling), tested | The audit lane's tools: the certificate checker (E4 alone) and `t5d-hunt-truth` (E9); the search's decision events and **the tooling (E10, 2026-10-23, `lane/search`)**: the decision log (`PlayParams::decision_log`, `t5d-play --decision-log`, Python's `netplay --decision-log`; JSONL `t5d-decisions` v1 - games by start and actions, events final / pv_change / demotion), `t5d-audit sample` (seeded, rates and caps per category and range), `run` (Guard's question offline on the action, our mate at the turn start by the truth recorder's method, certificates checked by E4; contradictions to the `CurriculumSink` interface, its one implementation a JSONL writer) and `report` (per range the shallow-mate rate, Guard's completed depths, the undecided, the contradictions; counted as 6b″ counts). No consumer of the contradictions is built (curriculum hooks as interfaces only). Every budget and threshold a placeholder (issues 191-197). **E10 review (2026-10-23):** the runner's E4 gate tested with a certificate E4 rejects (no contradiction), the abandoned mate and the chosen child's exclusion from the demotions tested; `missed_mate`'s known false positives stay documented (issue 192) |
 | H45 | not built (rule) | The adversarial league (M5) |
 | H46 | built, tested | Q2 (provisional): initial timelines count as created by neither player - a variant's set-up reads every timeline as initial (rulebook R10) |
@@ -2231,9 +2249,9 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | E4 | principle (weakened) | "Narrow hard, because the auditor is watching" - the register says weakened: it holds where the settling scans (< 50 boards) and Hunt (< 100) run - wired since E10 (2026-10-23), their proofs withheld until the sign-off; above that, narrowing is a bet on the audit lane and the league |
 | E1 | built, tested (the mandatory-count widening option not built) | PUCT with entropy-adaptive top-k widening and FPU; the policy temperature at every node. CHECKPOINT 7 (with I19), engine ABI round 2b: root noise in self-play with its total concentration (`dirichlet_concentration`, placeholder 0.03 x 361, appended beside the per-child `dirichlet_alpha`, which stays as its arm at 0) split across the root's open edges, per decision (issue 150); KataGo-style shaping a prototype behind `dirichlet_shaping`, off (its form a reading, issue 151); the root policy temperature (I19; issue 152), before the noise. "The widening schedule may depend on the mandatory-board count" - an option for 6g, not built (A6's count is in the expansion). Under D2's flat form (2026-10-23): k0 from the turn distribution's entropy (the boards' entropies summed) capped at `flat_k0_max` 16, widening generating the turns it instantiates, the root noise's total concentration split per board across its options and drawn before generation, both temperatures per board (issue 167). Every constant a placeholder, named in §8.4's "Constants as built" (issue 82; edit 123) |
 | E5, E9 | built, tested | LCB with a visit floor (E5); the solver behind H41's switch, the secure child, a visit cap on solved children (E9) - constants named as placeholders in §8.4 (issues 84-85). E5's optional term (weight 0) reads the child's uncertainty signal - 6m's switch, since engine ABI round 2a (issue 149) |
-| E7 | not started | Time management, E11 in step 2 (engine lane): the moves-left integral allocator - moves-left counted in turns, converted to board-moves (issue 305) - and the stop/extend table, with 6o's arms (flat-evals and flat-wall-clock allocators, the signals on/off, the spiral guard at high N); the second volatility source is Hunt's and the settling scans' proofs (the register). The register keeps a "root-scan reserve" (§8.6); its one named consumer, Guard's re-search, is offline (adopted nowhere), so E11 holds none - a reading (issue 306) |
+| E7 | built (E11, `lane/search`, 2026-11-08; placeholders) | Time management, `t5d/timeman.hpp`: the moves-left integral allocator on a cost model (the dense FLOP shape with a fixed share, its scale measured online; moves-left in turns, our actions half of them, N advanced by M22's boards per action - issues 305, 452-457); 6o's arms as switches (`allocator`: Integral, FlatEvals, FlatWallClock; `signals` on/off); the stop/extend table (smart pruning, KLDGain, a solved root only with the proof channel, overlap with churn, volatility, falling eval, instability - issues 459-463) with the spiral guard (each kind once a decision - tested on its own; a cap on the plan, never past the hard bound - issue 464, tested at 500 boards); the wall-clock hard bound held tight at high N and given to the rules engine's calls inside a batch (`Search::set_deadline`, `LegalityOptions::deadline` - issues 458, 467; one mechanism with issue 406's since the phase-2 merge), match play's verification after the search under it too, with two exceptions - a move needs a visit, and no child known legal: a search against the side's remaining clock (phase 2, issue 458); the model clock (deterministic); match play's per-side clock (`PlayParams::clock`; t5d-play `--time`; netplay `PlayConfig.time`; issue 456); the C API and its Python mirror. NO root-scan reserve (issue 306). The second volatility source - Hunt's and the settling scans' proofs - is a hook, off, extend-only with the proof channel off (decision 12, ruled 2026-11-23; issues 180, 470); the ladder's jobs cost the move no time - nothing waits for them, and they end at the re-root, not at the hard bound - nothing deducted for them (issue 466). Not built: pondering (C13), MLH steering (I3; issue 469) |
 | E2, E3 | built behind flags, tested | Off; awaiting 6m and 6t. They read a node's uncertainty signal: the categorical's variance by default, the error head's output under 6m's switch (`uncertainty_source`, engine ABI round 2a; issue 149); their constants placeholders twice over (issues 81, 149) |
-| E8 | not started | Behind its flag (6v), with E11 in step 2 |
+| E8 | built behind its flag (off; `lane/search`, 2026-11-09; placeholders) | Difficulty-weighted allocation (`TimeParams::difficulty_weighting`, `t5d/timeman.hpp`): the root's effort distribution (D4's 16 bins, the top one censored) through the time context; the plan E7's soft bound x 2^(the bin at the 0.8 quantile - this game's running mean bin, seeded at 256 visits), clamped to [0.25, 4], to a floor of 32 evaluations and to E7's hard bound; won't-resolve (censored mass >= 0.5) plans for the hard bound (reading A) or E7's plan (B: `CapAtPlan`), and takes no overlap-with-churn extension; the guards code paths (the ex-post extensions still apply; the floor; the hard bound and the ladder's budgets untouched - I4). Off = E7 bit for bit (tested). The quantile is heads.effort_quantile's (tested across languages). Inert without an effort distribution - the built-in evaluators and netplay give none (issue 473). Issues 471-475, edits 339-341 |
 | E6 | not built (rule) | Refused |
 | E12 | not started; handed to the main loop's lanes (2026-11-23) | *Register E10 until edit 412 is applied - renamed by ruling, 2026-11-23 (issue 730).* Gumbel root search (section 8.4; 2026-11-15 review) - the engine arm after `lane/engine` and `lane/search` merge (a planner's design: the logic in new files `gumbel.hpp`/`gumbel.cpp`, about ten hooks in `mcts.cpp`, an appended params field, off; refused under the flat form, with root noise or steering, and on re-roots); its experiment after I21's ranking. The generator's arm waits for a ruling on what the root search value means under sequential halving. Issue 730: the name collides with the build's component E10 |
 | F1, F2 | built, tested | 22,965,426 parameters (F1 after F5, B15, M20, A6, D3 and D4: 21,338,634 after F5 - 20,736 fewer than N5's 21,359,370, gain-only norms, no Q/K/V biases, spec issue 203 - plus B15's 1,623,168, spec issue 210, plus M20's 3,337: the policy's promotion offset, 3,341, less the learned register coordinates, 4 - plus A6's 8,768: the turn-state counts' MLP, spec issue 230 - less D3's 12,079: three short-term outputs, 771, and the error head, 257, on the value MLP's shared layer, and N1's 51-bin short value head, 13,107, gone, issue 231 - plus D4's 3,598: the soft policy, 69,390, and N1's always-built reply head, 65,792, now a prototype off - 69,133 with its offset when on, issue 232); the L24-ff12 preset, 46,894,834 (F2: 44,460,082 and B15's 2,434,752 over 24 layers). Unchanged by F6's Mish in the heads, by B11's fold (its flag is off; with it on, 40 scalars where there were 48) and by B16 (its 304 are in a network of the cached configuration only: 22,965,730 with `attn_scope = "block_causal"`) and B17 (off; with it on, 6,115,328 more - 29,080,754, or 23,729,842 with the vectors shared by the heads; spec issue 218) |
@@ -2959,9 +2977,16 @@ placeholders consolidated for the user".
     FP8 bounds (rows 1 and 11), BF16 and FP8 on the adversarial geometries, and more seeds
     for the every-switch sets;
   - optional: D4's constructed travel turns (row 16).
-- **Search** (`lane/search`): E11 and E8; then MT-03's settling-scan part, through the
-  ladder (main has only `ladder_settling_proofs_survive_tt_churn_6f`: a 16-entry TT, one
-  position).
+- **Search** (`lane/search`): E11 and E8 built (6bdd838, f974d0c) and reviewed (faaa64e..f974d0c:
+  1 HIGH, 8 MEDIUM, 13 LOW); the review's fixes in two phases, as the main loop decided - phase 1
+  (M5-M8, L1, L4-L13) on `lane/search` now, phase 2 (merge main once `lane/engine`'s issue 406 is
+  on it, reconcile the two deadline mechanisms - M2 - then H1, M1, M3, M4, L2, L3, and the
+  reviewers' survivors re-run) on the main loop's word - all done, with a second review round, and
+  merged 2026-11-24; next MT-03's settling-scan part, through the ladder (main has only
+  `ladder_settling_proofs_survive_tt_churn_6f`: a 16-entry TT, one position), and the second
+  round's two weak tests (L1, L8).
+- **Engine**, after the search lane's merge: register E12, the Gumbel root search, from the
+  hand-over's plan (its experiment waits for I21's ranking).
 - **Gate** (`lane/gate`):
   - CHECKPOINT 10's lineage counting;
   - report to the user the three rulesets Kairos answers and ftxi does not (Just Kings, Just
@@ -6337,6 +6362,13 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     loop's to its verdicts and verifications (Unknown, never a verdict; the game then ends
     `TimeLimit`); the same game with `--max-seconds 120` ends at 120.0 s. What remains is
     algorithmic (issue 407) or a decision the documents made exact (issue 408).
+    *(Note, 2026-11-23, at `lane/search`'s merge of main d4c7fb9 - the E11 review's M2: E11 had
+    built a second deadline into the same places - `Search::set_deadline`, a persistent deadline
+    for the step API and the time manager's hard bound, and `LegalityOptions::deadline` reaching
+    tier 2's checks too. One mechanism kept: this issue's `deadline_after` for every conversion,
+    the persistent deadline beside `run()`'s own - inside `run()` the earlier of the two, the
+    persistent one restored on return, never cleared; E11's broader tier-2 gating; Flag (the
+    clock, scored) and TimeLimit (max_seconds, unscored) both. Issue 467 has the resolution.)*
 407. **Exact legality's cost is algorithmic - where it lies, measured** (register E5a, H37, M9;
     §8.1, §13 "Legality classification may dominate self-play in big games", §15.3's legality
     row; issue 406). No budget is left unhonoured: every move a search applies is a node, the
@@ -6963,6 +6995,13 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     target) could read the verdicts with the channel off; E7 is not built. **Put to the
     user:** may Hunt's and the settling scans' proofs drive time management (E7) before the
     sign-off, or only after it?
+    *E11 (2026-10-24) takes the safe reading until the ruling: the proof source is a hook,
+    `TimeParams::proof_volatility`, off, refused by `TimeManager::begin` unless the search's
+    proof channel is on, and refused by the Python binding - so time management reads no proof
+    directly (issue 470; through `hunt_suggest`'s priors, issue 186(a)).* *(Since the ruling
+    below, 2026-11-23: the hook is taken with the channel off and extends only - issue 470.)* *(Issue 180 is
+    ruled by the user 2026-11-23 (the review's decision 12, reported by the main loop): before the sign-off a proof may raise a prior or extend the search, never stop,
+    prune, select or enter a store.)*
 181. **"Full settling scans: df-pn at the root and on PV changes"** (§11.4; register H1; §8.4:
     "the settling scans cover the root and PV changes"). Unstated: what a PV change is, which
     position is scanned, who attacks, and how often. Built (placeholders): at a turn-start
@@ -7052,7 +7091,10 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     (a) *E10 review (2026-10-23; reviewer A's L7):* with the flag on, a Hunt that proves a mate
     gives no suggestions - so their absence tells the search, through the priors, that Hunt
     found a mate, a proof acting before the sign-off (issue 180) by another route. Harmless
-    while the flag is off; to be settled with issue 180 before it is turned on.
+    while the flag is off; to be settled with issue 180 before it is turned on. *(Settled
+    2026-11-23 by decision 12, ruled by the user 2026-11-23 (the review's decision 12, reported
+    by the main loop): an effect of a proof through the priors is an estimate's use, which the
+    rule allows - issue 478.)*
 187. **"No job outlives its decision", and its cost.** Built: `ProveBudget::cancel` - a stop
     the prover reads where it spends its budget (a budget stop: claims nothing, H37;
     `ProverStats::stopped_by_cancel`). A decision's end (the search destroyed or re-rooted)
@@ -8232,6 +8274,354 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     No spec edit: no part of the spec describes the CI job or these tolerances, and G2's and
     C19-C21's text stands.
 
+*Issues 452-499: the search lane's step-2 block (E11 and E8; 2026-10-24).*
+
+452. **E7's "predictive nps(N)" has no source** (§8.6: "cost is a known function of N
+    (§9)"; §15.3's cost rows; register E7, M19). Unstated: the model, which costs it covers
+    (network, expansion and legality, batching), and how it is corrected. Built (placeholders):
+    `s(N) = scale x (f + (1 - f) x shape(N) / shape(100))` - `shape` the dense FLOP model of
+    `python/t5d/net/cost.py` (`T (4T + 40 d)`, `T = 66 N + 16`), §8.6's table reproduced from
+    it exactly with `f` = 0; `f = cost_fixed_fraction` 0.05, the share of a 100-board
+    evaluation's cost that does not grow with N (found needed in the build: a scale measured on
+    a few boards priced a 100-board evaluation ~280x too high without it); `scale` the prior
+    `cost_seconds_per_evaluation` (0.01 s, CPU-labelled) until the first observation, which
+    replaces it, then an average (`cost_ema` 0.2) of the seconds per unit of work between
+    checks, the model's growth removed - so the scale absorbs every cost of the decision's
+    batches (network, expansion, legality, the driver), the shape only their growth with N.
+    Not modelled: the cached configuration's cost per node (§7.9; its shape is not the dense
+    one), measured GPU figures (M19). Edit 331.
+453. **6o's three arms are named, not defined** (§13.1 6o: "integral allocator vs flat-evals vs
+    flat-wall-clock"; §8.6's table names "naive equal-time" and "equal-sims"). Built:
+    `Integral` - equal evaluations for each of our remaining actions, each costed at its
+    predicted N (this action's share `s(N_0) / sum_k s(N_k)`); `FlatEvals` - `T_eff / A` of
+    the time at today's `s(N)`, executed by evaluations (§8.6: "engines that estimate nps
+    empirically must assume it persists"); `FlatWallClock` - `T_eff / A`, executed by the
+    clock (§8.6's naive equal-time share). The flat arms coincide at the plan and differ in
+    execution when the price per evaluation moves. Edit 332.
+454. **Our remaining actions from moves-left** (§8.6; D4/M20: moves-left in turns; issue 305).
+    Built (placeholders): `A = ceil(M / 2)`, `M` the turns left (each one player's action,
+    issue 305's reading) floored at `moves_left_floor_turns` 20 (§8.6's "conservative floor":
+    a floor on turns left keeps the allocator from spending as if the game were ending);
+    none given - the built-in evaluators give none - the root's own network output, else
+    `moves_left_default_turns` 40 (M22's data: 29,292 actions in 692 human games, 42 a game);
+    `T_eff = remaining + increment (A - 1) - overhead_seconds (0.05) x A` (the last increment
+    is never usable). Edit 331.
+455. **The allocation unit under the ply split** (§8.2, §8.6, A6, D8). A turn is several
+    decisions under the board-move split and the tree form. Built: the action's plan split
+    evenly over its decisions left - the mandatory boards still to move (A6, exact), the
+    submit decision and `expected_optional_moves` (0.25, placeholder; M22 measures optional
+    moves on human games, not the engine's) - re-planned at every decision; the flat form's
+    decision is the whole action. No decision is planned below `min_evaluations` (8, a
+    placeholder: about one batch), inside the hard bound (added at E11's review, L9). Edit 331.
+456. **The 5D match clock is unspecified** (§12.3, register I3: the match configuration names
+    no clock). Built (a reading): base seconds plus an increment after each of a side's
+    actions (Fischer), one clock and one time manager per side; a decision charged its whole
+    wall time - the search, the choice, the exact verification of the chosen move - or its
+    model time on the model clock; a side whose clock runs out loses on time
+    (`GameEnd::Flag`, "flag"): the action under way not recorded, the record's result `*`
+    (the clock is the match's convention, not a rule, as I11's cap is), scored for the other
+    side. `MatchClock`'s defaults - `base_seconds` 60, `increment_seconds` 0 - are placeholders
+    no driver reads (t5d-play and netplay set their own; added at E11's review, L9). Edit 338.
+    *(The E11 review's S1, 2026-11-24:* the flag falls only when the side's clock has run out; a
+    decision whose search cannot produce a move with time left ends the game unscored -
+    `Unsettled::Search`, uncharged - not a loss on time: issue 480.)
+    *The turn-start verdict (phase 2, 2026-11-24; the review's H1 part 5):* not charged to either
+    side - it decides the game's result, so it is the referee's work, not a side's (a reading the
+    documents allow: it is not a decision). The documents give it decision 13's node budget (the
+    2026-11-15 review, ruled by the user 2026-11-23: "the game loop's terminal test takes a node
+    budget, never a time limit; a turn start it cannot settle ends the game unscored"), which
+    `lane/engine` is building (the budgeted terminal test, the unscored ending,
+    `t5d_search_verify_budgeted`, both Python loops); this lane adopts it from main when it lands
+    rather than building a second one. Until then the clocked loop's verdict stays as it was:
+    uncharged, and bounded only by `max_seconds` (issue 406's deadline). *(Done 2026-11-24, in
+    the merge of main b18a7b3, decision 13's game loops:* the clocked loop's verdict is the
+    unclocked loop's - within `PlayParams::terminal_nodes` (netplay: `PlayConfig.terminal_nodes`),
+    run before the side's decision starts and so charged to neither clock, and one the budget
+    cannot settle ends the game unscored (`GameEnd::Unknown`, `Unsettled::Verdict`, "*") with both
+    clocks untouched; tested on a clock that moves at every read, and on the wall and model clocks
+    in netplay. A clocked decision's verifications - the bound's, the fallback's, the search
+    against the remaining clock - take the same node budget, the deadline beside it
+    (`t5d_search_verify_within` gained decision 13's `checks` and `nodes`).)
+457. **"Every board-move adds a board"** (§8.6's trajectory). A branching jump adds two boards
+    (its destination's successor and the new timeline's), and an action's moves number one or
+    more. Built: N advances between two of our actions by both players' boards per action,
+    `boards_per_action` = M22's mean moves per turn on the human games (1.05 / 1.25 / 1.77
+    under 50 / 50-99 / 100+ boards), the travel moves' second board left out - a lower bound,
+    until the pilot run measures the engine's own (M18). Edit 331.
+458. **"The hard maximum is wall-clock and held tight at high N"** (§8.6 "Guards") has no
+    formula. Built (placeholders): `hard = min(hard_multiple(N) x soft, hard_fraction (0.25) x
+    (remaining - overhead))`, `hard_multiple` 5 at 50 boards or fewer falling linearly to 2 at
+    400 or more; a check stops when spent + `batch_margin` (1.5) x the next batch's predicted
+    time reaches it; one exception: a root with no visited child runs on until one has a visit
+    (choosing needs a visit). (Revised 2026-11-23, review L1: "runs one batch ... past the bound
+    by one batch (tested: never more)" was wrong - from an unevaluated root the visit takes up to
+    two evaluator calls, the root's own leaf and then its children's: one slice in the batched
+    mode, two one-leaf slices in the synchronous mode; now tested on an exhausted clock.)
+    (Phase 2, 2026-11-24, review H1 and M1: the bound held past the search too - match play's
+    verification of the chosen move runs under it, the most visited child known legal played
+    where it is cut; the forced slice runs without the bound inside it, so that the root's listing
+    completes; and a SECOND exception - no child known legal once the verification is cut: the
+    children verified in visit order against the side's remaining clock, the side flagging if it
+    runs out, never a throw. "Held tight" covered `run_timed`'s slices only until then.) (The E11
+    review's S1, 2026-11-24: none shown legal with time left - every verification stopped by the
+    node budget or the memory ceiling - ends the game unscored, `Unsettled::Choice`, where it threw;
+    no visited child and a search that cannot get one: unscored, `Unsettled::Search` - issue 480.)
+    (S4, 2026-11-24: exception (1)'s scope narrowed to the decision - only the root's own listing,
+    its expansion or the flat form's fallback listing, runs without the bound, under the caller's
+    deadline, while no root child has a visit; the children's turn-start checks and
+    classifications, the verifications and the flat generator (node-budgeted, never timed) keep
+    it. `Search::lift_root_listing`, `t5d_search_lift_root_listing`.) (S7, 2026-11-24: where no child
+    is known legal, a clocked decision searches against its clock BEFORE decision 13's witness step -
+    the merge had put the witness first, so a verdict with a witness pre-empted the search - and
+    plays the witness only when the search finds nothing with time left. The order confirmed by the
+    main loop at the merge, 2026-11-24: the witness is decision 13's answer to an unsettled choice
+    (its review's X2), never a substitute for the search a clocked side has time for; the clock it
+    spends where a witness existed is the cost of any search.) Edits 333, 342, 346.
+459. **The stop signals' definitions** (§8.6's "visit gap unbridgeable", "root visit
+    distribution stops changing"). Built (placeholders): smart pruning - the lead of the most
+    visited child (path visits, MCGS) over the second exceeds the remaining evaluations (to
+    the soft bound, within the hard) x the playouts per evaluation so far x
+    `smart_pruning_factor` 1.0 (1: exactly unbridgeable; a single child stops at once);
+    KLDGain - `KL(earlier || now)` of the root's visit distributions per root visit, compared
+    every `kld_interval` (100) visits, below `kld_threshold` (5e-5) stops (Lc0's pattern; the
+    numbers ours); neither before `stop_min_evaluations` (32). Edit 334. (2026-11-23, review L5:
+    the two distributions are matched child by child by step - its moves and submit - not by
+    list position, which a tree-form re-sort scrambles; a child gone that held visits restarts
+    the comparison.)
+460. **"Top-two distributional overlap (categorical head)"** (§8.6). Unstated: whose
+    categoricals, which overlap, what churn is. Built (placeholders): the two most visited
+    root children's own network categoricals (D3's 51 bins, the root player's view) read from
+    the evaluation cache (`Search::root_child_value`; none where the cache does not hold them -
+    no cache, an evicted entry, a tree-form inherited node: the signal is then not read); their
+    histogram intersection at least `overlap_threshold` 0.5; churn - the last KLD per visit at
+    least `churn_kld_threshold` 2e-4. Edit 334.
+461. **The volatility threshold** (§8.6 "net variance / §12.4 volatility prediction"; 6m). Built:
+    the root's uncertainty signal - the categorical's variance, or the error head's output
+    (`uncertainty_source`) - at least `variance_threshold` 0.2, one threshold for both readings
+    though they are different quantities (a variance of values in [-1, 1]; a predicted squared
+    gap); 0 where no signal is given (never extends). Edit 334. Not read: §12.4's own volatility
+    prediction, the per-board tactical-volatility head (D4) - the engine's evaluations have no
+    field for it, and its target is masked until proofs exist (added at E11's review, L10).
+462. **"Falling eval trajectory"** (§8.6): against what? Built: the root's backed-up value
+    below the previous decision's final root value (the same side's time manager, so the same
+    player's view) by `fall_margin` 0.1; a rising eval never extends; a new game forgets the
+    reference. Edit 334.
+463. **Best-move instability** (§8.6, Stockfish's pattern): built - the most visited child
+    changed (`Search::root_best_since`) within the last `instability_window` (0.25) of the
+    root's visits, from `instability_min_visits` (32). Edit 334.
+464. **"The extension mechanism must never be able to flag itself"** (§8.6 "Guards") has no
+    operational definition. Built: extensions are judged only when the soft bound is reached;
+    each kind is taken at most once a decision, by its share of the ORIGINAL plan
+    (`extend_*` 0.5, disagreement 1.0), all together at most `max_extension` (1.0) of it, in
+    the order disagreement, volatility, instability, falling eval, overlap; none crosses the
+    hard bound. A soft bound reached with nothing to take stops as `SoftBudget` before the stop
+    signals are read (so a decision the budget ended is never labelled converged). Edit 333.
+    Under E8 the "original plan" is E8's weighted plan, so an easy call is corrected in
+    proportion: at factor 0.25 an extension reaches at most 2x its own plan, half of E7's (while
+    0.25 x E7 is above the floor) - what guard 1 asks, no more (added at E11's review, L13).
+465. **What a decision's budget counts.** The spec denominates extensions "in evaluations";
+    simulations the network does not see (cache hits, terminal and solved nodes) cost engine
+    time and can be unbounded in number (a tree of terminals). Built: the decision's work is
+    `max(evaluations, playouts / playouts_per_evaluation_cap (4))` - the soft bound and the
+    model clock count it. Edit 334.
+466. **The ladder's jobs inside the allocation** (§8.6 "the root-rule final scan sits inside
+    the hard bound ... its escalated budget is part of the move's allocation"; under v3 Hunt and
+    the settling scans; M13, H14). Built (a reading): the jobs run on their own worker and
+    threads (M13's five cores) beside the search, and nothing waits for them (`await_ladder` is
+    the tests'), so they cost the move no time; the allocation deducts nothing for them. They
+    end with the ladder's decision - at the re-root after the move is played, a new decision or
+    the search's end (E10) - or at their own budgets (`hunt_ms`, `settling_ms`), not at the hard
+    bound: a job can run on past it, uncharged. In the synchronous mode they run inline by
+    nodes, uncharged by the model clock - and on a wall clock (which neither `run_timed` nor
+    `play_game` refuses) a job can carry a batch past the hard bound. (Reworded at E11's review,
+    L11: "a decision's end cancels them, so they sit inside the hard bound by construction" was
+    wrong - nothing at the hard bound ends them.) Edits 336, 343.
+467. **The hard bound inside a batch.** The search's calls inside a batch were node-budgeted
+    only. Built: `Search::set_deadline` (run_timed sets it on the steady clock): the turn
+    starts' mate checks and the flat form's fallback listing (`SearchBudget::max_time`), the
+    legality classification and the verification of unknown edges (a new
+    `LegalityOptions::deadline`) stop at it, Unknown, never a verdict (H37). Consequences: a
+    verification the deadline stopped leaves its edge unknown for good (verified once); a turn
+    start whose check stopped stays non-terminal in a carried tree. Not covered: the flat
+    form's turn generator (node-budgeted, `generator_nodes`), a root's own check at the
+    search's construction, an evaluator's call (predicted, not interrupted); and (added at
+    E11's review, L12) the synchronous mode's ladder jobs, inline by nodes (`sync_job_nodes`,
+    up to `settling_max_scans` a decision; issue 466), `hunt_suggest`'s wait for the root's Hunt
+    at an unexpanded root (off by default; bounded by `hunt_ms`, not the deadline), `place()`'s
+    exact verification with the proof channel on, and the asset map's quiescence (128 nodes a
+    board; off in `PlayParams`' defaults). *(2026-11-23, the merge with `lane/engine` - the E11
+    review's M2: issue 406 built the same reach for `Limits::seconds` and `max_seconds`. One
+    mechanism kept: every conversion through `deadline_after` (0 none, 1e9 s or more none, NaN
+    and negatives refused - L2); `Search::set_deadline` persistent (the step API needs it),
+    `run()` using the earlier of it and its own `Limits::seconds` inside its batches and
+    restoring it on return, its own alone between batches; `run_timed` restoring the caller's
+    deadline and taking the game's `max_seconds` as each slice's seconds; E11's gating of tier-2
+    checks kept (tighter, H37-sound); issue 406's candidate digest in the cache and the batch,
+    and its re-listable cut fallback listing, adopted; a slice before any root child has a visit
+    runs without the hard bound (M1).)* *(Phase 2, 2026-11-24: the chosen move's verification
+    after the search is no longer outside it - match play runs it under the decision's hard bound
+    (the review's H1), with the second exception for no child known legal (issue 458); netplay
+    through `t5d_search_verify_within`. A listing the bound cut is not stuck (issue 406's
+    re-listing); a clocked game never throws for want of a visit - it searches on against the
+    side's clock and flags (M1).)*
+468. **§11.4's knock-on against §8.6 and register E7** (§11.4: "Time management loses the
+    scanner as a second volatility source above 50 boards"; §8.6: "a proof from Hunt or the
+    settling scans ... (under 100 and 50 boards)"). Hunt answers under 100 boards, so the second
+    source is lost above 100, not 50 - and while issue 180 is open no proof is read at all.
+    Edit 335. (2026-11-23: issue 180 is ruled - decision 12 - and the hook, switched on, reads
+    the proofs with the channel off, extend-only; the spec as the review left it says "above 100
+    boards".)
+469. **Time management outside match play.** Built: match play only (`PlayParams::clock`,
+    refused in self-play; netplay likewise): self-play's budgets are PCR's (§12.5),
+    `Limits::seconds` is "never training", and I20 is self-play's adaptive analogue (a
+    prototype, not built; it may reuse `visit_kld`). Not built and assigned to no item:
+    pondering (C13: "time spent pondering is optional"), MLH steering at match play (I3,
+    §12.3). Edit 338.
+470. **The proof source of volatility, built as a hook** (issue 180; H41). `TimeParams::
+    proof_volatility` (off) reads the decision's ladder verdicts: a proven mate at the root
+    (+1) against the root's network value, a PV scan's refutation (-1) against the line's first
+    child's. Built at first refused without the proof channel (`TimeManager::begin`, the Python
+    binding). Since 2026-11-23 - issue 180 ruled by the user 2026-11-23 (the review's decision 12, reported by the main loop): before the sign-off a proof is an estimate, it may
+    extend the search, never stop it, prune, select or enter a store - the hook is taken with
+    the channel off: it reads the verdicts, withheld or injected, and feeds only the
+    disagreement EXTENSION; the solved-root stop stays behind the channel (H41); Python takes it
+    too (it still cannot turn the channel on). Tested with the channel off and on: the
+    extension in both, the solved stop only on, a real withheld Hunt proof read, a match game
+    with the hook on playing with every proof withheld and none injected. Off (the default),
+    time management reads no proof directly: with `hunt_suggest` on, a proven mate leaves no
+    suggestions and so reaches the signals through the root's visits (issue 186(a), off with
+    the flag). `disagreement_margin` 0.5 (a placeholder): a
+    proof's value at least this far from the network's is the alarm. (Added at E11's review, L9
+    and L12. Issue 180 is ruled by the user 2026-11-23 (the review's decision 12, reported by the main loop): before the
+    sign-off a proof may raise a prior or extend the search, never stop, prune, select or enter
+    a store.)
+471. **E8's numbers** (§8.6: "an upper quantile (tunable, 6v)"; register E8, a prototype).
+    Built (placeholders): `effort_quantile` 0.8; the bin's visits its lower edge 2^k (heads'
+    `effort_bin_lower_edges`), so the factor is `2^(k - r)`; `r` this game's running mean of
+    quantile bins (log2 visits), seeded by `difficulty_reference_visits` 256 (bin 8) with weight
+    `difficulty_reference_weight` 4 decisions - §8.6's "fund it from the moves that will not be"
+    needs a reference for unpredicted future moves; the factor clamped to
+    [`difficulty_min_factor` 0.25, `difficulty_max_factor` 4]; a quantile on the censored bin
+    takes the largest factor; the floor `difficulty_floor_evaluations` 32 (guard 2); every plan
+    within E7's hard bound. Edit 339. The reference is a log-mean, so E8 is not budget-neutral:
+    the mean soft/E7 ran 1.18-2.13 for symmetric spreads of bins (1.27x the clock over a
+    30-decision game), 0.94 with a censored bin, 0.83 in an all-easy game (the review's probes;
+    added at E11's review, L13).
+472. **"Plan for the hard bound ... rather than chase convergence"** (§8.6's won't-resolve flag)
+    reads two ways: spend up to the hard bound (A), or keep the plan and let LCB decide (B).
+    Built: both, `wont_resolve_policy` (A by default, the literal text); the flag at a censored
+    mass of `wont_resolve_mass` 0.5 or more; under it the overlap-with-churn extension (the
+    convergence-chasing one) is not taken, every other signal is. Edit 339. Reading A plans
+    `hard_multiple(N)` x E7's plan - 5x at 50 boards or fewer, 4.57x at 100, 2x at 400 - above the
+    factor's [0.25, 4] clamp (added at E11's review, L13).
+473. **E8's input.** The engine's evaluations carry no effort head (the search keeps none per
+    node), so the root's distribution reaches the plan through the time context
+    (`TimeContext::effort`, `t5d_time_context.effort`, Python's `effort=`): a driver with the
+    root's network output gives it; the built-in evaluators cannot, and netplay does not yet (its
+    evaluator's outputs carry no effort logits) - so E8 is inert in every driver today, behind
+    its flag twice. Wiring it: the network's `effort_logits` at the root, softmaxed, into
+    `run_timed_search(effort=...)` - left until 6v is run.
+474. **E8 and the effort label** (§8.6: "visits until the decision stabilises"; D4; I15).
+    The label's definition is the training side's; the search exposes its sources -
+    `Search::root_best_since` (the root's visits when its most visited child last changed) and
+    `TimeVerdict::converged()` (a stop on smart pruning, the KLD or a solved root; a budget stop
+    is not convergence, so a decision the soft bound ended is never labelled converged - issue
+    464) - and records nothing (I15's records are the training lane's).
+475. **E8 at match play only** (§12.5: "biasing which moves get full searches by predicted
+    difficulty ... if used at all, a mixture with a random component"). Built: E8 lives in the
+    time manager, which self-play never runs (issue 469) - no self-play effect, no PCR cap
+    resized. Edit 341.
+476. **How large a moves-left a plan believes** (review L4 of E11). §8.6's integral sums one
+    term an action; a prediction is unbounded (an API caller's context, a network's output -
+    `expm1` of the head, no upper clamp), and a large one held the plan for seconds or for ever.
+    Built (a placeholder): `kMovesLeftMaxTurns` 2000 turns - some 50 times M22's longest human
+    game; a context's moves-left above it refused by `TimeManager::begin`, the root's network
+    output capped at it, the integral summing at most 1000 actions, the moves-left floor and
+    default refused above it. A bound, not a tuning; no spec text describes it.
+477. **Hunt's suggestions at a carried root** (H43; §11.2, §13.1's 6e: "each steering term on and
+    off at match play"). Steering enters a node's priors when they are set (at expansion, or at
+    the tree form's re-evaluation of an inherited root); the search waits for Hunt only at an
+    unexpanded root. At match play the tree is carried (C12), so a turn-start root the carried
+    tree had already expanded takes no suggestions: they arrive, are stored and never applied.
+    Built: the limit made visible (netplay's `carried_turn_starts`, `switch_match`'s
+    `carried_on`) and pinned by test (`steering_a_carried_root_already_expanded_takes_no_
+    suggestions`). Open (the handover plan's recommended answer, not built): rule a re-steer - an
+    expanded turn-start root with `hunt_suggest` on waits for Hunt and has its priors set again
+    from its edges' stored logits - before 6e's Hunt arm is run for a verdict; the work is in
+    `mcts.cpp`, after the lanes merge. Until then a verdict from that arm means little.
+    *(The E11 review's L9, 2026-11-24:* `hunt_suggest` is refused outside match play - t5d-play's
+    `--hunt-suggest` without `--match`, netplay's `PlayConfig` in self mode, an override included:
+    register I2 and decision 14 say self-play does not steer as built, and the allowance was
+    recorded nowhere.)
+478. **Issue 186(a) under decision 12** (Hunt's silence with suggestions on). Decision 12 (ruled
+    by the user 2026-11-23, the review's decision 12, reported by the main loop) lets a proof
+    raise a prior before the sign-off, so an effect of a proof through the priors is an
+    estimate's use: 186(a)'s worry is moot. As built, a Hunt that proves its mate suggests
+    nothing and the proof is withheld - tested (`steering_a_proven_mate_raises_no_prior_and_
+    decides_nothing_before_the_sign_off`). Not built (the handover plan's recommended answer):
+    a proof-to-prior hook, with its own switch (`proof_prior`, off) entering the proven first
+    action through the suggestion path at weight 1 - a new `t5d_search_params` field, so a
+    record-format decision (the I15 header lists every field).
+479. **Register H43's "both hooks built and off"** (decisions.md H43; spec §16's H41/H43 entry
+    calls them "not yet built"). As built on this lane: the extend hook is built (E11's
+    `TimeParams::proof_volatility`, off; since decision 12 taken with the proof channel off,
+    extend-only - issue 470); the raise-a-prior hook is not - `hunt_suggest` carries Hunt's
+    partial lines, never a proof (issue 478). Edit 345.
+480. **When a clocked decision's search cannot move** (the E11 review's S1, 2026-11-24; §8.6, §12.3
+    and register I3 say nothing of it). Before: a clocked decision whose root child got no visit
+    flagged - after 16 batches without one, or one that added no playout - its clock nearly full,
+    scored as a loss on time (the review's probe: 59.9995 of 60 s left). Built (the main loop's
+    decision): the flag falls only when the side's clock has run out; a search that cannot produce
+    a move with time left ends the game unscored, in decision 13's family (`GameEnd::Unknown`,
+    `Unsettled::Search`, `*`, uncharged, a Termination note; netplay's "search"), never a throw.
+    `detail::cannot_move` is the rule after a batch with no visit: no playout added, or a root
+    with no edge that gains none - at once; batches that add playouts but no visit only on a clock
+    that did not advance across them (the model clock, a test's), the 16th ending it -
+    `detail::kNoVisitRounds` and netplay's `_NO_VISIT_ROUNDS`, a PLACEHOLDER: on a clock that
+    advances the side's clock ends the loop instead. Where every child's verification against the
+    side's clock stops with time left (the node budget or the memory ceiling), the end is decision
+    13's unsettled choice (`Unsettled::Choice`) - the same question as unclocked. The switch
+    match's tally already left unknown ends out of the score, counted apart (now tested, with a
+    flag scored).
+481. **A root the proof channel solves before any child has a visit** (the E11 review's S1,
+    observation 2; H23, H41: the proof channel is on only in experiments). With the proof channel
+    on, the game's verification ladder can solve a root - the review's probe: mate in one, the root
+    after the mating move solved by Hunt's line before its submission child has a node - and the
+    search, which does not search a solved node, never visits a child. On a clock the game now ends
+    unscored (`Unsettled::Search`, issue 480), never a flag; unclocked `play_game` throws "no
+    visited child to choose" (decision 13's loop: the throw predates this lane, and the same throw
+    ends the review's stuck-root setup unclocked). Playing the proven move instead (the decision:
+    "only if it is local") needs the proof's line at the root - the ladder's verdict, or the
+    injected path's first step - which `Search` does not expose (`RootChild::lo` is -1 for a child
+    with no node): not local. Open, for the proof channel's sign-off (H23) and, for the unclocked
+    throw, the main loop (decision 13's family would end it unscored too).
+482. **When run_timed gives up on the exception "a move needs a visit"** (the E11 review's S3;
+    §8.6 has the hard bound and no exception). The forced slices - before any root child has a
+    visit - run on whatever the time manager says, so a root that cannot get a visit held the run
+    open for ever (the correctness pass's probe: a caller's deadline already passed cut the root's
+    listing; some 200M playouts in 20 s, no child). Built: `run_timed` (and Python's
+    `run_timed_search`) stops between slices once the caller's persistent deadline has passed -
+    `TimeStop::Search`, `StopReason::Deadline`, as at `max_seconds`' - and where its forced slices
+    make no progress: one that leaves a root with no edge as it found it, or `kNoProgressSlices`
+    in a row with no root child visited (`StopReason::Exhausted`). `kNoProgressSlices` (16;
+    Python's `NO_PROGRESS_SLICES`) is a PLACEHOLDER, well above the two evaluator calls a visit
+    takes from an unevaluated root (issue 458). No game reaches the no-progress guard as built (a
+    root that cannot be listed is stuck, and its run stops Finished first; a listing a deadline
+    cuts stops at that deadline): it is a guard, tested in Python with stubbed slices.
+483. **What a deadline-cut check or verification leaves in a carried tree** (the E11 review's S5;
+    issue 406's deadline, which E11 made every match decision's hard bound). A turn start whose
+    check the deadline stopped was never terminal for the rest of the game (a node is checked
+    once), and an edge whose verification it cut was marked verified (never verified again): sound
+    rules - Unknown, never a verdict - but wrong search values from then on (the correctness pass's
+    probe: a mate in one after a cut, the deadline then cleared, 2048 more playouts - no mate seen,
+    the wrong move chosen). Built: `Node::recheck` - a check the deadline stopped, not the memory
+    ceiling, is made again when selection next reaches the node outside the deadline (never one
+    waiting for its evaluation), its earlier unknown verdict and any turn cap it let stand replaced
+    (`SearchStats::rechecked_turn_starts`); an unknown edge's verification is not started past the
+    deadline (a cut one adds nothing to the expansion's cheap tiers) and one the deadline cut is
+    not marked verified (`SearchStats::verifications_cut`). Nodes selection never reaches again
+    keep their unknown verdicts - harmless: no value flows through them. The Lazy SMP test runs
+    after this change (the scanner's search shares no code with it, but mcts.cpp changed).
 600. **Issue 535 resolved - D2's flat form, a node's creation and a re-root made
     exception-safe under an allocation failure - and two defects of its kind found beside
     it, fixed with it** (section 15.4's invariants under failure: visit counts consistent,
@@ -10485,6 +10875,126 @@ repository's copies, which upstream has still to take:
     where its code is ftxi's "and not the R1 check entries": that holds because ftxi's own later
     commit changed the pass set, so a bump of ftxi's pin past f66c4ee re-opens the R1 entries.
 
+*Edits 331-359: the search lane's step-2 block (E11 and E8; 2026-10-24).*
+
+331. **§8.6 "Allocation: the moves-left integral"** (register E7): now - "every board-move adds
+    a board ... Allocate this move's share as its cost over the summed cost of all remaining
+    moves". Proposed - add: "Our remaining actions are half the turns moves-left predicts (D4),
+    floored; N advances between two of ours by both players' boards per action (a branching
+    jump adds two boards - M22's measured moves per turn, then the pilot run's); the cost of an
+    evaluation is the dense model's shape with a fixed share that does not grow with N, its
+    scale measured online; under the ply split an action's plan is split over its decisions
+    (mandatory boards still to move, the submit, expected optional moves)." Why: issues 452,
+    454, 455, 457 (edit 203 gives "turn" its unit).
+332. **§13.1 6o and register E7**: now - "integral allocator vs flat-evals vs
+    flat-wall-clock". Proposed - define the arms: "flat-evals: equal evaluations per action at
+    the current cost, executed by evaluations; flat-wall-clock: equal time per action, executed
+    by the clock". Why: issue 453.
+333. **§8.6 "Guards"**: now - "the hard maximum is wall-clock and held tight at high N ... the
+    extension mechanism must never be able to flag itself". Proposed - add the operational
+    form: "the hard bound a multiple of the plan falling with N, capped at a share of the clock;
+    no batch starts that would end past it, and the rules engine's calls inside a batch stop at
+    it (Unknown, never a verdict); extensions judged at the soft bound, each kind at most once a
+    decision, by a share of the original plan, together capped". Why: issues 458, 464, 467.
+    (Revised by edit 342: the exception for a root with no visited child - review L1 of E11.)
+334. **§8.6's stop/extend table**: Proposed - a note under it: "Every threshold is a 6o
+    placeholder; as built - the visit gap against the remaining playouts; the KLD per root
+    visit over an interval; overlap the histogram intersection of the top two children's own
+    categoricals, churn the KLD per visit; the falling eval against the previous decision's
+    root value; instability the best child changing within a recent share of the root's
+    visits; the budget counted in work, max(evaluations, playouts / cap)". Why: issues 459-463,
+    465.
+335. **§11.4 "Knock-ons"**: now - "Time management loses the scanner as a second volatility
+    source above 50 boards; the network's own variance stands alone there (§8.6)". Proposed -
+    "... above 100 boards (Hunt answers under 100, the settling scans under 50); and while the
+    proofs may not drive time before the sign-off (issue 180's ruling), the network's variance
+    stands alone everywhere". Why: issues 468, 180. (Applied upstream by the spec review of
+    2026-11-15 with decision 12's reading - "above 100 boards", a proof extend-only before the
+    sign-off; the build follows it since 2026-11-23, issue 470.)
+336. **§8.6's closing paragraph and its "Guards"' second bullet** (v3's stale text, brief note
+    9b): now - "the chosen line is scanned exactly beyond tree depth"; "The §11.1 root-rule final
+    scan sits inside the hard bound ... its escalated budget is part of the move's allocation".
+    Proposed - "under v3 the line is scanned by Hunt (under 100 boards) and the settling scans
+    (under 50); above them it is not; their jobs run beside the search on their own cores and end
+    with the decision, inside the hard bound, nothing deducted from the allocation". Why: issue
+    466 (edit 204 covers the reserve). (Revised by edit 343: the jobs end at the re-root, not at
+    the hard bound, and cost the move no time - review L11 of E11.)
+337. **Register E7's text**: now - "... dual-source volatility with disagreement-extends-hardest
+    (the second source is now Hunt's and the settling scans' proofs) ... root-scan reserve".
+    Proposed - "... (the second source Hunt's and the settling scans' proofs - read only once
+    issue 180 is ruled; a hook, off) ... no root-scan reserve while Guard is adopted nowhere".
+    Why: issues 180, 306, 470 (with edit 204). (Applied upstream by the spec review of 2026-11-15
+    with decision 12's reading - register E7 now says "extend-only before the sign-off, H41",
+    which the build follows since 2026-11-23, issue 470.)
+338. **§12.3's match configuration and register I3**: Proposed - add "a clock: base plus an
+    increment per action, per side; a flag is a loss by the match's convention; time
+    management at match play only (self-play's budgets are PCR's)". Why: issues 456, 469.
+339. **§8.6's E8 paragraph** (the effort head): now - "plans to an upper quantile ... and treats
+    high censored-bin mass as a won't-resolve flag: plan for the hard bound and lean on LCB and
+    the root-rule scan rather than chase convergence". Proposed - add "as built (a prototype):
+    the plan E7's soft bound times 2 to the quantile bin's distance from this game's running
+    reference, clamped; won't-resolve either plans for the hard bound or keeps E7's plan (two
+    readings, 6v to choose), taking no overlap-with-churn extension; 'the root-rule scan' under
+    v3 is Hunt under 100 boards and the settling scans under 50". Why: issues 471, 472 (and 466).
+340. **Register E8**: now - "Difficulty-weighted allocation from the effort head's upper quantile;
+    censored mass = won't-resolve flag; three guards". Proposed - add "reference: this game's
+    running mean of predicted quantiles; won't-resolve's two readings parameterised; inert until
+    a driver supplies the root's effort distribution". Why: issues 471-473.
+341. **§13.1 6v**: Proposed - add "E8 at match play only (§12.5)", and that the effort label's
+    convergence is the search's smart-pruning or KLD stop, not a budget stop. Why: issues 474,
+    475.
+342. **§16's E7 as-built entry** ("E7, time management (on the search lane)"), where edit 333
+    landed when it was applied upstream (the spec review of 2026-11-15) - not §8.6 "Guards", as
+    this edit first said (retargeted 2026-11-24, the E11 review's S6). Now: "The hard bound is a
+    multiple of the plan that falls with N, capped at a share of the clock: no batch starts that
+    would end past it, and the rules engine's calls inside a batch stop at it — unknown, never a
+    verdict." Proposed - after it: "Match play's steps after the search sit inside it: the chosen
+    move's verification gets what it leaves, and where that is cut the most visited child known
+    legal is played. Two exceptions: a root with no visited child is searched until one has a
+    visit (a move must be chosen) - from an unevaluated root up to two evaluator calls, its own
+    leaf and then its children's - its own listing (its expansion, or the flat form's fallback
+    listing) running without the bound meanwhile and every other call keeping it; and where no
+    child is known legal once the verification is cut, nor the turn-start verdict's witness
+    continues, the side verifies its children in visit order against its remaining clock, within
+    the game loop's node budget, and flags only if that clock runs out - none shown legal, or no
+    move found, with time left ends the game unscored." Why: issue 458 as revised (review L1 of
+    E11: the one-batch bound was wrong, and is now measured; phase 2's H1 and M1; the second
+    review's S1 and S4; issues 480, 482).
+343. **§8.6 "Guards"' second bullet**, revising edit 336 (applied upstream in the spec review of
+    2026-11-15). Now (the spec's text): "**The provers run beside the search, inside the hard
+    bound.** Under v3 the chosen line is scanned for a refutation only under 50 boards, by the
+    settling scans that follow each change of the principal line; Hunt, under 100 boards, looks
+    for our own mate, not theirs. The provers' jobs run on their own cores and end with the
+    decision, and nothing is deducted from the move's allocation." Proposed - the bold lead
+    "**The provers run beside the search, costing the move no time.**", and for the third
+    sentence: "The provers' jobs run on their own cores; nothing waits for them, so they cost the
+    move no time, and nothing is deducted from the move's allocation; they end with the ladder's
+    decision (the re-root after the move) or their own budgets, not at the hard bound." The rest
+    of the bullet (the reserve) stands. Why: issue 466 as reworded (review L11 of E11; the bold
+    lead and the "now" text the E11 review's S6).
+344. **§16's H13/H43 entry** ("H13, H43: the asset map and Hunt's suggested lines each get an
+    on/off switch for 6e's match test (section 13.1)"): Proposed - move it from the not-yet-built
+    list to the built form: "the two switches (`asset_map`, on; `hunt_suggest`, off) reach every
+    driver - t5d-play, netplay with each side's own settings - and a runner plays the on/off match
+    with paired colours and one network; the match's starts, size and pass rule are pre-registered
+    before a trained network exists; Hunt's suggestions reach only a root not yet expanded (issue
+    477)". Why: issues 477, 479 (phase 1B (c)).
+345. **§16's H41/H43 entry and register H43** (now: register H43 "under H41's rule they may raise
+    a prior or extend the search - both hooks built and off"; §16 "As built both are off"):
+    Proposed - "the extend hook is built (the time manager's proof source, off; extend-only
+    before the sign-off); no hook carries a proof into a prior - Hunt's partial lines have their
+    own flag (`hunt_suggest`, off), and a proof-to-prior switch is not built (issue 478)". Why:
+    issues 478, 479, 470.
+346. **§8.6's frame sentence and register E7's "tight wall-clock hard bound"**, beside edit 342
+    (retargeted 2026-11-24, the E11 review's S6: the operational text is edit 342's, in §16's E7
+    entry). Now - §8.6: "Signals act on the soft bound; the hard bound is inviolable."; register
+    E7: "... extensions in evals, tight wall-clock hard bound; no root-scan reserve ...".
+    Proposed - §8.6: "Signals act on the soft bound; the hard bound is inviolable but for two
+    exceptions - a move needs a visit, and the move played must be known legal (§16's E7 entry)."
+    Register E7: "... extensions in evals, tight wall-clock hard bound (two exceptions: a move
+    needs a visit, and must be known legal - §16); no root-scan reserve ...". Why: issue 458 as
+    revised in phase 2 (the E11 review's H1 and M1) and by the second review's S1 and S4 (issues
+    480, 482); the spec and the register change together, upstream.
 *Edits 402 and up are the review's code round (2026-11-22 to 2026-11-23; "Where things stand",
 top), numbered from the main loop's block. The documents they name are the repository's revised
 copies of 2026-11-15, which upstream has still to take; section 16's preamble says an as-built
@@ -11023,6 +11533,47 @@ entry changes in the same edit as its code, which the standing rule defers to up
   Kairos shares two of the gaps; its report waits for its triage (CHECKPOINT 10). Checks: verify ok
   (its 17 notes, unchanged); gate --tier commit: oracle layer ok, SMOKE TEST - PASSED (baseline 41
   compared, 0 declined; calibration 1.25x). No harness code changed, so selftest was not run.
+
+- **2026-11-08 - E11, time management** (`lane/search`, step 2; register E7 with 6o's arms;
+  issues 452-470, edits 331-338). `t5d/timeman.hpp`: the moves-left integral allocator on a cost
+  model (dense shape plus a fixed share, its scale measured online), 6o's arms as switches
+  (`allocator`, `signals`), the stop/extend table and its spiral guard, the wall-clock hard
+  bound held tight at high N and given to the rules engine's calls inside a batch
+  (`Search::set_deadline`; `LegalityOptions::deadline`, new), the model clock (a node-limited,
+  bit-reproducible timed search), `run_timed`; match play's per-side clock (`PlayParams::clock`,
+  `GameEnd::Flag`; t5d-play `--time`); the C API (`t5d_time_params`, `t5d_timeman_*`,
+  `t5d_search_set_deadline`, `t5d_search_run_timed`; `t5d_search_params` unchanged) and its Python
+  mirror (`search.TimeManager`, `evaluator.run_timed_search`, netplay's `PlayConfig.time`). No
+  root-scan reserve (issue 306); the proof source a hook, off, refused without the proof channel
+  (issue 180 open). The brief's "E7's existing time management on main (stage E7, merged
+  2026-10-03)" was stage E7 of the rules engine (Q4 and the submit action); no time management
+  existed - E11 is the first. Written 2026-10-24 and checked then on fcedc2e + E11 (engine 700
+  of 700, long_detectors, the Lazy SMP test x3, pytest 1714 passed / 1 skipped, verify, gate
+  commit - all green); the session stopped at the account's usage limit before the commit, and
+  resumed: main taken by merge five times as it moved (M23: both sides of CHANGELOG,
+  BUILD_LOG and `evaluator.py`'s imports kept) - cb72413 (CHECKPOINT 9's brief), d8a54d3
+  (CHECKPOINT 10's documents, the Linux build fixes), 03eca7a (A5, the sharded network job),
+  d6cbdb7 (the done-means audit, Kairos round 2, the network job's shards by file) and faaa64e
+  (the upstream drafts, issue 602's two test tolerances) - and every
+  check re-run each time, all green: on cb72413 + E11 (2026-11-01: engine 700 of 700,
+  long_detectors, the Lazy SMP test x3, pytest 1714 passed / 1 skipped, verify, gate commit), on
+  d8a54d3 + E11 (2026-11-02: the same, pytest 1715 passed / 1 skipped with the cost-model test
+  added), on 03eca7a + E11 (2026-11-08: the same, pytest 1944 passed / 2 skipped in three
+  disjoint shards, `T5D_TEST_SHARD`); on d6cbdb7 + E11 (2026-11-09): engine 705 of 705
+  (`--werror`), long_detectors 2 of 2, the Lazy SMP test x3 (table above; a quiet machine), ruff
+  clean, pytest 1987 passed / 1 skipped (three disjoint shards: 662 + 1 skipped, 664, 661), verify
+  ok, gate commit ok (smoke test passed, 0 declined; proof channel DISABLED). Main's faaa64e came
+  after and changed no engine or library code (CI, documents, one known-divergence line, two
+  network tests' tolerances): the engine build is unchanged (ninja: no work), and its changed
+  tests (`tests/net/test_params.py`, `test_quant.py`) with `test_time_management.py`, ruff,
+  verify and gate commit were re-run on the merged tree - all green. One literal of a test
+  rewritten as `std::uint64_t{...}` for CI's Linux g++ (-Wsign-conversion, as main's 04ceab1).
+  **A download to report** (CHECKPOINT 9's rule, "nothing downloads without asking", arrived
+  after it): on 2026-10-24, after merging main 84ffecc (which added Kairos as the fifth
+  submodule), `harness.py sync` in this worktree cloned Kairos's pinned commit from
+  github.com/FirePlank/5d-chess-engine into the worktree's own module store
+  (`.git/worktrees/search/modules/oracle-kairos`, 90 MB) - not on the CHECKPOINT 9 section's
+  list. Nothing has been downloaded since; the store is kept (deleting it is the user's call).
 - **2026-11-08/09 - C26 and C27 behind their flags, with section 15.2's two rows** (`lane/net`;
   issues 259-275, edits 380-384). CHECKPOINT 9's ruling 2, built to the design a three-way panel and a
   judge chose. Five commits: issue 259 first - C3's root refresh was anchored on the pseudo-legal
@@ -11068,6 +11619,52 @@ entry changes in the same edit as its code, which the standing rule defers to up
   (now on main) marked resolved by issue 600.* *In the review round (next entry): "each part of
   the fix taken out alone fails one" did not hold - 24 of the review's 50 mutants survived;
   all are killed now.*
+- **2026-11-09 - E8 behind its flag** (`lane/search`, step 2; register E8, a prototype, 6v;
+  issues 471-475, edits 339-341). `TimeParams::difficulty_weighting` (off): the root's effort
+  distribution through the time context, the plan weighted by the quantile bin against this
+  game's running reference, clamped, floored and capped at E7's hard bound; won't-resolve's two
+  readings (`wont_resolve_policy`); the overlap-with-churn extension suppressed under it.
+  Off: E7's plan and tree bit for bit (tested on a sweep and a timed run). The C API's time
+  structs appended to (`t5d_time_params`, `t5d_time_context.effort`, `t5d_time_plan`) with the
+  Python mirror; `t5d-play --difficulty-weighting` (inert: the built-in evaluators give no
+  effort). The quantile is `heads.effort_quantile`'s, checked through the C API. Also: match
+  play's time managers are made from the clock's parameters only when the clock is on. Checks on
+  the tree before the commit (lane/search 6bdd838 + E8): engine 711 of 711 (`--werror`),
+  long_detectors 2 of 2, the Lazy SMP test x3 (table above; load 30-62%), ruff clean, pytest 1989
+  passed / 1 skipped (`T5D_REQUIRE_ENGINE=1`, three disjoint shards: 665, 662, 662 + 1 skipped),
+  verify ok, gate commit ok (smoke test passed, 0 declined; proof channel DISABLED).
+- **2026-11-09 - E11/E8 review fixes, phase 1** (`lane/search`; the review of faaa64e..f974d0c,
+  its findings and the main loop's decisions in the review's own file; issues 476-499 and edits
+  342-359 are this round's block). Phase 1 is M5-M8, L1 and L4-L13, one commit per group; phase 2
+  waits for `lane/engine` on main (the work item above).
+  - Fixes 1 - M5, M6, L7, L8(c, d): E7's stop/extend rules and allocator inputs, E8's floor and
+    cap and the strict hard bound, each as a test that kills its mutant (16 of 16 re-run on this
+    tree); the claims in the engine README, the E7 row and two CHANGELOG entries corrected.
+  - Fixes 2 - M7: the C API's step-API test under each of 6o's switches on a driver-supplied
+    clock, the C API's flags and wall clock, Python's driver-clock parity (`run_timed_search`'s new
+    `clock`), `ALLOCATORS` against the header, `TimeManager`'s own refusal (7 of 7 mutants killed).
+  - Stopped 2026-11-09 by the weekly limit during M8; resumed 2026-11-23 on the rewritten history
+    (2026-11-16: every id new - fixes 1 and 2 are now 3566c67 and 9630783, E11 6bdd838, E8 f974d0c,
+    main 05afde5 faaa64e; this lane's cited ids from before then were updated on 2026-11-23, save
+    where a line quotes the old one on purpose).
+  - Fixes 3 - M8, L6, L8(a, b, e): `MatchClock::clock`, a `Clock*` seam for match play's clock (the
+    decision run, charged and Guard's re-search bounded by it); the whole-decision charge, the
+    increment, a mid-action flag, the overrun counted, the hard bound binding in the end-to-end
+    games, t5d-play's arm in the record; netplay's flagged work counted, its flag documented, bad
+    `time_overrides` refused; netplay's increment, model clock and mid-action flag tested (12 of 12
+    mutants killed).
+  - Fixes 4 - L1, L4, L5: the fresh-root exception restated everywhere (two evaluator calls; edit
+    342 revises 333) and measured on an exhausted clock; `kMovesLeftMaxTurns` (issue 476) bounds
+    the plan; the KLD matches children by step (issue 459's note) - 7 of 7 mutants killed.
+  - Fixes 5 - L9-L13 (documents only): the three placeholders without an issue placed (issues
+    455, 456, 470); E11's `Spec:` line completed (§11.0 item 3, H37, H15, A6, D4, I4 - nothing
+    new proposed); issue 461 notes §12.4's tactical-volatility head is not read; "the ladder's
+    jobs sit inside the hard bound" reworded in six places (they end at the re-root and cost the
+    move no time; the synchronous mode on a wall clock noted; edit 343 revises 336); issue 467's
+    "not covered" list completed; "reads no proof" made "directly", with issue 186(a), and the
+    spec review's decision 12 on issue 180 noted where this lane's text cites it; E8's readings
+    (the extension base, a non-neutral spend, reading A's size) in issues 464, 471, 472 and the
+    header. Phase 1 is then done; phase 2 waits for the main loop's word.
 - **2026-11-09 - issue 535's review round** (`lane/fix535`; main faaa64e merged first, 8adf90b;
   issues 600, 603 and 604; no spec edit). The review of 2982287 (no HIGH, three MEDIUM, fourteen
   LOW) and the main loop's decisions on it: every finding fixed as decided, a commit per group -
@@ -11096,20 +11693,6 @@ entry changes in the same edit as its code, which the standing rule defers to up
   run's pre-registration (M25, M26); section 16 and Appendix A (M27). Spec issues 700-718; three independent reviews of the revision, their findings fixed before the report. No existing code changed - one module added, `train/completed_q.py`, I21's target as a function of
   a record, with 15 tests. Nothing committed; the `lane/fix535` merge left staged as found.
   `verify` ok, `rulebook` ok.
-- **2026-11-22 to 2026-11-23 - the review's code** (the user's instruction to this session: "make
-  the changes to code" the review left). Planned item by item, built by one agent per item in the
-  main working tree, each report checked before the next; the spec and the register not edited
-  (proposed edits 402-413, spec issues 719-733). Built: A8 at 1x; B15's per-axis far tables (on:
-  the v1 22,969,139) and its layer-shared arm; G11's count, its width padding (default 1) and its
-  once-per-forward structure (bit for bit); G12's pool; I21's completed-Q arm; I22's floors and
-  seeded starts; I23's pilot recipe; decision 10's tree form under MCGS; decision 13's target
-  side. Handed to the main loop's lanes, by agreement: decision 13's loops and C function
-  (lane/engine, with issue 408), the H13/H43 switches and the extend hook's gate (lane/search),
-  register E10's Gumbel arm (after those merge). Deferred: C17 with A5, I3. The session was
-  interrupted twice (2026-11-23): the two agents then running resumed from their transcripts, and
-  the final battery, cut off part-way, was resumed with its one finished shard kept. The main loop
-  concluded the `lane/fix535` merge meanwhile (d33a5c0). Nothing committed by this session.
-  Checks: "Where things stand", top.
 - **2026-11-17 - cited commit ids updated after the history rewrite of 2026-11-16** (`main` and
   each lane that holds work `main` lacks: one commit each with the same text, once it is free of
   uncommitted work; a lane with nothing of its own takes it from `main`). On 2026-11-16 the user
@@ -11124,7 +11707,60 @@ entry changes in the same edit as its code, which the standing rule defers to up
   replaced (mapped by tree and author date from the reflogs, 346 commits; the 121 ids it shares
   with `lane/net`'s replacement all equal); five lines quoting an old id "before the rewrite"
   keep it. Still to take it: `lane/engine` and `lane/search`, once their rounds are committed.*
+  *On `lane/search` 2026-11-23, after main 032db11 was merged in: 44 ids replaced by the same
+  mapping (13 distinct), seven lines quoting an old id on purpose kept.*
   *`lane/engine`'s own text took it on main after its merge (2026-11-23): 46 ids; `lane/search` updated its own (eb7353b).*
+- **2026-11-22 to 2026-11-23 - the review's code** (the user's instruction to this session: "make
+  the changes to code" the review left). Planned item by item, built by one agent per item in the
+  main working tree, each report checked before the next; the spec and the register not edited
+  (proposed edits 402-413, spec issues 719-733). Built: A8 at 1x; B15's per-axis far tables (on:
+  the v1 22,969,139) and its layer-shared arm; G11's count, its width padding (default 1) and its
+  once-per-forward structure (bit for bit); G12's pool; I21's completed-Q arm; I22's floors and
+  seeded starts; I23's pilot recipe; decision 10's tree form under MCGS; decision 13's target
+  side. Handed to the main loop's lanes, by agreement: decision 13's loops and C function
+  (lane/engine, with issue 408), the H13/H43 switches and the extend hook's gate (lane/search),
+  register E10's Gumbel arm (after those merge). Deferred: C17 with A5, I3. The session was
+  interrupted twice (2026-11-23): the two agents then running resumed from their transcripts, and
+  the final battery, cut off part-way, was resumed with its one finished shard kept. The main loop
+  concluded the `lane/fix535` merge meanwhile (d33a5c0). Nothing committed by this session.
+  Checks: "Where things stand", top.
+- **2026-11-23 - E11/E8 review fixes, phase 1B** (`lane/search`; the main loop's message after
+  phase 1: three items, each its own commit; issues 477-499 and edits 344-359 remain the block).
+  - (a) The user's ruling of 2026-11-23, reported by the main loop: the 2026-11-15 spec review's
+    23 decisions are rulings the build builds on (reversing one means editing the spec, the
+    register and the code together). This lane's notes that called decision 12 (issue 180)
+    "awaiting the user's confirmation" now say it was ruled by the user 2026-11-23 - in
+    `timeman.hpp`, the engine README, issue 180's E11 note and issue 470. No other review
+    decision is cited in this lane's text.
+  - (b) Decision 12 in E11: `proof_volatility` is taken with the proof channel off -
+    `TimeManager::begin`'s refusal and Python's two (`time_params`, `TimeManager`) lifted; the
+    snapshot reads the ladder's verdicts, withheld or injected, whenever the hook is on; they feed
+    the disagreement extension only. The solved-root stop (in `check` and `run_timed`) stays
+    behind the channel, and nothing else of a proof reaches the time manager. Re-checked: no
+    proof reaches a store (the solved store and Hunt's export are refused without the channel)
+    or a record (`GameRecord`, its decision log and `TimedRun` carry no bound; a match game with
+    the hook on withholds every proof and injects none). Issue 470, issue 180's E11 note, issue
+    468, the E7 row, edits 335 and 337 (applied upstream with the ruling's reading), the header,
+    the C header and the README updated. Three mutants killed (the extension needing the channel,
+    the solved stop without it, the hook's read needing it).
+  - (c) The H13/H43 match-test switches (handed over from the session that built the review's
+    code; its plan verified against this tree - the summary struct, t5d-play's flags and netplay's
+    loop are where it says, line numbers apart). t5d-play `--hunt-suggest` (the Engine header
+    names "hunt suggestions"); `t5d_search_summary.suggestion_edges` appended after
+    `steered_visits` (layout check, `capi.py`, `SearchInfo`); netplay's `hunt_suggest`,
+    `search_overrides`, `side_overrides` (match play; `RESERVED_OVERRIDES` refused), per-side
+    counters (`asset_boosted_edges`, `suggestion_edges`, `turn_start_decisions`,
+    `carried_turn_starts`) and the proofs withheld and injected, the record's `Steering` header
+    (only when a setting is not the default), `--hunt-suggest`; the new
+    `t5d.engine.switch_match` (paired colours, one network, the tally from the ON side, a
+    command line). The plan's recommended answers taken: no re-steer at a carried root (issue
+    477, pinned by test), no proof-to-prior hook (issue 478), the extend hook gated by decision 12
+    (done in (b)), no match protocol invented, no C++ two-setting match, the ABI append. Not
+    built, as the plan says: `GameRecord::suggestion_edges` and t5d-play's summary line (after
+    the lanes' merges). New issues 477-479, edits 344-345; H13 and H43 rows. Tests: six in
+    `engine/tests/test_steering_switches.cpp`, the layout and t5d-play checks,
+    `python/tests/engine/test_switch_match.py` (8); four mutants killed (the summary's counter
+    unfilled, a side's overrides dropped, `--hunt-suggest` a no-op, the colours not swapped).
 - **2026-11-23 - four answers from the user** (to this session, after the code round's report;
   "Where things stand", top): the padding's default stays 1 with 8 on the compiled GPU kernel
   (issue 732, edit 414); the human games are not training data, so not a source of seeded starts
@@ -11132,6 +11768,16 @@ entry changes in the same edit as its code, which the standing rule defers to up
   (issue 724, edit 416) and register E10 becomes E12 (issue 730, edit 412). Comments and
   docstrings only in the code (`net/config.py`, `engine/pool.py`, `train/recipe.py`,
   `train/seeded.py`, `tests/net/test_kernel_pad.py`); no behaviour changed. ruff clean on the five files; the kernel-padding, recipe and pool test files 67 passed; `verify` ok. Left unstaged for the main loop to commit.
+- **2026-11-23 - main 032db11 merged into `lane/search`** (M23; the main loop's word, ahead of
+  phase 2's merge): issue 535's fix, the 2026-11-15 spec review and its code round (the tree form
+  under graph search), the user's four answers, the cited-ids update. CHANGELOG rebuilt by
+  heading, this file's four conflicts kept on both sides (the Lazy SMP rows and the session
+  entries by date, this lane's issue and edit blocks before main's), the package docstring's two
+  bullets; no code conflict; `docs/design/` main's as it is.
+  Checks on eb7353b (the merge and the cited-ids update): engine 774 of 774 (`--werror`),
+  long_detectors 2 of 2, the Lazy SMP test x3 (table above), ruff clean, pytest 219 passed (the
+  time, search-API, netplay, decision-log, switch-match and pool files), verify ok, gate commit
+  ok (smoke test passed, 0 declined; proof channel DISABLED).
 - **2026-11-23 - CI on main after the code round** (issue 735). The first CI on the review's code
   (main 032db11): the oracle gate's commit tier passed; the network job failed one test of 2,291
   on Linux - the far tables' fingerprint, 2.0e-9 off on a 108-value sum against a 1e-9 bound set
@@ -11289,6 +11935,41 @@ entry changes in the same edit as its code, which the standing rule defers to up
   ok (SMOKE TEST - PASSED, baseline 41 compared, 0 declined; proof channel DISABLED). No truth
   source changed (main changed none since af0c19b, and `mcts.cpp` is not one) and nothing here
   touches the scanner, so neither the nightly gate nor the Lazy SMP test is owed.
+- **2026-11-23 - E11/E8 review fixes, phase 2: main d4c7fb9 merged into `lane/search`** (M23;
+  `lane/engine` on main: issue 406's deadline, MT-01/02/03, the engine review's fixes). The
+  reconciliation (M2's decision) in the merge: one deadline mechanism - `deadline_after` for
+  every conversion; `Search::set_deadline` persistent; `run()` the earlier of it and its own
+  `Limits::seconds` inside its batches, restoring it on return, its own alone between batches;
+  `run_timed` restoring the caller's deadline, taking a game's `max_seconds` as its slices'
+  seconds, and running a slice before any root child has a visit without the hard bound;
+  E11's tier-2 gating kept; Flag and TimeLimit both. Conflicts: `legal.hpp`/`legal.cpp`
+  (main's `search_finish` taking the time left, saturated at 0), `mcts.cpp` (main's `timed()`
+  helpers; one `deadline_` member), `selfplay.cpp` (main's `seconds_left` with E11's clock),
+  this file and the CHANGELOG. A silent conflict the tests found: `EvalCache::find` now takes the
+  candidate digest, and `Search::root_child_value`'s old call still compiled (a bool converted
+  to it) and found nothing - the root child's categorical is now read by `EvalCache::find_value`,
+  whatever the candidate list. M3's tests (the hard bound inside every batch, restored after; the
+  forced slice; a thrown batch; run()'s own deadline inside the persistent one; the C API's
+  cleared deadline) added in the merge.
+  - Phase 2's fixes on the reconciled tree: H1 (the clocked verification under the decision's hard
+    bound, the fallback to a child known legal, the second exception - a search against the side's
+    remaining clock, a flag never a throw; netplay through the new `t5d_search_verify_within`);
+    M1 (the forced slice without the bound; a clocked decision with no visited child searching on
+    and flagging); M3's Python test; M4 (the duplicate cut to the persistent deadline's reach, the
+    cheap-tiers equality and the mating turn start added); L2; L3 (a 0 s bound 1e-9 s in Python).
+    H1 part 5 left to `lane/engine`'s decision 13 (issue 456). Issues 456, 458, 467; edit 346.
+  - The reviewers' survivors re-run on the reconciled tree (this lane's runner; ten adapted to
+    the rewritten code): 37 killed, Y02 obsolete (decision 12 removed its refusal), L02
+    "equivalent" (issue 406's per-move gate before every search; the root's single search given no
+    time left settles nothing) - the M4 test gained the reviewers' 120-board position for it.
+    (Corrected by the E11 review's S8: equivalent in practice only - the state's own searches reach
+    the guard, and the Budgeter runs up to 64 nodes before it reads its clock; made testable.)
+  - Checks on b75209a: engine 834 of 834 (`--werror`), long_detectors 2 of 2, the Lazy SMP test
+    x3 (table above; a quiet machine), ruff clean, pytest 222 passed (the time, search-API,
+    netplay, decision-log, switch-match and pool files), verify ok, gate commit ok (smoke test
+    passed, 0 declined; proof channel DISABLED). The nightly gate is not owed: the merge brought
+    `lane/engine`'s truth sources unchanged and this lane changed none. Decision 13 (H1 part 5) is
+    not on main yet (main has since taken the net lane, 98f68c1); it is adopted when it lands.
 - **2026-11-23 - C26/C27's review round** (`lane/net`; issues 276-299 and edits 385-399 are this
   round's block). Main 4e9267e merged first: two conflicts, both sides kept (CHANGELOG by heading,
   the lane's entries above main's, the cited-ids entry once with both notes; BUILD_LOG line by
@@ -11360,3 +12041,73 @@ entry changes in the same edit as its code, which the standing rule defers to up
   clock rule at a verdict, the seam, `TurnWitness`, `verdict_params`, `replay_problems` and the
   `TerminalNodes` header - whichever lands second reconciles them. Checks: as issue 414's last
   paragraph.
+- **2026-11-24 - The review of E11/E8 phases 1, 1B and 2 (`rv-search2`): main b18a7b3 merged into
+  `lane/search` first** (M23; decision 13's game loops and their review round, issues 413-414).
+  Numbering for the round: issues 480-499, edits 347-359. Conflicts: `selfplay.cpp` (7: decision
+  13's verdict budget, `make_legal`'s witness step and `off_tree`, its end after a stopped action,
+  beside E11's clock and H1's policy - where no child is known legal the witness first, then the
+  search against the remaining clock, then the unsettled choice; the memory-ceiling throw gone),
+  `netplay.py` (15: the same order; `_legal_against_the_clock` returns None where it threw; one
+  turn-start copy for a flag and an unsettled choice; both header sets), the C API and its mirror
+  (`t5d_search_verify_within` beside main's two functions, given decision 13's `checks` and `nodes`;
+  `Search.verify` one method), t5d-play's usage, the README's synopsis, CHANGELOG (by heading, the
+  lane's entries on top) and this file (both sides). H1 part 5 in the merge (issue 456): the clocked
+  verdict is the unclocked loop's - within `terminal_nodes`, charged to neither side, unsettled
+  ending the game unscored with the clocks untouched; tested in C++ (a clock that moves at every
+  read) and in netplay (wall and model clocks). Two of decision 13's tests found the merge's netplay
+  passing the verification's `seconds` positionally and always: it is passed by keyword, and only on
+  a clocked decision with wall time. Checks on the merge: engine 847 of 847 (`--werror`); pytest -
+  `test_time_management`, `test_terminal_budget`, `test_switch_match`, `test_search_api`,
+  `test_netplay`, `test_decision_log` and the train files `test_generator_budget`, `test_unscored` -
+  all passed (T5D_REQUIRE_ENGINE=1). The round's full checks run at its end.
+  - **S1** (HIGH): the flag only when the side's clock has run out; a search that cannot move with
+    time left unscored (`Unsettled::Search`, issue 480; the no-visit cap only on a clock that does
+    not advance); every verification stopped with time left unscored (`Unsettled::Choice`); the
+    proof channel's solved root not local to play (issue 481). Tests in C++ and netplay.
+  - **S2**: Python's forced-slice condition the engine's; `t5d_search_deadline` and
+    `t5d_search_set_deadline_at` (appended) so that `run_timed_search` restores the caller's
+    deadline exactly; `tm.end` however the run returns (Python and C++). probe_py1 adopted.
+  - **S3**: `run_timed` stops once the caller's deadline has passed, and on forced slices that make
+    no progress (issue 482); mirrored in Python. The correctness pass's p1wall/p1model adopted.
+  - **S4**: exception (1) lifts the bound for the root's own listing alone
+    (`Search::lift_root_listing`, `t5d_search_lift_root_listing`; run_timed and Python); the spec
+    pass's probe_forced_scope numbers as a test (flat: 7 unknown verdicts; Two Timelines
+    board-move: 10 unknown edges below the root).
+  - **S5**: a deadline-cut turn-start check made again outside the deadline, a cut verification
+    not marked done (issue 483); the correctness pass's p5 adopted.
+  - **S6**: edits 342 (now §16's E7 entry), 343 (the spec's own text, its bold lead) and 346 (the
+    frame sentence and register E7) rewritten; "not yet on main" dropped; D13 -> H22.
+  - **S7**: the mutation pass's candidate tests adopted (A05 under S4, A08, A09, B05, B16, B17,
+    C01-C03, D03, Y01, Y07, Y09, Y15, Y17) and the described ones written (B07; B04 and B15 through
+    `detail::DecisionClock`; D06 through `proof_gap`); H1 part (6)'s charge and overrun asserted. The
+    clocked no-child order changed: the clock's search before the witness (issue 458).
+  - **S8**: L02's guard kept, `LegalityStats::root_searches_past_deadline` counting the state's own
+    searches it refuses; the M4 test asserts it; the phase-2 CHANGELOG's reason corrected
+    ("equivalent in practice": up to 64 nodes before the Budgeter reads its clock).
+  - **The LOW findings** (L1-L9): the model clock charges the decision's whole work; `run_timed`
+    validates `max_seconds` before `tm.begin`; the Steering header for `asset_map` off, the Engine
+    header naming `time_overrides`, switch_match refusing `--switch asset_map --no-assets`;
+    `suggestion_edges` once per edge, a positive boost only; `--model-clock`'s determinism stated
+    (the synchronous ladder not local); netplay's wall-clock no-visit rounds bounded by the clock;
+    the README's stale proof-hook refusal gone; Guard's scan capped by the bound; `hunt_suggest`
+    refused outside match play (issue 477, the H43 row).
+  - **The survivors and the checks.** The 26 survivors and L02 re-run with the mutation pass's
+    runner on a fresh copy of 941af12: 27 of 27 KILLED by named tests (the table is in CHANGELOG;
+    Y03 re-expressed, its fault gone with S4). Checks on 941af12 (the round's final code; the verification commit after it changes one comment
+    in `selfplay.hpp`, the clock note brought to S7's order): engine 872 of 872 (`--werror`);
+    long_detectors 2 of 2; the Lazy SMP test x3 (1 thread 293 each run, 5 threads 315 / 318 / 317; a
+    quiet machine - the build log's table); ruff "All checks passed!", "143 files already formatted";
+    pytest - the whole `tests/engine` directory and the train files that play or read games
+    (test_generator_budget, test_unscored, test_mechanics, test_records, test_seeded_starts,
+    test_selfplay_pool, test_steering, test_targets, test_trainer, test_completed_q_arm,
+    test_target_arms, test_qat) - 808 passed, 1 skipped (test_records' opt-in T5D_RECORDS run) in 27
+    minutes, T5D_REQUIRE_ENGINE=1; verify ok (exit 0; it notes 17 problems in the required sets of the
+    tiers that can enable the proof channel, which verify itself does not fail on - nothing under
+    `oracles/` touched here); gate commit "oracle layer
+    [commit]: ok", SMOKE TEST - PASSED (baseline 41 compared, 0 declined), proof channel DISABLED.
+    The nightly gate, owed (`legal.cpp`, a truth source, changed with S8's statistic): "oracle layer
+    [nightly]: ok", engine differential PASSED (baseline 41 compared, 0 declined; Standard - Half
+    Reflected and Standard - Reversed Royalty gated, as before), proof channel DISABLED.
+    **For the main loop:** the clocked no-child order (S7: the clock's search before decision 13's
+    witness) to confirm; issue 481 (the proof channel's solved root, and the unclocked loop's
+    throw with no visited child) open; issues 480 and 482 are placeholders.

@@ -10,6 +10,815 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - Build log: the current state at the search lane's merge
+
+`docs/BUILD_LOG.md`:
+- `lane/search`'s line under "Now" says what merged: E11 and E8, with their review's three phases
+  and its second round, decision 12's extension, the steering switches and H1 part 5 under
+  decision 13. It also names the user's questions (issues 453, 456, 472) and the lane's next work:
+  MT-03's settling-scan part, and the second round's two weak tests (L1, L8).
+- `lane/engine`'s line says decision 13 merged (b18a7b3) and that register E12 is next.
+- "Work items, by lane" follows the same changes.
+- Issue 458's S7 note records the main loop confirming the order. Where no child is known legal,
+  a clocked decision searches against its clock first and plays decision 13's witness only after
+  that search; then it ends unsettled.
+- The Lazy SMP timing log gains the merge battery's row: 1 thread 293, 5 threads 312 / 314 / 317,
+  pass x3. The rest of the battery: engine 872 of 872 at `--werror`; pytest on tests/engine and
+  tests/train, 922 passed and 1 skipped; ruff clean; verify ok; the commit gate ok; the nightly gate
+  PASSED (legal.cpp is a truth source); proof channel DISABLED.
+
+Spec: no part of the spec describes the build log's bookkeeping.
+
+### 2026-11-24 - E11 review round 2, verified: the survivors re-run and the round's checks
+
+The review's 26 survivors and the lane's L02, re-run with the mutation pass's runner
+(`rv-search2/mutation/mutcheck.py`, copied; a mutant's own pytest `-k`) on a fresh `git archive`
+of 941af12, each mutant re-expressed against the code as it now stands: **27 of 27 KILLED**, each
+by its named test. A05 (the forced slice's root listing lifted to none), A08 (the bound set
+without the steady-clock guard), A09, B04 and B15 (`DecisionClock`), B05, B07, B10 and B11
+(`cannot_move`), B16, B17, B19, C01-C03, D03 and D06 (`proof_gap`), L02 (S8's statistic) in C++;
+Y01, Y03, Y07, Y09, Y10, Y12, Y15, Y17 and Y25 in Python, run on a pristine library (rebuilt
+after the C++ mutants; the baseline of both test files passing on it first). Y03's own fault - the
+bound re-set from now after the forced slice - no longer exists: since S4 the bound is set once
+and only the root's listing is lifted and dropped; it was re-expressed as the lift never dropped.
+
+Checks on 941af12 (the round's final code; the verification commit after it changes one comment
+in `selfplay.hpp`, the clock note brought to S7's order): engine 872 of 872 (`--werror`);
+long_detectors 2 of 2; the Lazy SMP test x3 (1 thread 293 each run, 5 threads 315 / 318 / 317; a
+quiet machine - the build log's table); ruff "All checks passed!", "143 files already formatted";
+pytest - the whole `tests/engine` directory and the train files that play or read games
+(test_generator_budget, test_unscored, test_mechanics, test_records, test_seeded_starts,
+test_selfplay_pool, test_steering, test_targets, test_trainer, test_completed_q_arm,
+test_target_arms, test_qat) - 808 passed, 1 skipped (test_records' opt-in T5D_RECORDS run) in 27
+minutes, T5D_REQUIRE_ENGINE=1; verify ok (exit 0; it notes 17 problems in the required sets of the
+tiers that can enable the proof channel, which verify itself does not fail on - nothing under
+`oracles/` touched here); gate commit "oracle layer
+[commit]: ok", SMOKE TEST - PASSED (baseline 41 compared, 0 declined), proof channel DISABLED.
+The nightly gate, owed (`legal.cpp`, a truth source, changed with S8's statistic): "oracle layer
+[nightly]: ok", engine differential PASSED (baseline 41 compared, 0 declined; Standard - Half
+Reflected and Standard - Reversed Royalty gated, as before), proof channel DISABLED.
+
+Spec: none - tests and their record. No proposed edit; no measured figure.
+
+### 2026-11-24 - E11 review round 2, the LOW findings L1-L9
+
+The review's nine LOW findings, each as the main loop decided.
+- **L1** (SC-L1): the model clock charges a decision's whole work since it began - the timed run,
+  the re-runs and no-visit rounds after it, Guard's re-search - at its plan's price, in `play_game`
+  and netplay (it charged the timed run's alone, so a flagged decision could leave its clock
+  positive).
+- **L2** (SC-L3): `run_timed` validates `max_seconds` before `tm.begin` - a refusal leaves the
+  manager out of a decision (E8's reference uncounted).
+- **L3** (SC-L4, SS-F11): netplay's Steering header is written for `asset_map` off too, and the
+  Engine header names non-default `time_overrides` (e.g. `proof_volatility`); `switch_match`
+  refuses `--switch asset_map` with `--no-assets`, which it silently overrode.
+- **L4** (SC-L5): `suggestion_edges` counts an edge once, and only where `hunt_suggest_boost x
+  weight > 0` raised it - in both the board-move and the flat paths.
+- **L5** (SC-L6): `--model-clock` is deterministic unless Hunt's suggestions or the proof hook read
+  the ladder's threaded jobs; making only the ladder synchronous under the model clock reaches into
+  how the search runs its jobs (the ladder's options must match the search's) - not local, so
+  t5d-play's help and the README state the condition and point at `--synchronous`.
+- **L6** (SS-F6): netplay bounds each wall-clock no-visit round by the side's clock inside the
+  batch (`set_deadline` around it, the caller's deadline restored with `set_deadline_at`), as
+  `play_game` does.
+- **L7** (SS-F9): the README's stale "TimeManager's own refusal of the proof hook" is gone.
+- **L8** (SS-F10): Guard's scan after the search (the proof channel on only) gets no more than the
+  hard bound leaves, on a clock with wall time; the synchronous mode's scan stays node-budgeted.
+- **L9** (SS-F12): `hunt_suggest` is refused outside match play - t5d-play's `--hunt-suggest`
+  without `--match`, netplay's self mode, an override included (register I2 and decision 14: self-play
+  does not steer as built); issue 477 and the H43 row record it.
+- Tests: the model clock's charge equal to the decision's whole work at the plan's price (C++,
+  netplay - on a decision with nothing after its timed run, so the test pins the formula; the case
+  with work after the run is not built here); `run_timed`'s refusal of `max_seconds` NaN leaving the manager out of a decision; the
+  headers and the switch_match refusal; `suggestion_edges` with a zero boost and with two
+  suggestions sharing an edge; netplay's wall-clock round under the clock's deadline; the
+  `hunt_suggest` refusals (t5d-play, netplay). L8 has no test: a Guard scan long enough to time.
+
+Spec: register I2 and §11.2's 6e (L9's refusal - as built, the register's own words; no edit);
+§8.6's hard bound as built (L8: Guard no exception to it - issue 458's two exceptions stand). No
+proposed edit; no measured figure.
+
+### 2026-11-24 - E11 review round 2, S8: L02's guard kept and made testable
+
+The review's S8 (SS-F13). L02 - `legal.cpp`'s search starting past the deadline - was called
+equivalent in phase 2; it is equivalent only in practice: the state's own searches (before tier 1
+and in tier 3) reach the guard, and with no time left the Budgeter still runs up to 64 nodes
+before it first reads its clock. The guard stays and is now visible:
+`LegalityStats::root_searches_past_deadline` counts those searches it refuses (a move's search is
+never reached past the deadline: its loop stops first). The M4 test's four positions refuse some,
+with no tier-3 node spent - L02's mutant leaves the count at 0. The phase-2 entry's reason for the
+guard is corrected in place.
+
+Spec: none - a classification statistic and its test (issue 406's deadline, §11.0's rules engine
+unchanged). No proposed edit; no measured figure.
+
+### 2026-11-24 - E11 review round 2, S7: the mutation pass's candidate tests adopted, the ones it described written
+
+The review's S7 (the mutation pass, SS-F2). Its candidate tests adopted, each against the survivor
+it kills, the probes renamed and placed with their kind:
+- **A05** (the forced slice's lift, under S4: the root's own listing runs under the caller's
+  deadline, every other call under the bound - observed through the new
+  `Search::root_listing_deadline()`), **A08** (the model clock keeps the caller's deadline), **A09**
+  (`max_seconds` folded into every slice), **B05** (most visited verified first), **B16** and
+  **B17** (a flagged decision charged its whole time and counting its work), **D03** (the hook
+  reads proven verdicts only) in `test_timeman.cpp`; **C01-C03** (`t5d_search_verify_within` with no
+  deadline is the exact verify under the ceiling; its seconds are seconds) in `test_capi_search.cpp`,
+  capped at a dozen children of the Q3 node; **Y01**, **Y07**, **Y09** in `test_time_management.py`,
+  **Y15** and **Y17** in `test_switch_match.py` (Y03, Y10, Y12 and Y25 came with S1 and S2).
+- **Written where the pass described them**: **B07** - an evaluator that lures the search to an
+  illegal move from a lower prior (so it sits after the legal one) under the visits rule, with the
+  hard bound the soft one so that the pick's verification is cut: the lure is proven illegal
+  against the clock and removed, and the legal move is played (checked against the mutant: with the
+  stale index another child is played). **B04** and **B15** through `detail::DecisionClock`, the
+  clocked decision's clock as netplay's `_DecisionClock` (its flag reads the side's clock, never
+  the hard bound; a budget's deadline is the earlier of the clock's and the game's). **D06**
+  through `proof_gap()`, the hook's reading pulled out of `snapshot` (the largest proven gap, not
+  the last). **B10/B11** came with S1 (`detail::cannot_move`).
+- **H1 part (6)'s test** asserts the charge (the decisions' whole time on the match clock) and the
+  overrun (the forced slice past the bound counted).
+- **One order changed with them** (found by B05's premise): the merge put decision 13's witness
+  step before H1's search against the clock, so at the Q3 node - whose verdict has a witness - the
+  witness was always played and the search never ran. A clocked decision now searches against its
+  clock first (the most visited child shown legal is the search's own choice, as `make_legal`
+  prefers the most visited child known legal to the witness) and plays the witness only when that
+  finds nothing with time left; with neither, the choice is unsettled. The same in netplay. The cost:
+  a side can spend clock where a free legal move existed - for the main loop to confirm.
+- Docs: `selfplay.hpp`, `timeman.hpp`, `mcts.hpp`, netplay's docstrings, the README.
+
+Spec: none beyond what S1-S6 named - tests, two pure functions for them, and the order of the
+clocked loop's no-child steps (H1's second exception and H22's witness: issue 458 updated). No
+proposed edit; no measured figure.
+
+### 2026-11-24 - E11 review round 2, S6: the proposed edits point at the spec's text
+
+The review's S6 (SS-F4). Proposed edits 342, 343 and 346 pointed at the wrong text: edit 333
+landed upstream in §16's E7 as-built entry, not in §8.6 "Guards", where 342 and 346 aimed, so §16
+would have kept the hard bound with no exceptions; 343's "now" was its own proposal, not the
+spec's, and missed the bullet's bold lead "inside the hard bound"; 346 had no "now" text; §8.6's
+frame sentence ("the hard bound is inviolable") was left unqualified; and 342 and 343 still said
+the review's edits were "not yet on main".
+- **Edit 342** now targets §16's E7 entry, quoting its sentence on the hard bound, and proposes
+  the two exceptions as built after this round: the root's own listing alone lifted (S4), the
+  search against the remaining clock within the node budget, and the unscored ends (S1).
+- **Edit 343** quotes §8.6 "Guards"' second bullet as the spec has it, and proposes its bold lead
+  ("costing the move no time") with its third sentence.
+- **Edit 346** quotes §8.6's frame sentence and register E7's text, and qualifies both with the
+  two exceptions - the spec and the register together, upstream.
+- "Not yet on main" is gone; the phase-2 entry's `Spec:` line names decision 13 as H22, not D13.
+
+Spec: §8.6 (frame sentence, "Guards"), §16's E7 entry, register E7 - edits 342, 343 and 346
+rewritten (proposed, upstream). No code; no measured figure.
+
+### 2026-11-24 - E11 review round 2, S5: a check or verification the deadline cut is made again outside it
+
+The review's S5 (SC-M4). Since E11 made the hard bound every match decision's deadline, any batch
+crossing it could leave a turn start's check cut - never terminal for the rest of the game, since
+a node is checked once - and an edge's verification cut but marked done, never verified again.
+The rules stayed sound (Unknown, never a verdict); the search's values did not (the correctness
+pass's probe: a mate in one, the deadline passed in a first run and then cleared, 2048 more
+playouts - no checkmate seen, the mating child not chosen).
+- **A deadline-cut turn-start check** (not one the memory ceiling stopped) marks its node
+  (`Node::recheck`, as `FlatNode::relist` marks a cut listing); selection reaching it outside the
+  deadline checks it again, its earlier unknown verdict - and a turn cap it let stand - replaced
+  (`SearchStats::rechecked_turn_starts`). Never a node waiting for its evaluation.
+- **`e.verified` only for a verification the deadline did not cut**; none is started past the
+  deadline, since a cut one adds nothing to the expansion's cheap tiers
+  (`SearchStats::verifications_cut` counts the ones cut midway).
+- Tests: the probe's p5 - the mates found and the mating child chosen after the cut, each
+  rechecked node's unknown verdict replaced; an unknown edge left unverified past the deadline and
+  decided once it has not passed.
+- Docs: `t5d/mcts.hpp` (`set_deadline`), the README (issue 406's paragraph), `mcts.cpp`; issue 483.
+- `mcts.cpp` changed: the Lazy SMP test is owed and runs in the round's end checks.
+
+Spec: register H37 (Unknown, never a verdict - unchanged) and §8.6's hard bound as built (what it
+cuts is made again outside it - issue 483). No proposed edit; no measured figure.
+
+### 2026-11-24 - E11 review round 2, S4: exception (1) lifts the hard bound for the root's own listing alone
+
+The review's S4 (SS-F3). The forced slice - before any root child has a visit - ran without the
+hard bound for every call in it, where the decision (M1's: "at the root, the forced first slice
+lists without the deadline") lifts it for the root's listing only: up to `batch_size - 1`
+children's turn-start checks at `mate_nodes` each, their classifications and the flat form's
+listings ran unbounded - the high-N regime §8.6 holds tight.
+- **`Search::lift_root_listing(deadline)` / `unlift_root_listing()`** (`t5d/mcts.hpp`): while
+  lifted, the root's own listing - its expansion (the legal-moves filter's classification) and,
+  under the flat form, its fallback listing - runs under `deadline` (with `run()`'s own
+  `Limits::seconds`) in place of the persistent deadline; every other call keeps the persistent
+  one. The C API appends `t5d_search_lift_root_listing`; Python mirrors it (`Search.lift_root_listing`).
+- **`run_timed`** keeps the bound as the search's deadline for the whole run and, for a slice
+  before any root child has a visit, lifts the root's own listing to the caller's deadline; it
+  unlifts on return, however it returns. Python's `run_timed_search` does the same.
+- The flat generator is node-budgeted, never timed (issue 467), so no bound reaches it either way.
+- Tests: the spec pass's probe_forced_scope (with the bound a deadline already passed, run_timed's
+  forced slice lists the root fully and visits 7 children; below the root the bound holds - the
+  flat form's 7 unknown verdicts, Two Timelines' 10 unknown edges, as with the deadline inside;
+  before S4, none); the bound in every slice, the forced ones included; the C API's lift by its
+  effect (a passed deadline cuts a flat root's fallback listing, lifted it lists); Python's calls
+  by spy.
+- Docs: `t5d/mcts.hpp`, `t5d/timeman.hpp`, `capi_search.h`, the README, issue 458.
+
+Spec: §8.6's guards and §16's E7 entry (exception (1)'s scope; the edit's text is S6's - edits 342
+and 346 retargeted there). No measured figure.
+
+### 2026-11-24 - E11 review round 2, S3: run_timed stops once the caller's deadline has passed, and where its slices make no progress
+
+The review's S3 (SC-M2). `run_timed` looped for ever when the caller's persistent deadline had
+already passed: the forced slice (no root child visited) ran under it, a flat root whose listing
+it cut was never re-listed, and the time manager never stops while no child has a visit (the
+correctness pass's probe: some 200M playouts in 20 s, wall and model clock).
+- **The caller's deadline passed** stops `run_timed` between slices - `TimeStop::Search`,
+  `StopReason::Deadline` - as `max_seconds`' does.
+- **A no-progress guard**: a forced slice that leaves a root with no edge as it found it, or
+  `kNoProgressSlices` (16, a placeholder - issue 482) in a row with no root child visited, stops it
+  (`TimeStop::Search`, `StopReason::Exhausted`). No game reaches it as built; it is a guard.
+- **Python's `run_timed_search`** mirrors both ("deadline", "exhausted";
+  `evaluator.NO_PROGRESS_SLICES`).
+- Tests: the probe's setup (a flat root, `generator_nodes` 1, a caller's deadline already passed)
+  returning on the wall clock and the model clock with no slice run, its deadline restored and the
+  decision ended (C++, under a watchdog; Python); Python's guard with stubbed slices, at once for an
+  edgeless root and after 16 slices otherwise. (Ruff's two simplifications of this change - an
+  `if` and a `with` merged - were committed after it: the change went in without its ruff run.)
+
+Spec: §8.6's guards (the hard bound and its exceptions as built - issue 482 records the guard; no
+edit: the exceptions' text is S6's). No proposed edit; no measured figure.
+
+### 2026-11-24 - E11 review round 2, S2: Python's timed run is the engine's - its forced slice, the caller's deadline restored, the decision always ended
+
+The review's S2 (SC-M1, SS-F7, SC-L2, observation 1). Python's `run_timed_search` could hang where
+the engine's `run_timed` returns, and it cleared the caller's deadline instead of restoring it.
+- **The forced slice's condition** is the engine's - no root child visited. Python's own
+  (`root_visits < 2` as well) kept the hard bound inside the slices at a carried flat root waiting
+  to be re-listed, which then never was, and the run never ended (the correctness pass's probe:
+  1.6M playouts in 20 s, no child).
+- **A deadline getter in the C API** (appended): `t5d_search_deadline` reports the persistent
+  deadline as a steady-clock time point in nanoseconds (`T5D_NO_DEADLINE`: none) with the seconds
+  left, and `t5d_search_set_deadline_at` sets such a point back - the same deadline, not one
+  recomputed from now, which a getter alone would give. Python mirrors both (`Search.deadline`,
+  `Search.set_deadline_at`, `_SIGNATURES`, `capi.T5D_NO_DEADLINE`).
+- **`run_timed_search` restores the caller's deadline exactly**, as the engine's `run_timed`
+  restores `held`: the bound is the earlier of the plan's and the caller's, the forced slice runs
+  under the caller's, and the run ends with the caller's set back.
+- **`tm.end` however the run returns**: in `finally` in Python, and in C++ `run_timed` ends the
+  decision before a slice's exception goes on (the manager was left active).
+- Tests: the C API's round trip (none, a deadline, one passed, restored exactly, the refusals);
+  `run_timed` ending the decision after a throw; Python's set and restore by spy (Y03: the bound's
+  same time point after the forced slice), a caller's deadline restored exactly, one earlier than
+  the bound kept; the decision ended after an evaluator raises; the correctness pass's probe_py1 -
+  a carried flat root waiting to be re-listed under a spent bound - returning (a 60 s watchdog).
+
+Spec: none - the C API and the Python mirror of E11's `run_timed` (§8.6's guards as built,
+unchanged). No proposed edit; no measured figure.
+
+### 2026-11-24 - E11 review round 2, S1: a flag only when the clock has run out; a search that cannot move ends the game unscored
+
+The review of E11/E8 phases 1, 1B and 2 (`rv-search2`), its HIGH finding. A clocked decision whose
+root child got no visit "flagged" with its clock nearly full (59.9995 of 60 s in the review's
+probe), scored as a loss on time.
+- **The flag** (`engine/src/selfplay.cpp`, `python/t5d/engine/netplay.py`): it falls only when the
+  side's clock has run out (`clock_out()`, or the clock's deadline passed).
+- **A search that cannot produce a move with time left** ends the game unscored, in decision 13's
+  family: `GameEnd::Unknown` with a new reason, `Unsettled::Search` ("search"), result `*`,
+  uncharged, a Termination note; never a throw. `detail::cannot_move` is the no-visit loop's rule:
+  a batch that adds no playout, or a root with no edge that gains none, ends it at once; batches
+  that add playouts but no visit count only on a clock that did not advance across them, the 16th
+  ending it (`detail::kNoVisitRounds`, netplay's `_NO_VISIT_ROUNDS`: a named placeholder, issue
+  480). On a clock that advances, the side's clock ends the loop instead.
+- **Every verification stopped with time left** (the node budget or the memory ceiling) ends as
+  decision 13's unsettled choice (`Unsettled::Choice`, the merge's resolution), never the old throw.
+- **The switch match** already left unknown ends out of its score, counted apart; now tested, a
+  flag scored for the side whose clock still ran (the mutation pass's Y25).
+- **The proof channel's solved root** (observation 2): with the channel on, a root the game's
+  ladder solves before any child has a visit ends the game unscored on a clock, never a flag.
+  Playing its proven move needs the proof's line at the root, which the search does not expose -
+  not local, so issue 481 records it, with the unclocked loop's throw in the same case.
+- **Tests**: the review's stuck-root setup (the flat form, `generator_nodes` 1, `flat_fallback` 0,
+  match play, 60 s) unscored with both clocks untouched on the model and the wall clock, in C++ and
+  netplay; the same root flagging once a clock moving 100 s a read has run out; `cannot_move` (B10,
+  B11: the cap only on a clock that does not advance); netplay's cap on the model clock and none on
+  the wall clock; an out-of-clock decision flagging, a no-move one unscored; the proof channel's
+  solved root (the B19 probe, adopted as the code stands); the tally.
+- Docs: `selfplay.hpp` (`GameEnd::Flag`, `Unsettled`, the clock's comment now stating exception
+  (2) and the unscored ends - SS-F8), the README, t5d-play's comment, netplay's docstring; issues
+  456 and 458 updated, 480 and 481 new.
+
+Spec: §8.6 and §12.3, registers E7, I3 and H22 (the unscored end is H22's family; the clock's
+reading, issue 456, now says a flag needs the clock run out - no edit: §12.3's clock is issue 456's
+reading, edit 338 unchanged); register H23 (issue 481: the proof channel's solved root, left for
+its sign-off). No proposed edit; no measured figure.
+
+### 2026-11-24 - main (b18a7b3) merged into lane/search: decision 13's game loops with E11's clock, H1 part 5
+
+Main's decision 13 (`lane/engine`: the game loop's terminal test within a node budget, the
+unscored ending with its question in the record, the verdict's witness played where no child is
+known legal, `t5d_search_verify_budgeted` and `t5d_game_verdict`; issues 413-414) merged into
+`lane/search` (M23), first in the round that fixes the review of phases 1, 1B and 2. Conflicts:
+- `engine/src/selfplay.cpp` (7): decision 13's verdict budget, its `make_legal` (the witness step,
+  `off_tree`, the unsettled choice) and its end after a stopped action, beside E11's clock and H1's
+  policy. Where no child is known legal the witness step comes first, then - a clocked decision on
+  a clock with wall time - the search against the side's remaining clock, then the unsettled choice:
+  the memory-ceiling throw that both sides had replaced is gone. The clocked verification takes
+  decision 13's detector and ceiling (its L8) under the decision's hard bound.
+- `python/t5d/engine/netplay.py` (15): the same order in `_choose`; `_legal_against_the_clock`
+  takes the node budget and returns None (an unsettled choice) where it threw. A pick `_OutOfClock`
+  stopped flags; any other None ends the game unscored and uncharged, as `play_game`'s does. Main's
+  turn-start copy serves a flag as well as an unsettled choice. `GameResult.unsettled` sits beside
+  E11's fields, and both header sets are written (Steering, TerminalNodes).
+- The C API: this lane's `t5d_search_verify_within` beside main's `t5d_search_verify_budgeted` and
+  `t5d_game_verdict`. `verify_within` (this lane's, not yet on main) gained decision 13's `checks`
+  and `nodes`, so a clocked verification takes the game loop's node budget with the deadline beside
+  it. Python's `Search.verify(index, seconds=0.0, *, checks, nodes)` is the two in one, with main's
+  range check.
+- t5d-play's usage line and comment, the README's synopsis, this file (by heading, this lane's
+  entries on top) and the build log (both sides).
+
+H1 part 5, in the merge: the clocked loop's turn-start verdict is the unclocked loop's. It runs
+within `PlayParams::terminal_nodes` before the side's decision starts, so it is charged to neither
+clock, and one the budget cannot settle ends the game unscored with both clocks untouched (issue
+456). New tests: the mated start within one node and exactly, on a clock that moves at every read
+(C++) and on the wall and model clocks (netplay); `t5d_search_verify_within` under a node budget.
+Decision 13's tests found netplay passing the verification's `seconds` positionally and always: it
+goes by keyword, and only on a clocked decision with wall time. Checks: engine 847 of 847
+(`--werror`); the engine-driving Python files and decision 13's train files, all passed.
+
+Spec: §11.0 and register H22 (the game loop's budget now covers the clocked loop's verdict and its
+verifications - as H22 says, nothing to propose); §8.6, §12.3 and registers E7 and I3 (the verdict
+not charged - issue 456's reading, recorded). No proposed edit; no measured figure.
+
+### 2026-11-24 - E11/E8 review, phase 2: the reviewers' survivors re-run on the reconciled tree
+
+The review's 39 survivors re-run with this lane's copy of the reviewers' runner (each mutant
+applied to the worktree, the engine rebuilt, the tests that should see it run, the file restored);
+the ones whose code the merge or the fixes rewrote were adapted to the new text (T05, C10, Y03,
+Y04, M01, L01, L02, L03, S05, S07). 37 KILLED - the phase-1 tests, M3's (T04, T05, C10, Y03,
+Y04), M4's and issue 406's (M01, L01; M03 and L03 by lane/engine's lazy-verification and tier-3
+tests, which run long under them), the seam's (S05, S07). Y02 is obsolete: decision 12 removed
+the refusal it mutated (the hook is now taken; tested). L02 (a tier-3 search started past the
+deadline) survived as "EQUIVALENT" - wrongly: issue 406's own gate stops every per-move search past
+the deadline (`legal.cpp`'s loop), but the state's own searches (two callers, before tier 1 and in
+tier 3) reach it, and given no time left the Budgeter still runs up to 64 nodes before it reads its
+clock (`>`, every 64 nodes - search_internal.hpp): the guard saves that work, and no test could see
+it. (Corrected by the E11 review's S8, which made it testable: `LegalityStats::
+root_searches_past_deadline`.) Phase 2's checks on b75209a, all green:
+the whole engine suite, long_detectors, the Lazy SMP test x3, ruff, the engine-driving Python files
+and `test_pool.py`, verify and gate commit (the build log's session entry).
+
+Spec: none - tests and their record. No proposed edit; no measured figure.
+
+### 2026-11-24 - E11/E8 review fixes, phase 2: match play's hard bound held after the search, never a throw for want of a move, the deadline's reach tested where issue 406's tests stop
+
+The review of the E11/E8 change, phase 2 on the reconciled tree (after main d4c7fb9's merge):
+findings H1 (parts 1-4 and 6), M1, M3 (the Python test), M4, L2 and L3.
+- **H1 - the policy, no reserve** (`engine/src/selfplay.cpp`): a clocked decision's chosen move is
+  verified under its own hard bound, on the match clock (the steady clock or the test seam's); where
+  that verification is cut or the move is illegal, the existing fallback plays the most visited
+  child known legal. Only where NO child is known legal does the decision go past its bound - the
+  second exception beside "a move needs a visit": the children are verified in visit order (the most
+  visited first, an illegal one removed) against the side's REMAINING clock, the first shown legal
+  played; the side flags if its clock runs out first, never the old `std::logic_error`. The
+  turn-start verdict stays uncharged - it decides the result, the referee's work (issue 456) -
+  and decision 13's node budget for it arrives with `lane/engine` (part 5, not built here).
+- **H1 in netplay** (part 4): a new C function `t5d_search_verify_within(search, index, seconds,
+  ...)` - the exact verification within a deadline (THE DEADLINE's rules) - mirrored by
+  `Search.verify(index, seconds)`; `netplay._choose` follows the same policy on a decision clock
+  (`_DecisionClock`), re-runs one batch in the timed path as `play_game` does, and raises
+  `_OutOfClock` for the flag.
+- **M1**: issue 406's re-listing adopted at the merge; E11's own part - `run_timed`'s forced slice
+  runs without the hard bound (the engine's and `run_timed_search`'s), and a clocked decision with
+  no visited child searches on against the side's clock (16 batches without a visit at most, for a
+  clock no idle loop advances) and flags - never a throw out of `play_game` or netplay.
+- **M3** (Python): `run_timed_search` sets the bound, lifts it for the forced slice and clears it
+  (a monkeypatched `set_deadline`).
+- **M4**: `timeman_the_deadline_stops_the_rules_engine_inside_a_batch` cut to what issue 406's
+  tests lack - the persistent deadline reaching the calls inside a batch (on a small position in
+  check, no 400-board generation, no timing); new: past the deadline an exact classification equals
+  the cheap tiers' alone (`budgeted(0, 0)`) move by move on three positions; a mating turn start is
+  not terminal past the deadline and is found without it.
+- **L2**: every conversion through `deadline_after` (at the merge); the time left saturated at 0 in
+  `legal.cpp`.
+- **L3**: `run_timed_search` maps a 0 s hard bound to a deadline already passed (1e-9 s), never 0.
+- **Tests**: `engine/tests/test_timeman.cpp` - the verification cut inside the bound at issue
+  406's Q3 node on the clock seam (the steered move kept, a child known legal played); no child
+  known legal - a legal move found against the clock, or the flag (never a throw, the overrun
+  counted); a flat game whose listings the bound cuts, and a carried child re-listed; the M4 tests.
+  `test_capi_search.cpp` - `t5d_search_verify_within`. `python/tests/engine/test_time_management.py`
+  - M3/L3's spy, `Search.verify(seconds)`, netplay's clocked choice and its flag.
+- **Docs**: `t5d/timeman.hpp`, `t5d/capi_search.h`, the engine README (the hard bound's paragraph,
+  "Tested"), netplay's and `run_timed_search`'s docstrings; issues 456, 458, 467 and the E7 row in
+  `docs/BUILD_LOG.md`, edit 346.
+
+Spec: §8.6 ("Guards": the hard bound inviolable, the post-search scan inside it), §12.3 (match
+play); register E7 (the tight wall-clock hard bound), H37, H22 (decision 13, adopted when it lands).
+Proposed edit 346; issues 456, 458, 467. No measured figure.
+
+### 2026-11-23 - main (d4c7fb9) merged into lane/search, the two deadlines reconciled: one mechanism (E11 review M2, M3)
+
+Main taken by merge (M23) with `lane/engine` on it - issue 406's deadline reaching the rules
+engine's calls (`LegalityOptions::deadline`, `deadline_after`, the play loop's `max_seconds`),
+MT-01/02/03 and the engine review's fixes. E11 had built a second deadline into the same places
+(review finding M2); the merge keeps one mechanism, as the main loop decided:
+- **Every conversion through `deadline_after`** (THE DEADLINE in `t5d/mcts.hpp`: 0 none, 1e9 s or
+  more none, NaN and negatives refused): `run_timed`'s hard bound (a 0 s bound a deadline already
+  passed) and `t5d_search_set_deadline` (L2).
+- **The persistent deadline kept** (`Search::set_deadline`; the step API needs it): `run()` gives
+  the calls inside its batches the earlier of it and its own `Limits::seconds`, restores it on
+  return and never clears it; only its own deadline stops it between batches (the time manager's
+  check decides there, and its forced slice must run). One `deadline_` member.
+- **`run_timed`** restores the caller's deadline (it cleared it), takes a game's `max_seconds` as
+  each slice's `Limits::seconds` (`play_game` passes it), and runs a slice before any root child has
+  a visit without the hard bound, so that the root's listing and classification complete (M1).
+- **Kept from both:** E11's gating of tier-2 checks, destination scans and greedy tries at the
+  deadline (tighter, H37-sound; `legal.hpp`'s comment says so); issue 406's candidate digest in the
+  cache and the batch, its re-listable cut fallback listing, its `TimeLimit`; E11's `Flag`.
+- **A silent conflict:** `EvalCache::find` gained the candidate digest; `Search::root_child_value`'s
+  call still compiled (a bool converted to it) and found nothing - caught by the M05 test. The
+  categorical is now read by `EvalCache::find_value` (new), whatever the candidate list.
+- **Tests (M3, in the merge):** the hard bound inside every batch of every slice and the caller's
+  deadline restored (also a caller's earlier one holding); the forced slice without it; a batch that
+  throws; `run()`'s own deadline inside the persistent one, the persistent one kept; the C API's
+  deadline set then cleared (0, 1e9 s, infinity) leaving no edge unknown.
+- **Docs:** `t5d/mcts.hpp`, `t5d/capi_search.h`, `t5d/timeman.hpp`, `legal.hpp`; issues 406 (a note)
+  and 467 in `docs/BUILD_LOG.md`.
+
+Spec: §8.6 ("Guards": the hard bound inside a batch), §11.0 item 3, H37; register E7. Issues 406,
+467. No proposed edit; no measured figure.
+
+### 2026-11-23 - main (032db11) merged into lane/search: issue 535's fix, the spec review and its code round, the user's four answers
+
+Main taken by merge (M23) ahead of phase 2's merge of `lane/engine`: issue 535's fix (`mcts.cpp`,
+`ladder.cpp`, `assets.cpp`); the 2026-11-15 spec review (`docs/design/`, taken from main as it is -
+it applied this lane's proposed edits 331-341) and its code round (the tree form under graph
+search in `mcts.cpp`/`mcts.hpp`, its tests and the C API's comments; the net, train and engine-pool
+Python modules); the user's four answers (register E12 for Gumbel; the human games never training
+data); the cited-ids update after the history rewrite. Conflicts: this file, rebuilt by heading
+(this lane's entries above main's, main's text kept whole); `docs/BUILD_LOG.md`, both sides kept -
+the Lazy SMP table's rows by date (main's with its cited ids, this lane's E11/E8 rows), this lane's
+issues 452-479 and edits 331-345 before main's blocks, the session log's entries by date; the
+`t5d.engine` package docstring, both modules' bullets (`switch_match.py`, `pool.py`). No code
+conflicted: `mcts.cpp`'s deadline plumbing (E11) and the tree form under graph search merged
+cleanly, and the engine builds at `--werror`. Checked after the cited-ids update (eb7353b): the
+whole engine suite, long_detectors, the Lazy SMP test x3 (`mcts.cpp` combined), ruff, the engine-driving
+Python files and `test_pool.py`, verify and gate commit - all green (the build log's session entry).
+
+Spec: none changed here - `docs/design/` is main's. No proposed edit; no measured figure.
+
+### 2026-11-23 - 6e's steering switches on every driver: Hunt's lines in t5d-play and netplay, per-side settings, the switch match, the summary's counter
+
+Register H13 and H43 (spec §11.2: "an on/off test of its own at match play (6e)"; §13.1's 6e: "each
+steering term on and off at match play - the asset map, Hunt's suggested lines"; §16). The engine's
+two switches existed (`asset_map`, on; `hunt_suggest`, off); what a match between two settings
+lacked is built here, from the plan handed over by the session that built the 2026-11-15 review's
+code (verified against this tree; its recommended answers taken). No default changes; default
+records are byte-identical.
+- **t5d-play**: `--hunt-suggest` (the Engine header names "hunt suggestions").
+- **C API** (ABI append): `t5d_search_summary.suggestion_edges` after `steered_visits` - the root
+  edges Hunt's suggestions raised; the layout entry and check; `capi.py` and `SearchInfo` mirror it.
+- **netplay**: `PlayConfig.hunt_suggest`, `search_overrides` (any further `t5d_search_params` field),
+  `side_overrides` (White's and Black's own, match play only); `RESERVED_OVERRIDES` (the fields the
+  game loop sets, and the proof channel) refused; `GameResult` counts per side the edges each switch
+  raised, the turn-start decisions and those the carried tree had already visited, and the proofs
+  withheld and injected; the record's `Steering` header names each side's settings when one is not
+  the default; `--hunt-suggest`.
+- **`python/t5d/engine/switch_match.py`** (new): `play_switch_match` - one switch ON for one side and
+  OFF for the other, each start twice with the colours swapped, one evaluator on both sides; the
+  tally from the ON side (I11's cap a draw, counted apart; unscored games counted), the edges each
+  arm raised; `python -m t5d.engine.switch_match` (random weights: plumbing, not a figure).
+- **Tests**: `engine/tests/test_steering_switches.cpp` (new) - the defaults; the asset map off is the
+  search without it; Hunt's lines off are the search without Hunt; on, only the suggested lines are
+  raised (ply, flat, tree); a proven mate raises no prior and decides nothing before the sign-off;
+  a carried root already expanded takes no suggestions (the as-built limit). `test_capi_search.cpp`
+  (the appended field), `test_play_exe.cpp` (the header, a `--hunt-suggest` game replayed),
+  `python/tests/engine/test_switch_match.py` (new, 8 tests). Four mutants killed.
+- **Docs**: the engine README (Hunt's lines, the drivers); `docs/BUILD_LOG.md` - the H13 and H43
+  rows, issue 186(a) settled by decision 12, new issues 477-479, edits 344-345.
+
+Spec: §11.2, §11.4 (decision 12), §13.1 (6e), §16 (the H13/H43 and H41/H43 entries); register H13,
+H43, H41, E7. Proposed edits 344-345; issues 186(a), 477-479. No measured figure.
+
+### 2026-11-23 - Decision 12 in E11: a proof may extend a decision before the sign-off, never stop it
+
+Decision 12 (build-log spec issue 180, ruled by the user 2026-11-23): "Before the sign-off a
+proof is an estimate: it may raise a prior or extend the search, and may not stop it, prune,
+select or enter a store." E11 built the proof source of volatility as a hook refused without the
+proof channel (the safe reading while issue 180 was open); it is now taken with the channel off,
+for the extension only.
+- **`engine/src/timeman.cpp`**: `TimeManager::begin` no longer refuses `proof_volatility` at a
+  search whose proof channel is off; `snapshot` reads the ladder's verdicts (withheld or
+  injected) whenever the hook is on; `check`'s prover alarm feeds the disagreement extension
+  whatever the channel. Unchanged: a solved root stops a decision only with the channel on (in
+  `check` and in `run_timed`), and no proof stops, prunes, selects or enters a store.
+- **Python** (`search.py`): `time_params(proof_volatility=1)` and `TimeManager` take the hook
+  (both refused it); Python still cannot turn the proof channel on. `capi.py`'s and the C
+  header's comments follow.
+- **Tests**: `timeman_a_proof_extends_the_search_before_the_sign_off_and_never_stops_it` (replacing
+  the refusal test) - the disagreement extension with the channel off and on, the solved stop only
+  on, a real Hunt proof of a mate read while withheld (the root unsolved, nothing injected), and a
+  match game with the hook on and off - every proof withheld, none injected, the record replaying;
+  the C API takes the hook with its plan unchanged; Python takes it, and a Hunt-proven mate leaves
+  the root unsolved and the decision not stopped as solved. Mutants killed: the extension needing
+  the channel, the solved stop without it, the hook's read needing it.
+- **Docs**: `timeman.hpp`'s header and `TimeParams`, `t5d/capi_search.h`, the engine README (the
+  disagreement row, "Tested"), and in `docs/BUILD_LOG.md` issues 470, 468 and 180's E11 note, the
+  E7 row and edits 335 and 337 (applied upstream by the review with the ruling's reading).
+
+Spec: §8.6 (the table's solved-root row and the second volatility source), §11.4 (decision 12's
+paragraph); register H41, E7, H43 - the build now follows the text the review left; nothing new
+proposed. Issues 180, 468, 470. No measured figure.
+
+### 2026-11-23 - Decision 12 ruled: this lane's notes no longer call it awaiting confirmation
+
+The user ruled on 2026-11-23 (reported by the main loop) that the 2026-11-15 spec review's 23
+decisions are rulings the build builds on. The notes this lane wrote for decision 12 (issue 180:
+before the sign-off a proof may raise a prior or extend the search, never stop, prune, select or
+enter a store) said "awaiting the user's confirmation"; they now say "ruled by the user
+2026-11-23 (the review's decision 12, reported by the main loop)" - `engine/include/t5d/timeman.hpp`
+(the header comment and `TimeParams::proof_volatility`), the engine README's disagreement row, and
+issue 180's E11 note and issue 470 in `docs/BUILD_LOG.md`. What the ruling changes in the code is
+the next entry's. No other review decision is cited in this lane's text; the entries below keep
+their wording of the time.
+
+Spec: register H41 and E7, spec §11.4 and §8.6 as the review left them (decision 12); issue 180.
+Nothing proposed; no measured figure.
+
+### 2026-11-23 - E11/E8 review fixes 5: placeholders placed, the Spec: line completed, the ladder's time and E8's readings stated
+
+Review of the E11/E8 change, phase 1, findings L9-L13 - documents and comments only:
+- **L9**: `min_evaluations` (8) into issue 455, `disagreement_margin` (0.5) into issue 470,
+  `MatchClock`'s defaults (60 s, no increment - read by no driver) into issue 456; the header
+  comments name the issues.
+- **L10**: E11's `Spec:` line completed below (a review correction); issue 461 records that
+  §12.4's own volatility prediction - the per-board tactical-volatility head - is not read (no
+  field in the engine's evaluations; its target masked until proofs exist).
+- **L11**: "the ladder's jobs sit inside the hard bound by construction" was wrong - nothing at
+  the hard bound or the time manager's stop ends them; they end with the ladder's decision (the
+  re-root after the move) or their own budgets, and cost the move no time because nothing waits
+  for them. Reworded in `timeman.hpp`, the engine README, the H14 and E7 rows and issue 466, with
+  edit 343 revising edit 336; the synchronous mode on a wall clock noted (its inline jobs can
+  carry a batch past the hard bound).
+- **L12**: issue 467's "not covered" list (and the README's hard-bound paragraph) adds the
+  synchronous mode's inline ladder jobs, `hunt_suggest`'s wait for the root's Hunt, `place()`'s
+  exact verification with the proof channel on and the asset map's quiescence; "time management
+  reads no proof" is now "directly", cross-referring issue 186(a), in issue 470, issue 180's E11
+  note, the README and the header. Where this lane's text cites issue 180 it notes the spec review
+  of 2026-11-15's decision 12 (awaiting the user's confirmation; nothing changed for it).
+- **L13**: E8's readings stated in issues 464, 471 and 472, the README and the header - the
+  extensions' "original plan" is E8's weighted plan (an easy call extends in proportion); the
+  log-mean reference makes the spend non-neutral; reading A plans `hard_multiple(N)` x E7's plan,
+  above the clamp.
+
+Spec: §8.6 ("Guards"' second bullet, the closing paragraph) - edit 343 revises edit 336 (applied
+upstream in the spec review of 2026-11-15, not yet on main); §11.0 item 3, H37, H15, A6, D4, I4
+named in E11's Spec: line, nothing new proposed for them; issues 180 (decision 12 noted), 186(a),
+455, 456, 461, 464, 466, 467, 470-472. No measured figure.
+
+### 2026-11-23 - E11/E8 review fixes 4: the fresh-root exception stated as it is, a bound on moves-left, the KLD by step
+
+Review of the E11/E8 change, phase 1, findings L1, L4 and L5; each mutant written for them is killed
+on this tree (the exception removed or widened; the integral unbounded; the context's moves-left
+not refused, the root's not capped, the default not bounded; the KLD by position: 7 of 7).
+- **The hard bound's exception, restated (L1)**: a root with no visited child runs on until one
+  has a visit, which from an unevaluated root takes up to two evaluator calls - the root's own leaf,
+  then its children's: one slice in the batched mode, two one-leaf slices in the synchronous mode.
+  "At most one batch past (tested: never more)" was wrong in both modes and untested; it is
+  corrected in `timeman.hpp`'s header comment, the engine README, issue 458, a test's comment and
+  the E11 entry below, and edit 342 revises edit 333. New test: a fresh root on an exhausted clock
+  (remaining at the overhead, a hard bound of 0), batched and synchronous - exactly two evaluator
+  calls, then the hard bound; one slice's predicted time past it batched, two synchronous. No
+  behaviour changes.
+- **A bound on moves-left (L4)**: `kMovesLeftMaxTurns` (2000 turns, a named placeholder - issue
+  476). `TimeManager::begin` refuses a context's moves-left above it (one of 2e8 held `begin`
+  for half a second; above 2^54 the integral's loop never ended); `plan_decision` caps the root's
+  network output at it; `integral_cost_sum` sums at most 1000 actions; `validate` refuses a
+  moves-left floor or default above it. Tested in C++, and from Python (`begin(moves_left=2e8)`
+  refused).
+- **The KLD by step (L5)**: each check's snapshot carries the children's step keys
+  (`RootSnapshot::keys`, `step_key`: the moves and the submit flag hashed), and the KLD lays the
+  earlier visits out in the children's present order by key - a tree-form inherited root, re-sorted
+  after `begin`, read 6-22x the true divergence by position, and its KldGain stop came about 100
+  visits late in 9 of 20 decisions. A child gone that held visits restarts the comparison. A
+  hand-built snapshot without keys is still matched by position. Tested: a re-sort that keeps the
+  set reads a KLD of 0; a real root's keys are all different under both splits.
+- **Docs**: the engine README (the exception; the KLD's row; the "Tested" paragraph); issues 458
+  and 459 revised and 476 new in `docs/BUILD_LOG.md`, edit 342.
+
+Spec: §8.6 "Guards" - edit 342 revises edit 333 (applied upstream in the spec review of
+2026-11-15, not yet on main) to state the exception; register E7 unchanged. Issues 458, 459, 476.
+No measured figure.
+
+### 2026-11-23 - E11/E8 review fixes 3: match play's clock accounting pinned, a clock seam for it, netplay brought in line
+
+Review of the E11/E8 change (05afde5..644801c then; faaa64e..f974d0c since the history rewrite of
+2026-11-16), phase 1, findings M8, L6 and L8(a, b, e). Every mutant the findings name is killed on
+this tree (S02, S03, S05, P02, Y07, Y08, Y09; S07 as rewritten for the seam; with the HardBound
+stop deleted, the seam ignored and L6's two: 12 of 12).
+- **The seam (M8)**: `MatchClock::clock` (`t5d/selfplay.hpp`), a `Clock*` in place of the steady
+  clock, null by default (unused with `model_clock`). `play_game` reads the decision's start on it
+  (in place of a steady time point), runs `run_timed` with it, charges the decision by it and
+  bounds Guard's re-search by it; the search gets no in-batch deadline from a clock that is not the
+  steady one (as `run_timed` already did). Nothing changes with it unset.
+- **Tests (`engine/tests/test_timeman.cpp`)**: the whole decision charged on a virtual clock
+  moved by the evaluator and by a step at every read - the clocks' total charge is the clock's
+  advance less one step a decision, so a charge of the search alone (S07) fails it - with the flat
+  arms parting there (L8(e)); the increment credited (S02); a flag mid-action leaves the game at
+  the action's start (S03, a scan of bases for one); the first-decision flag counts its overrun
+  (S05); the end-to-end games run again with the hard bound the plan itself, every decision
+  stopping on it and none charged past it (L8(b) - at the default multiples the overrun count could
+  not fail; with the stop deleted 154 decisions overrun). A comment notes that the model clock
+  makes the two flat arms one behaviour. `ManualClock` gains a step per read.
+- **t5d-play (P02)**: `test_play_exe.cpp` checks the record names the flat arm `--allocator` gave.
+- **netplay (L6)**: the decision's totals (playouts, evaluations, cache hits, batches, the
+  network's seconds) are counted before the clock is charged, so a flagged decision's work counts as
+  in `play_game`; `GameResult`'s `end` and `winner` and `result` name the flag; `PlayConfig.validate`
+  refuses `time_overrides` that are not (name, value) pairs, that name `allocator` or `signals`
+  (`PlayConfig`'s own fields) or a field `t5d_time_params` lacks - a clear `ValueError`, not the
+  keyword clash's `TypeError`.
+- **Python tests (`test_time_management.py`)**: netplay's increment (Y07), its model clock
+  reproducible and charging the model's price (Y08), a flag mid-action leaving the game at the
+  action's start (Y09), the flagged decision's work and overrun counted, the refusals; the
+  tight-clock assertion that could not fail now requires the hard bound (or the search's own stop)
+  and no batch (L8(a): the carried root is visited - "one batch runs" was wrong).
+- **Docs**: the engine README (the seam; the "Tested" paragraph), netplay's module docstring.
+
+Spec: none of the spec changes - match play's clock (§12.3; register E7, issue 456's reading) as
+built; the seam is a test hook. No proposed edit; no measured figure.
+
+### 2026-11-09 - E11/E8 review fixes 2: the time surface through the C API and Python tested past its defaults
+
+Review of faaa64e..f974d0c, phase 1, finding M7 (the main loop's decision: the step-API digest
+tests parametrized over the signals off and both flat arms on an elapsed time the driver supplies,
+and every probe as a test). Each mutant the finding names is killed on this tree (C01, C02, C04,
+C07, C11, Y15, Y02: 7 of 7).
+- **`engine/tests/test_capi_search.cpp`**: the step-API test now runs five configurations under
+  both splits - the defaults on the model clock (as before) and, on a clock reading the search's
+  playouts at 2 ms each (the C driver computes the same elapsed time from `t5d_search_info`; the
+  C++ reference takes it as a `Clock`), the integral arm with the signals on and off and both flat
+  arms; a 6 s clock, so the stop signals act under both splits. The C side's switches come through
+  `t5d_time_params` (the old test passed none), the reference's are set in C++, so a translation
+  that dropped a switch or swapped the arms parts them; a premise check that each switch changes
+  the decision. New `capi_search_time_management_reports_through_the_c_api`: the signals off end
+  on the soft budget or the hard bound with no extension (C01); the flat arms at 1.5x the soft time
+  (C02); `wont_resolve` at a censored mass of 0.6 and not at 0.4 (C04); `converged` at every check
+  of a step-driven decision and in `run_timed`'s verdict (C07); `wall_clock` measuring the scale
+  (C11).
+- **`python/t5d/engine/evaluator.py`**: `run_timed_search(clock=...)` - a driver's clock in place
+  of the wall clock, as `run_timed` takes a `Clock` (no deadline given to the search: that is the
+  steady clock's; refused together with `model_clock`). Nothing else changes.
+- **`python/tests/engine/test_time_management.py`**: `run_timed_search` on the driver's clock
+  equals the engine's own slices under each switch, all three split/synchronous settings (12
+  cases); `ALLOCATORS` equals the header's `T5D_ALLOCATOR_*` (Y15 - the old check compared the map
+  with itself); the flat arms by name at 1.5x the soft time; `TimeManager`'s own refusal of a proof
+  hook set after `time_params` (Y02 - the old case was refused by `time_params` first).
+- **Docs**: the engine README's "Tested" paragraph and its note on `run_timed_search`.
+
+Spec: none of the spec changes - 6o's switches (§13.1; register E7) as built, tested through the
+C API and Python. No proposed edit; no measured figure.
+
+### 2026-11-09 - E11/E8 review fixes 1: E7's stop/extend rules and allocator inputs pinned, E8's floor and cap tested, the strict hard bound
+
+The review of faaa64e..f974d0c (E11 and E8 on `lane/search`: 1 HIGH, 8 MEDIUM, 13 LOW) is fixed in
+two phases as the main loop decided - phase 1 now; phase 2 (H1, M1-M4, L2, L3 and the deadline's
+reconciliation, M2) after `lane/engine`'s issue 406 reaches main. This entry: M5, M6, L7 and L8(c,
+d). Every new test kills the reviewers' mutant it is named for (re-run on this tree: 16 of 16
+KILLED); none changes what the code does.
+- **E7's stop/extend rules (M5)**, each a test in `engine/tests/test_timeman.cpp`: smart pruning
+  counts only the evaluations the hard bound leaves (T18); a single child stops at once (T20);
+  overlap without churn does not extend on a MEASURED KLD of 0 or 7.25e-5 per visit (T22 - the old
+  case had no earlier visits, so its KLD was NaN and the churn threshold was never read); each
+  extension kind is taken once a decision (T23 - the spiral test never reaches a second take: the
+  cap or the hard bound ends it first, so it pins the cap alone, and says so now); FlatWallClock
+  extends by the clock (T25); a new game forgets the previous game's value (T26); the model clock
+  charges `max(evaluations, playouts / 4)` at a mate-in-one root (T28); the snapshot's root value is
+  the backed-up mean (T40); `Search::root_child_value` gives the root player's view (M05).
+- **E7's allocator inputs (M6)**: our actions are `ceil(M / 2)` at 41, 37.3 and 20.5 turns (21,
+  19, 11 - every earlier M was even); a context's moves-left is read before the root's (40 over 60:
+  20 actions); `integral_cost_sum` from 40 boards over 30 actions equals the sum by hand, the board
+  range read at each step across both of `boards_per_action`'s boundaries.
+- **E8's guards 2 and 3 (L7)**: the floor (a 40-evaluation plan at x0.25 gives 32, not 10) and the
+  soft plan's cap at E7's hard bound (a 100-evaluation plan at x4 gives 150, not 400); the
+  model-clock test now asserts the floor it binds at its first two decisions (5.05 and 24.16
+  lifted to 32). The test comments that claimed the 100-board fixture exercised them corrected.
+- **The hard bound's tests (L8(c), (d))**: a new virtual-clock test - an evaluator twenty times
+  dearer than the prior, a 30 s clock - ends on the hard bound strictly inside it (1.1130 s of
+  1.1732 s; dropping the batch margin or predicting one evaluation a batch ends at 1.2079 s); the
+  guard-3 block's four `SearchParams` checks dropped (they could not fail: `TimeManager::begin`
+  takes the search const), its hard-bound check kept.
+- **Claims corrected**: the engine README's "Tested" paragraph and the register E7 row in
+  `docs/BUILD_LOG.md` now say what the tests pin (the spiral guard pins the cap; once-per-kind is
+  its own test), and the two entries below carry review corrections.
+
+Spec: none of the spec changes - the tests pin rules §8.6 and register E7/E8 already state
+(issues 454, 457, 459-464, 471-472). No proposed edit; no measured figure.
+
+### 2026-11-09 - E8: difficulty-weighted allocation behind its flag (a prototype, off)
+
+Register E8 (prototype, class R, 6v; spec §8.6's effort-head paragraph) built on E11's time
+manager, OFF by default (`TimeParams::difficulty_weighting`); every number a named placeholder
+(build-log spec issues 471-475).
+
+- **`engine/include/t5d/timeman.hpp`, `engine/src/timeman.cpp`**: `TimeContext::effort` (the
+  root's 16 effort probabilities, the last bin censored - D4); `effort_quantile_bin` (the bin at
+  quantile q by `python/t5d/net/heads.py`'s `effort_quantile` convention, float32 cumulative sum);
+  `apply_difficulty` (pure): E7's soft bound times `2^(bin - reference)`, the reference this
+  game's running mean of quantile bins seeded at 256 visits (`TimeManager::reference_bin`),
+  clamped to [0.25, 4], floored at 32 evaluations, capped at E7's hard bound (never moved);
+  won't-resolve (censored mass >= 0.5) plans for the hard bound (reading A) or keeps E7's plan
+  (`WontResolve::CapAtPlan`), and the overlap-with-churn extension is not taken under it.
+  `TimePlan` reports the E7 plan, the bin, the censored mass, the flag, the factor and the
+  reference. Off - or with no distribution given - the plan is E7's bit for bit.
+- **C API** (`t5d/capi_search.h`): appended to `t5d_time_params` (the E8 fields),
+  `t5d_time_context` (`effort`, `effort_count` - 16 or 0) and `t5d_time_plan`;
+  `T5D_WONT_RESOLVE_*`, `T5D_EFFORT_BINS`; the layouts reported; `t5d_search_params` unchanged.
+  **Python**: the mirror (`capi.py`), `TimeManager.begin(effort=...)`, `Search.run_timed(effort=)`,
+  `run_timed_search(effort=)`, `search.time_context`. **t5d-play**: `--difficulty-weighting`
+  (with `--time`; inert with the built-in evaluators, which give no effort).
+- **Tests**: `engine/tests/test_timeman.cpp` (off = E7 on a sweep of contexts and a timed run's
+  digest; on - a harder prediction plans more, an easier one less, within the floor, the caps
+  and the hard bound (Review correction, 2026-11-09: no case there binds the floor or the cap at the
+  hard bound; each is tested since where it binds - review fixes 1, above); the upper quantile funds more than the median; the running reference;
+  won't-resolve under both readings and the overlap extension suppressed only there; guard 1 -
+  an easy call still extends on instability and overlap; guard 3 - the hard bound and the
+  ladder's budgets the same on and off (Review correction, 2026-11-09: the budgets' checks could not
+  fail - `begin` takes the search const - and are dropped); reproducible on the model clock),
+  `test_capi_search.cpp` (the fields through the C API, the effort's count refused; the tests'
+  brace initialisers name the two new context members), `test_play_exe.cpp` (the flag needs
+  `--time`; the record names it), and `python/tests/engine/test_time_management.py` (the
+  quantile through the C API equals `heads.effort_quantile`; E8 off leaves the plan alone).
+- **Also**: match play's two time managers are made from the clock's parameters only when the
+  clock is on (off, an out-of-range `MatchClock::time` no longer throws from an unused manager).
+- **Docs**: the engine README's E8 paragraph (in "Stage E11"); `docs/BUILD_LOG.md` - register E8
+  built behind its flag, issues 471-475, edits 339-341, the session log, the Lazy SMP test's runs.
+
+Spec: §8.6 (the effort head's paragraph), §12.5 (match play only), §13.1 (6v); register E8, D4,
+I4, I15. Proposed edits 339-341; issues 471-475. No measured figure.
+
+### 2026-11-09 - E11: time management - the moves-left integral, 6o's arms as switches, the stop/extend table, the hard bound; no root-scan reserve
+
+Register E7 (committed, class R; spec §8.6) built as step 2's E11 on `lane/search`, every
+unstated number a named placeholder with a build-log spec issue (452-470).
+
+- **`engine/include/t5d/timeman.hpp`, `engine/src/timeman.cpp`** (new): a `TimeManager` per
+  clock - `begin` plans a decision (the soft bound in evaluations, the hard bound in wall-clock
+  seconds), `check` between batches stops, goes on or extends, `end` records the root's value -
+  and `run_timed`, which drives a `Search` with it in slices of `batch_size` playouts.
+  Allocation: §8.6's moves-left integral on a cost model - the dense FLOP shape of
+  `python/t5d/net/cost.py`, written in-house, plus a fixed share (0.05) that does not grow with
+  N, its scale measured online (the first observation replaces the prior); our actions half the
+  turns moves-left predicts (floored at 20, 40 when none is given), N advanced by M22's moves per
+  turn; under the ply split and the tree form the action's plan split over its decisions (A6).
+  6o's arms as switches: `allocator` (`Integral`, `FlatEvals`, `FlatWallClock`) and `signals`
+  (the table on/off). The table: smart pruning, KLDGain, a solved root (only with the proof
+  channel - H41), overlap with churn (the top two children's own categoricals from the evaluation
+  cache, `Search::root_child_value`), volatility (6m's signal), falling eval (rising never
+  extends), instability; the spiral guard - each extension kind once a decision, a share of the
+  original plan, all capped - never past the hard bound. The hard bound: a multiple of the plan
+  falling from 5 at 50 boards to 2 at 400, capped at a quarter of the clock; no batch starts that
+  would end past it (Review correction, 2026-11-23: save that a root with no visited child runs
+  until one has a visit - from an unevaluated root two evaluator calls; review fixes 4 above). The
+  model clock (no clock given): a decision's work at the model's price - a
+  node-limited timed search, bit-reproducible (H15). Not built: a root-scan reserve (its consumer,
+  Guard, is adopted nowhere - issue 306); the proof source of volatility is a hook, off, refused
+  unless the search's proof channel is on (issue 180 is open: time management reads no proof).
+- **`Search::set_deadline`** (`t5d/mcts.hpp`) and **`LegalityOptions::deadline`**
+  (`t5d/legal.hpp`, new): the hard bound inside a batch - the turn starts' mate checks, the flat
+  form's fallback listing, the legality classification and the verification of unknown edges
+  stop at it, Unknown, never a verdict (H37). Unset (the default) nothing changes.
+- **Match play's clock** (`PlayParams::clock`, off; `GameEnd::Flag`; `GameRecord`'s clock
+  counts): a per-side clock (base plus an increment per action - a reading, issue 456), each
+  side's decisions run by its own time manager; a decision charged its whole wall time (or its
+  model time); a flag loses on time, result `*`. Refused in self-play. t5d-play: `--time BASE
+  --increment INC --allocator ARM --no-signals --model-clock` (match play only).
+- **C API** (`t5d/capi_search.h`): `t5d_time_params` (+ `t5d_time_params_default`),
+  `t5d_time_context`, `t5d_time_plan`, `t5d_time_verdict`, `t5d_timeman_new/destroy/begin/check/
+  end/new_game`, `t5d_search_set_deadline`, `t5d_search_run_timed`; the four structs in
+  `t5d_search_layout`; `t5d_search_params` unchanged (`expand` still last). **Python**
+  (`python/t5d/engine/`): the ctypes mirror (`capi.py`), `search.TimeManager`, `time_params`
+  (`proof_volatility` refused) and `Search.set_deadline` / `run_timed`, `evaluator.
+  run_timed_search` (Python's loop builds `run_timed`'s tree), netplay's match clock
+  (`PlayConfig.time`, `increment`, `allocator`, `signals`, `model_clock`, `time_overrides`;
+  `--time` on the command line).
+- **Tests**: `engine/tests/test_timeman.cpp` (new: §8.6's table by hand - 3.4x, 0.48% against
+  1.00%, 3.1x - the plans by hand, the arms, the hard bound tightening with N, every stop and
+  extension case (Review correction, 2026-11-09: not every rule of each - eight of the table's
+  readings and `root_child_value`'s view could change unseen; pinned since, review fixes 1 above),
+  the spiral guard at 500 boards, the hard bound on a virtual clock, on the wall
+  clock under load and inside a batch at 400 boards, the model clock's reproducibility, the final
+  choice among the eligible children, match play's clock end to end); `test_capi_search.cpp`
+  (the C step loop builds `run_timed`'s tree; parameters, refusals, layouts);
+  `test_play_exe.cpp` (`--time` games replay through the gate); `test_selfplay.cpp` (the new end);
+  `python/tests/engine/test_time_management.py` (new; the cost shape checked against
+  `net/cost.py`'s `dense_flops`, the brief's item 10).
+- **Docs**: the engine README's "Stage E11: time management"; `docs/BUILD_LOG.md` - register E7
+  built, H14's note, issue 180's note, issues 452-470, edits 331-338, the session log, the Lazy
+  SMP test's runs.
+
+Spec: §8.6 (allocation, the stop/extend table, Guards), §11.4 (knock-ons), §12.3 (the match
+configuration), §13.1 (6o), §15.4 (invariants); register E7, H14, H41, H42, I3, M13, M22. Proposed
+edits 331-338 (and edits 203, 204, already proposed); issues 452-470, 180 and 306 (readings
+built). No measured figure. (Review correction, 2026-11-23: the change also bears on §11.0 item 3
+and H37 - `LegalityOptions::deadline`, Unknown never a verdict - on H15 - the model clock's
+determinism, cited beside the synchronous debug mode -, on A6 - the action's mandatory boards in
+the per-decision split -, on D4 - the moves-left head - and on I4 - the hard bound outside the
+soft budget's redistribution; nothing new is proposed for them.)
+
 ### 2026-11-24 - Decision 13's review, verified: the survivors re-run and the round's checks
 
 The review round of decision 13 (build-log issue 414) closes with its verification: 16 of the
@@ -1310,6 +2119,10 @@ ids were mapped to the new by tree and author date from the reflogs (346 commits
 against `lane/net`'s replacements (121 shared ids, all equal). Five lines that quote an old id
 on purpose, as "before the rewrite", keep it.
 
+On `lane/search` (2026-11-23, after main 032db11 was merged in, with this entry): 44 ids replaced
+by the same mapping (13 distinct; `CHANGELOG.md` 7, `docs/BUILD_LOG.md` 37), seven lines quoting an
+old id on purpose kept.
+
 On `lane/net` (2026-11-17, its commit 6754794): made on the lane's own documents once the lane was
 free of uncommitted work (295 ids). The notes are kept in one entry since the lane merged into
 `main` on 2026-11-24.
@@ -2020,6 +2833,7 @@ reading, which was never committed:
 
 Spec: register H47, H26, H52, H34, reversal 33; §11.0 ("Tiered CI", "Third-party code") -
 proposed edit 400 (the two links the reading found); issues 526 (ruled), 573.
+
 ### 2026-11-01 - Kairos: the brief's questions answered plainly in PROVENANCE.md, and no mate verdict from an exhausted budget, tested
 
 CHECKPOINT 9's brief (received 2026-11-01) lists what PROVENANCE.md must say of Kairos at
@@ -5766,6 +6580,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   types) and 19 (applied) annotated.
 - Spec: §6 ("Typed edge biases"), register B11 and reversal 26 - the change applies them as
   written; no edit is proposed. No part of the spec states B11's parameter count.
+
 ### 2026-10-17 - H51: capture markers read leniently - the reader in both directions, the writer strict, rulebook R11; ftxi's refusal recorded, KD-0167-0169 retired
 
 - `engine/include/t5d/pgn.hpp`, `engine/src/pgn.cpp`: the user's ruling on spec issue 125
@@ -5912,6 +6727,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   review fixes change no decision and need no new edit: N5's writer is held to H51's "the
   engine writes the marker strictly"; register H23's row and spec issue 127 (gate lane) are
   stale on what nightly gates, issue 127 now marked superseded.
+
 ### 2026-10-17 - Engine A6: the turn-state counts in the expansion and the C API; the in-action move count in the evaluation identity
 
 - Register A6 (Committed, class C; §2.3), the engine side - engine ABI round 1's first
@@ -6084,6 +6900,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
 - Spec: §11.4 (Guard; register H42), §11.1's df-pn, and §11.3's Lazy SMP (H17) and
   immediate export (H19) - no part of the spec describes the proof's line or which
   thread reports it; no edit proposed.
+
 ### 2026-10-17 - Build log: the CHECKPOINT 8 rulings and where each is built
 
 - `docs/BUILD_LOG.md`, "CHECKPOINT 8": the user's rulings on spec issues 122-126, 142
@@ -6345,6 +7162,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   114); register M22, part K's turn-width item and part L's prediction (edits
   111-113); register D2 and part K's §8.2 turn-construction item (edit 115); spec
   issues 140-142. Rules cited: T3-T8, T11, T12, J3-J6, R8, R9; Q8.
+
 ### 2026-10-17 - N-F5F6 review fixes: the post-norm arm's DeepNet initialisation as published; RMSNorm's eps tested
 
 - `python/t5d/net/model.py`, `config.py`: under ablation 6y's post-norm arm the trunk's
@@ -6490,6 +7308,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   G1. Proposed edits 150 (F5's biases stated in §9.3's first bullet and the register), 151
   (the post-norm arm's details as built), 152 (B12's "keeps its own normalisation"), 153
   (§9.2 and F1's count, M4).
+
 ### 2026-10-17 - Gate: the engine configured; the commit tier green with it; 113 known divergences triaged against the rulebook
 
 - `oracles/gate.toml`: `[engine] command = ["./build/engine/t5d-gate"]`, full mode -
@@ -6647,6 +7466,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   user); H47 is silent on an engine compared with nothing in a smoke test (spec
   issue 123, put to the user) and on a restricted run of a full-strength tier
   (spec issue 124, put to the user). H23 and the proof channel unchanged.
+
 ### 2026-10-17 - Build log: the CHECKPOINT 6-7 rulings, the plan by lane, the register brought up to date
 
 - `docs/BUILD_LOG.md`, "Where things stand": a section "CHECKPOINTS 6 and 7 - ruled

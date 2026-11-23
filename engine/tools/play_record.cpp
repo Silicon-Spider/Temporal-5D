@@ -54,6 +54,8 @@ std::string play_record(const mcts::GameRecord& game, std::string_view board, co
     termination +=
         " (the chosen move was not shown legal within the game loop's budget and no other is known legal, H22: "
         "unscored)";
+  } else if (game.unsettled == mcts::Unsettled::Search) {
+    termination += " (the side's search produced no move with time left on its clock: unscored, not a loss on time)";
   }
   header(out, "Termination", termination);
   for (const auto& [name, value] : extra) header(out, name, value);

@@ -110,6 +110,7 @@ GameState check_game(const GameRecord& g, const TurnCap& cap, std::uint64_t term
     case GameEnd::Unknown:  // handled above
     case GameEnd::ActionLimit:
     case GameEnd::TimeLimit:
+    case GameEnd::Flag:
       CHECK(false);  // none may end these games
       break;
   }

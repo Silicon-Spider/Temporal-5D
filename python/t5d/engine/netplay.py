@@ -36,6 +36,31 @@ mirrors the engine's ``play_game`` (``src/selfplay.cpp``; ``t5d-play``) step for
   the network again only where an interaction gate fires (the engine's default gates); or
   the flat form (``"flat"``) - a decision is a whole turn, generated best first by the engine and
   submitted with its last move (it replaced the enumerating whole-turn arm, ``"turn"``, retired).
+* **Match play's clock** (stage E11; ``PlayConfig.time``, off): each side a clock of ``time``
+  seconds plus ``increment`` after each of its actions (Fischer's, a reading - build-log spec
+  issue 456), each side's decisions run by its own ``TimeManager`` (``run_timed_search``) instead
+  of fixed playouts - 6o's arms by ``allocator`` and ``signals``; a decision charged its whole wall
+  time (search, choice, verification), or on ``model_clock`` its work at the cost model's price
+  (deterministic). A side whose clock runs out loses on time (``end`` "flag", result ``*``: the
+  clock is the match's convention, not a rule), as the engine's ``play_game`` does - the flagged
+  decision's work counted in the totals - and only then: a decision whose search cannot produce a
+  move with time left ends the game unscored ("unknown", ``unsettled`` "search"; the E11 review's
+  S1), uncharged. The steps after the search follow the engine's policy (the E11 review's H1):
+  the search re-run a batch at a time, the chosen move verified within the hard bound
+  (``Search.verify(index, seconds=...)``) and the game loop's node budget, the most visited child
+  known legal played where it is cut; with none, the children verified in visit order against the
+  side's remaining clock - the flag falls if it runs out - and then the turn-start verdict's
+  witness; with neither, the game ends unscored ("choice"), never a throw (M1, S7). The
+  turn-start verdict is charged to neither side (issue 456). Self-play takes no clock.
+* **6e's steering switches** (H13, H43; spec section 11.2: "an on/off test of its own at match
+  play"): ``asset_map`` (on) and ``hunt_suggest`` (off) for every search; ``search_overrides``,
+  further ``t5d_search_params`` fields by name; ``side_overrides``, White's and Black's own (match
+  play only), so a match can play two settings against each other with one network
+  (``switch_match.py`` pairs the colours). Fields the game loop sets itself (``RESERVED_OVERRIDES``)
+  are refused. ``GameResult`` counts, per side, the root edges each switch raised and the turn-start
+  roots the carried tree had already visited (where Hunt's suggestions do not reach - build-log spec
+  issue 477); the record's ``Steering`` header names each side's settings when any is not the
+  default.
 * **A move is played only once known legal**: a chosen child the legality budget left
   unknown is classified first within the same node budget (``Search.verify``; H22: "the same
   budget covers the loop's other exact question") - illegal, it is removed and the choice made
@@ -88,13 +113,14 @@ from .capi import (
     T5D_SPLIT_BOARD_MOVE,
     T5D_SPLIT_FLAT,
     T5D_SPLIT_TREE,
+    CTimeParams,
     find_library,
 )
 from .convert import relations_for
-from .evaluator import FLAT_OPTIMISTIC, Evaluator, NetworkEvaluator, policy_source, run_search
+from .evaluator import FLAT_OPTIMISTIC, Evaluator, NetworkEvaluator, policy_source, run_search, run_timed_search
 from .expansion import Move, board_label, square_name
 from .game import Game, relation_bits
-from .search import RootChild, Search, search_params
+from .search import ALLOCATORS, RootChild, Search, TimeManager, search_params, time_params
 
 SPLITS = {"ply": T5D_SPLIT_BOARD_MOVE, "flat": T5D_SPLIT_FLAT, "tree": T5D_SPLIT_TREE}
 SPLIT_NAMES = {"ply": "board-move split", "flat": "flat form", "tree": "tree form"}
@@ -113,6 +139,7 @@ TERMINAL_NODES = 2_000_000
 UNSETTLED_NOTES = {
     "verdict": " (the turn start's verdict stayed unknown within the game loop's budget, H22: unscored; never a mate)",
     "choice": " (the chosen move was not shown legal within the game loop's budget and no other is known legal, H22: unscored)",
+    "search": " (the side's search produced no move with time left on its clock: unscored, not a loss on time)",
 }
 
 #: A small network for end-to-end play on a CPU (random weights; nothing is trained): two
@@ -172,12 +199,30 @@ class PlayConfig:
     hunt: bool = True
     settling: bool = True
     asset_map: bool = True
+    #: H43's flag: Hunt's suggested lines raise the root edges they start (off; 6e's match test).
+    hunt_suggest: bool = False
+    #: Further ``t5d_search_params`` fields by name for every search (as ``GeneratorConfig``'s), and
+    #: White's and Black's own, applied after them - match play only (6e's two settings).
+    search_overrides: tuple[tuple[str, object], ...] = ()
+    side_overrides: tuple[tuple[tuple[str, object], ...], tuple[tuple[str, object], ...]] = ((), ())
     hunt_ms: float = 50.0
     settling_ms: float = 50.0
     verification_threads: int = 5
     #: Stage E10, H44: record each decision for the offline audit lane (``GameResult.decision_log``,
     #: written by ``decision_log_lines`` as the engine's t5d-audit reads it).
     decision_log: bool = False
+    #: Stage E11: match play's clock - each side ``time`` seconds (0: no clock - fixed ``playouts``
+    #: per decision) plus ``increment`` after each of its actions; 6o's arms (``allocator``:
+    #: ``"integral"``, ``"flat_evals"`` or ``"flat_wall_clock"``; ``signals``: the stop/extend table);
+    #: ``model_clock``: the cost model's deterministic clock instead of the wall clock.
+    time: float = 0.0
+    increment: float = 0.0
+    allocator: str = "integral"
+    signals: bool = True
+    model_clock: bool = False
+    #: Any other ``t5d_time_params`` field by name (``search.time_params``): e.g. the model clock's
+    #: price, ``cost_seconds_per_evaluation``.
+    time_overrides: tuple[tuple[str, float], ...] = ()
 
     def validate(self) -> None:
         if self.split not in SPLITS:
@@ -194,6 +239,32 @@ class PlayConfig:
             raise ValueError("terminal_nodes: 1 to T5D_NO_LIMIT (exact) - the game loop's node budget (H22)")
         if not (self.hunt_ms > 0 and self.settling_ms > 0 and 1 <= self.verification_threads <= 256):
             raise ValueError("the ladder's budgets positive, its threads 1 to 256")
+        if not (math.isfinite(self.time) and self.time >= 0 and math.isfinite(self.increment) and self.increment >= 0):
+            raise ValueError("the clock's time and increment: finite, 0 or more")
+        if self.time > 0 and self.mode != "match":
+            raise ValueError("the clock is match play's: self-play's budgets are PCR's (section 12.5), never a clock's")
+        if self.allocator not in ALLOCATORS:
+            raise ValueError(f"allocator must be one of {sorted(ALLOCATORS)}")
+        fields = {name for name, _ in CTimeParams._fields_}
+        if self.mode != "match" and (self.hunt_suggest or _search_settings(self, None).get("hunt_suggest")):
+            raise ValueError("hunt_suggest: match play only - self-play does not steer as built (register I2; the E11 review's L9)")
+        for entry in self.time_overrides:
+            if not (isinstance(entry, tuple) and len(entry) == 2 and isinstance(entry[0], str)):
+                raise ValueError(f"time_overrides: (field name, value) pairs, not {entry!r}")
+            if entry[0] in ("allocator", "signals"):
+                raise ValueError(f"time_overrides: {entry[0]!r} is PlayConfig.{entry[0]}'s, not an override")
+            if entry[0] not in fields:
+                raise ValueError(f"time_overrides: t5d_time_params has no field {entry[0]!r}")
+        if not (isinstance(self.side_overrides, tuple) and len(self.side_overrides) == 2):
+            raise ValueError("side_overrides: a pair - White's overrides, Black's")
+        if any(self.side_overrides) and self.mode != "match":
+            raise ValueError("side_overrides: match play only (a self-play search serves both sides)")
+        for overrides in (self.search_overrides, *self.side_overrides):
+            for entry in overrides:
+                if not (isinstance(entry, tuple) and len(entry) == 2 and isinstance(entry[0], str)):
+                    raise ValueError(f"search overrides: (field name, value) pairs, not {entry!r}")
+                if entry[0] in RESERVED_OVERRIDES:
+                    raise ValueError(f"search overrides: {entry[0]!r} is the game loop's (RESERVED_OVERRIDES)")
 
 
 @dataclass
@@ -203,10 +274,12 @@ class GameResult:
     config: PlayConfig
     record: str
     actions: list[list[Move]]
-    end: str  # "checkmate", "stalemate", "turn_cap", "unknown", "action_limit"
-    winner: int | None  # 0 white, 1 black (checkmate only)
-    #: An "unknown" end's question (H22): "verdict" (a turn start the budget could not settle) or
-    #: "choice" (no move shown legal within it); "" for every other end.
+    end: str  # "checkmate", "stalemate", "turn_cap", "unknown", "action_limit", "flag" (E11: lost on time)
+    winner: int | None  # 0 white, 1 black (checkmate; or a flag: the side whose clock still ran)
+    #: An "unknown" end's question (H22): "verdict" (a turn start the budget could not settle),
+    #: "choice" (no move shown legal within it) or - stage E11, the E11 review's S1 - "search" (a
+    #: clocked decision's search produced no move with time left: never a flag); "" for every
+    #: other end.
     unsettled: str = ""
     decisions: int = 0
     #: Moves played as steps of the turn-start verdict's witness where no root child was known legal
@@ -231,11 +304,30 @@ class GameResult:
     #: action's moves before it, the root's board count, visits and value, its children and the
     #: child chosen (``decision_log_lines``).
     decision_log: list[dict] = field(default_factory=list)
+    #: Stage E11 (``PlayConfig.time``): each side's clock at the end (White, Black; None: no clock),
+    #: the timed decisions, why each stopped (by ``T5D_TIME_STOP_*``), the extensions they took, and
+    #: the decisions charged more than their hard bound.
+    clock_remaining: list[float] | None = None
+    timed_decisions: int = 0
+    time_stops: dict[int, int] = field(default_factory=dict)
+    extensions: int = 0
+    hard_overruns: int = 0
+    #: 6e's switches (H13, H43), per side (White, Black): the root edges the asset map and Hunt's
+    #: suggestions raised, the side's turn-start decisions, and how many of those roots the carried
+    #: tree had already visited (Hunt's suggestions do not reach them - issue 477); the proofs the
+    #: game's searches withheld and injected (0 while the proof channel is off - H41).
+    asset_boosted_edges: list[int] = field(default_factory=lambda: [0, 0])
+    suggestion_edges: list[int] = field(default_factory=lambda: [0, 0])
+    turn_start_decisions: list[int] = field(default_factory=lambda: [0, 0])
+    carried_turn_starts: list[int] = field(default_factory=lambda: [0, 0])
+    proofs_withheld: int = 0
+    proofs_injected: int = 0
 
     @property
     def result(self) -> str:
         """The 5dpgn result: ``1-0``, ``0-1``, ``1/2-1/2`` (stalemate) or ``*`` (not ended by
-        the rules - the turn cap included, which self-play scores as a draw)."""
+        the rules - the turn cap included, which self-play scores as a draw, and a flag, which is
+        the match's convention, scored for the other side)."""
         if self.end == "checkmate":
             return "1-0" if self.winner == 0 else "0-1"
         if self.end == "stalemate":
@@ -272,6 +364,17 @@ class GameResult:
             "batches": len(self.batch_sizes),
             "mean_batch": round(float(np.mean(batches)), 2),
             "max_batch": int(max(batches)),
+            **(
+                {}
+                if self.clock_remaining is None
+                else {
+                    "clock_remaining": [round(x, 4) for x in self.clock_remaining],
+                    "timed_decisions": self.timed_decisions,
+                    "time_stops": {str(k): v for k, v in sorted(self.time_stops.items())},
+                    "extensions": self.extensions,
+                    "hard_overruns": self.hard_overruns,
+                }
+            ),
         }
 
 
@@ -382,9 +485,24 @@ def turn_start_verdict(game: Game, cfg: PlayConfig, *, nodes: int | None = None)
     return None
 
 
-def _decision_params(game: Game, cfg: PlayConfig, relations: int, *, seed: int, noise: bool):
-    return search_params(
-        game.lib,
+#: The search fields the game loop sets from the game's own settings, and the proof channel:
+#: never overridden (``PlayConfig.search_overrides``, ``side_overrides``).
+RESERVED_OVERRIDES = frozenset(
+    {"split", "seed", "root_noise", "batch_size", "turn_cap_turns", "turn_cap_boards", "expand", "proof_channel"}
+)
+
+
+def _search_settings(cfg: PlayConfig, side: int | None) -> dict:
+    """The steering switches and overrides a search takes: ``cfg``'s, then ``side``'s own."""
+    settings = {"asset_map": int(cfg.asset_map), "hunt_suggest": int(cfg.hunt_suggest)}
+    settings.update(dict(cfg.search_overrides))
+    if side is not None:
+        settings.update(dict(cfg.side_overrides[side]))
+    return settings
+
+
+def _decision_params(game: Game, cfg: PlayConfig, relations: int, *, seed: int, noise: bool, side: int | None = None):
+    params = dict(
         split=SPLITS[cfg.split],
         seed=seed,
         root_noise=int(noise),
@@ -394,11 +512,25 @@ def _decision_params(game: Game, cfg: PlayConfig, relations: int, *, seed: int, 
         expand=(8, "all", relations),
         hunt=int(cfg.hunt),
         settling=int(cfg.settling),
-        asset_map=int(cfg.asset_map),
         hunt_ms=float(cfg.hunt_ms),
         settling_ms=float(cfg.settling_ms),
         verification_threads=int(cfg.verification_threads),
     )
+    params.update(_search_settings(cfg, side))
+    return search_params(game.lib, **params)
+
+
+def steering_header(cfg: PlayConfig) -> str | None:
+    """The record's ``Steering`` header - each side's steering switches and overrides as it
+    searched - or None where every search took the defaults (default records stay as they were)."""
+    if not (cfg.hunt_suggest or not cfg.asset_map or cfg.search_overrides or any(cfg.side_overrides)):
+        return None  # the E11 review's L3: the asset map off is a setting the record names
+
+    def side(k: int) -> str:
+        settings = _search_settings(cfg, k if cfg.mode == "match" else None)
+        return ", ".join(f"{name}={value}" for name, value in settings.items())
+
+    return f"white: {side(0)}; black: {side(1)}"
 
 
 def _mix(x: int) -> int:
@@ -513,6 +645,11 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
     res = GameResult(config=cfg, record="", actions=[], end="", winner=None)
     shared: Search | None = None  # self-play: the previous decision's search, the cache's donor (C14)
     carried: list[Search | None] = [None, None]  # match play: each side's search
+    clocks: list[TimeManager] = []
+    if cfg.time > 0:  # E11: each side's clock and time manager
+        tp = time_params(allocator=cfg.allocator, signals=int(cfg.signals), **dict(cfg.time_overrides))
+        clocks = [TimeManager(tp), TimeManager(tp)]
+        res.clock_remaining = [float(cfg.time), float(cfg.time)]
     turn_start: Game | None = None  # the action's turn start, while its moves are played one by one
     try:
         while True:
@@ -531,7 +668,8 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                 break
             mover = game.info().to_move
             action: list[Move] = []
-            if cfg.split != "flat":  # a choice left unsettled mid-action puts the game back here (H22)
+            flagged = False
+            if cfg.split != "flat":  # a flag, or a choice left unsettled, mid-action puts the game back here (H22, E11)
                 turn_start = game.copy()
             witness = TurnWitness(turn_start if turn_start is not None else game, cfg)
             if cfg.mode == "match" and carried[mover] is not None and res.actions and not _reroot(carried, mover, res.actions[-1], game):
@@ -546,21 +684,48 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                     shared = search
                 else:
                     if carried[mover] is None:
-                        params = _decision_params(game, cfg, relations, seed=_mix(cfg.seed + 17 * mover), noise=False)
+                        params = _decision_params(game, cfg, relations, seed=_mix(cfg.seed + 17 * mover), noise=False, side=mover)
                         carried[mover] = Search(game, params=params)
                     search = carried[mover]
                 before = search.info()
                 evaluator = evs[mover] if cfg.mode == "match" else evs[0]
-                stats, _ = run_search(
-                    search, evaluator, playouts=cfg.playouts, batch_size=cfg.batch_size, self_play=cfg.mode != "match", **regs
-                )
+                d0 = time.perf_counter()
+                timed = None
+                if clocks:
+                    # E11: the side's time manager runs the decision on its clock.
+                    timed = run_timed_search(
+                        search,
+                        evaluator,
+                        clocks[mover],
+                        remaining=res.clock_remaining[mover],
+                        increment=cfg.increment,
+                        model_clock=cfg.model_clock,
+                        **regs,
+                    )
+                    stats = timed.stats
+                    res.timed_decisions += 1
+                    res.time_stops[timed.verdict.stop] = res.time_stops.get(timed.verdict.stop, 0) + 1
+                    res.extensions += bin(timed.verdict.extensions).count("1")
+                else:
+                    stats, _ = run_search(
+                        search, evaluator, playouts=cfg.playouts, batch_size=cfg.batch_size, self_play=cfg.mode != "match", **regs
+                    )
+                dclock = None if timed is None else _DecisionClock(d0, timed.plan.hard_seconds, res.clock_remaining[mover], cfg.model_clock)
                 step = partial(witness.step, played=action, flat=cfg.split == "flat")
-                pick = _choose(search, cfg, res, stats, evaluator, regs, rng, step)
+                out_of_clock, unsettled = False, "choice"
+                try:
+                    pick = _choose(search, cfg, res, stats, evaluator, regs, rng, step, dclock)
+                except _OutOfClock:
+                    pick, out_of_clock = None, True  # the side's flag falls (charged below)
+                except _NoMove:
+                    pick, unsettled = None, "search"  # unscored, uncharged (the E11 review's S1)
                 if cfg.decision_log and pick is not None:
                     res.decision_log.append(_decision_entry(game, search, pick, len(res.actions), res.decisions, action, start.even))
                 after = search.info()
-                if pick is not None:  # a decision is counted where a move is played
+                if pick is not None or out_of_clock:  # a decision is counted where a move is played, or its flag falls
                     res.decisions += 1
+                # The decision's work, counted before the clock is charged: a flagged or unsettled
+                # decision's too (as the engine's play_game counts it).
                 res.playouts += after.playouts - before.playouts
                 res.evaluations += after.evaluations - before.evaluations
                 res.cache_hits += after.cache_hits - before.cache_hits
@@ -568,8 +733,33 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                 res.network_seconds += stats.evaluate_seconds
                 res.collect_seconds += stats.collect_seconds
                 res.deliver_seconds += stats.deliver_seconds
-                if pick is None:  # H22: no move shown legal within the budget - the game ends unscored
-                    res.end, res.unsettled = "unknown", "choice"
+                res.asset_boosted_edges[mover] += after.asset_boosted_edges - before.asset_boosted_edges
+                res.suggestion_edges[mover] += after.suggestion_edges - before.suggestion_edges
+                res.proofs_withheld += after.proofs_withheld - before.proofs_withheld
+                res.proofs_injected += after.proofs_injected - before.proofs_injected
+                if before.root_turn_start:
+                    res.turn_start_decisions[mover] += 1
+                    res.carried_turn_starts[mover] += int(before.root_visits > 0)
+                if timed is not None and (pick is not None or out_of_clock):
+                    # The decision charged to the side's clock: its whole wall time, or its model time
+                    # (an unsettled choice, or a search that cannot move, ends the game unscored and
+                    # uncharged, as play_game's does).
+                    if cfg.model_clock:  # its whole work at the plan's price (the E11 review's L1)
+                        work = max(
+                            after.evaluations - before.evaluations,
+                            (after.playouts - before.playouts) / clocks[mover].params.playouts_per_evaluation_cap,
+                        )
+                        spent = work * timed.plan.seconds_per_evaluation
+                    else:
+                        spent = time.perf_counter() - d0
+                    if spent > timed.plan.hard_seconds:
+                        res.hard_overruns += 1
+                    res.clock_remaining[mover] -= spent
+                    if res.clock_remaining[mover] <= 0 or out_of_clock:
+                        flagged = True  # the side's flag fell during its action: not recorded
+                        break
+                if pick is None:  # H22 (or S1: no move with time left) - the game ends unscored
+                    res.end, res.unsettled = "unknown", unsettled
                     break
                 child = pick if isinstance(pick, RootChild) else search.child(pick)
                 submitted = False
@@ -595,11 +785,18 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                     search.advance(pick)
                 if submitted:
                     break
-            if res.end:  # an unsettled choice: the action under way is not recorded, the game back at its turn start
+            if flagged or res.end:
+                # A flag, or an unsettled choice: the action under way is not recorded - the game
+                # handle goes back to its turn start.
                 if turn_start is not None:
                     game.close()
                     game, turn_start = turn_start, None
+                if flagged:
+                    res.end = "flag"
+                    res.winner = 1 - mover
                 break
+            if clocks:
+                res.clock_remaining[mover] += cfg.increment
             res.actions.append(action)
             if turn_start is not None:
                 turn_start.close()
@@ -607,6 +804,14 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
         snap = game.snapshot()
         res.final_boards = len(snap.boards)
         res.final_fingerprint = snap.fingerprint
+        budget = (
+            f"clock {cfg.time:g} s + {cfg.increment:g} s per action ({cfg.allocator} allocator, "
+            f"signals {'on' if cfg.signals else 'off'}, {'model' if cfg.model_clock else 'wall'} clock"
+            + "".join(f", {name} {value:g}" for name, value in cfg.time_overrides)  # L3: the overrides named
+            + ")"
+            if cfg.time > 0
+            else f"{cfg.playouts} playouts per decision"
+        )
         termination = res.end + (" (self-play's convention, I11: scored as a draw; not a game rule)" if res.end == "turn_cap" else "")
         termination += UNSETTLED_NOTES.get(res.unsettled, "")
         extra = [
@@ -614,13 +819,16 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
             ("Black", "t5d netplay"),
             (
                 "Engine",
-                f"t5d search through the C step API: network evaluator (random weights), {cfg.playouts} playouts per decision, "
+                f"t5d search through the C step API: network evaluator (random weights), {budget}, "
                 f"{SPLIT_NAMES[cfg.split]}, "
                 f"{'self-play, root noise' if cfg.mode == 'self' else 'match play, two networks'}"
                 f"{', both sides with the optimistic prior (D9)' if cfg.optimistic else ''}, seed {cfg.seed}",
             ),
             ("TurnCap", f"turns {cfg.cap_turns}, boards {cfg.cap_boards}"),
         ]
+        steering = steering_header(cfg)
+        if steering is not None:
+            extra.append(("Steering", steering))
         if cfg.terminal_nodes != TERMINAL_NODES:  # H22: a non-default budget is named (the review of decision 13, L5)
             extra.append(("TerminalNodes", str(cfg.terminal_nodes)))
         res.record = write_record(
@@ -639,6 +847,8 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
         for s in [shared, *carried]:
             if s is not None:
                 s.close()
+        for tm in clocks:
+            tm.close()
         if turn_start is not None:
             turn_start.close()
         game.close()
@@ -757,31 +967,113 @@ def decision_log_lines(res: GameResult, *, demotion_share: float = 0.3) -> list[
     return lines
 
 
-def _choose(search: Search, cfg: PlayConfig, res: GameResult, stats, evaluator, regs, rng, witness=None) -> int | RootChild | None:
+class _OutOfClock(Exception):
+    """The side's clock ran out before it had a move (stage E11, the review's H1 and M1): the
+    side's flag falls - only then (the E11 review's S1)."""
+
+
+class _NoMove(Exception):
+    """A clocked decision's search could not produce a move with time left on the side's clock (no
+    root child visited, and no batch adds a playout - or, on a clock that does not advance,
+    ``_NO_VISIT_ROUNDS`` batches add no visit): the game ends unscored ("unknown", its question
+    "search"; the E11 review's S1), never a flag."""
+
+
+@dataclass
+class _DecisionClock:
+    """A clocked decision's time after its search (stage E11, the review's H1): its start, its
+    hard bound and the side's clock at its start, all on the wall clock (the model clock has no
+    wall time: ``model``)."""
+
+    d0: float
+    hard: float
+    remaining: float
+    model: bool
+
+    def left(self, budget: float) -> float:
+        """Seconds of ``budget`` from the decision's start still unspent (a tiny positive value
+        once spent: a deadline already passed)."""
+        return max(budget - (time.perf_counter() - self.d0), 1e-9)
+
+    def out(self) -> bool:
+        return not self.model and time.perf_counter() - self.d0 >= self.remaining
+
+
+#: A clocked decision's batches without a root child's visit, on a clock that does not advance (the
+#: model clock), before its search is called unable to move (``_NoMove``): the engine's play_game's
+#: kNoVisitRounds - a placeholder (build-log spec issue 480). On the wall clock the side's clock
+#: ends the loop instead.
+_NO_VISIT_ROUNDS = 16
+
+
+def _choose(
+    search: Search, cfg: PlayConfig, res: GameResult, stats, evaluator, regs, rng, witness=None, clock: _DecisionClock | None = None
+) -> int | RootChild | None:
     """The decision's child: the final rule (match) or visit sampling (self-play), then made
     known legal (a chosen unknown child is classified first, within ``cfg.terminal_nodes``;
     H22) - still unknown, the most visited child known legal, and with none the next step of the
     turn-start verdict's witness (``witness(search)``, ``TurnWitness.step``; review decision 13's
     X2) - a child index, or a ``RootChild`` of its own where the root has not instantiated that step.
     None: the chosen move was not shown legal, no other is known legal and the witness does not
-    continue - the game ends unscored."""
+    continue - the game ends unscored. A clocked decision (``clock``; the engine's play_game's
+    policy, the E11 review's H1): the search re-run one batch at a time; the verification within
+    the hard bound, then the most visited child known legal; with none, the children verified in
+    visit order against the side's remaining clock, within the same node budget, and only then
+    the witness (S7); ``_OutOfClock`` when the clock runs out first, ``_NoMove`` when the search cannot
+    produce a move with time left - never a throw for want of a move (the proof channel, which
+    would let a root solved before any visit play its proven win as play_game does, is reserved
+    here: never on)."""
 
     def visited() -> bool:
         return any(c.visits > 0 for c in search.children())
 
+    def search_more(playouts: int) -> None:
+        more, _ = run_search(search, evaluator, playouts=playouts, batch_size=cfg.batch_size, self_play=cfg.mode != "match", **regs)
+        stats.batch_sizes.extend(more.batch_sizes)
+        stats.evaluate_seconds += more.evaluate_seconds
+
     def choose_now() -> int:
-        if not visited():  # children were removed: search again
-            more, _ = run_search(search, evaluator, playouts=cfg.playouts, batch_size=cfg.batch_size, self_play=cfg.mode != "match", **regs)
-            stats.batch_sizes.extend(more.batch_sizes)
-            stats.evaluate_seconds += more.evaluate_seconds
+        if not visited():  # children were removed: search again (a clocked decision: one batch)
+            search_more(cfg.batch_size if clock is not None else cfg.playouts)
+            idle = 0
+            while clock is not None and not visited():
+                # M1, S1: never a throw for want of a visit - on, a batch at a time; the flag only
+                # when the side's clock runs out, unscored when the search cannot move with time left
+                if clock.out():
+                    raise _OutOfClock
+                before = search.info().playouts
+                edgeless = not search.children()
+                if clock.model:
+                    search_more(cfg.batch_size)
+                else:
+                    # The round bounded by the side's clock inside the batch, as play_game's (L6).
+                    held, _ = search.deadline()
+                    search.set_deadline(clock.left(clock.remaining))
+                    try:
+                        search_more(cfg.batch_size)
+                    finally:
+                        search.set_deadline_at(held)
+                if visited():
+                    break
+                if search.info().playouts == before or (edgeless and not search.children()):
+                    raise _NoMove
+                if clock.model:  # a clock that does not advance: the cap
+                    idle += 1
+                    if idle >= _NO_VISIT_ROUNDS:
+                        raise _NoMove
         if cfg.mode == "match":
             return search.choose()[0]
         t = cfg.temperature if res.decisions < cfg.temperature_decisions else 0.0
         return search.choose_by_visits(t, float(rng.random()))
 
+    def within(budget: float) -> dict:
+        """The verification's deadline: ``budget`` seconds from the decision's start - on a clock
+        with wall time only (none unclocked or on the model clock)."""
+        return {} if clock is None or clock.model else {"seconds": clock.left(budget)}
+
     pick = choose_now()
     while search.child(pick).legality != T5D_LEGALITY_LEGAL:
-        verdict = search.verify(pick, nodes=cfg.terminal_nodes)
+        verdict = search.verify(pick, nodes=cfg.terminal_nodes, **within(clock.hard if clock is not None else 0.0))
         res.verified_choices += 1
         if verdict == T5D_LEGALITY_LEGAL:
             break
@@ -789,13 +1081,47 @@ def _choose(search: Search, cfg: PlayConfig, res: GameResult, stats, evaluator, 
             pick = choose_now()
             continue
         legal = [c for c in search.children() if c.legality == T5D_LEGALITY_LEGAL]
-        if not legal:
-            step = None if witness is None else witness(search)
-            if step is not None:
-                res.witness_moves += 1  # a step of the verdict's legal action: known legal
-            return step  # None (H22): the game ends unscored
-        pick = max(legal, key=lambda c: c.visits).index
+        if legal:
+            pick = max(legal, key=lambda c: c.visits).index
+            continue
+        if clock is not None and not clock.model:  # the clock's search first, as play_game's (S7)
+            found = _legal_against_the_clock(search, cfg, res, clock)
+            if found is not None:
+                return found
+        step = None if witness is None else witness(search)
+        if step is not None:
+            res.witness_moves += 1  # a step of the verdict's legal action: known legal
+            return step
+        return None  # H22: the game ends unscored
     return pick
+
+
+def _legal_against_the_clock(search: Search, cfg: PlayConfig, res: GameResult, clock: _DecisionClock) -> int | None:
+    """H1's second exception: no child known legal after the bound's verification - the children
+    verified in visit order against the side's remaining clock, within the game loop's node budget
+    (H22), the first shown legal returned; ``_OutOfClock`` when the clock runs out first; None when
+    every verification stopped with time left (then the verdict's witness, or an unsettled
+    choice)."""
+    tried: set[tuple] = set()
+    while True:
+        children = sorted(search.children(), key=lambda c: -c.visits)
+        removed = False
+        for c in children:
+            key = (tuple(c.moves), c.submit)
+            if key in tried:
+                continue
+            verdict = search.verify(c.index, seconds=clock.left(clock.remaining), nodes=cfg.terminal_nodes)
+            res.verified_choices += 1
+            if verdict == T5D_LEGALITY_LEGAL:
+                return c.index
+            if verdict == T5D_LEGALITY_ILLEGAL:
+                removed = True
+                break
+            if clock.out():
+                raise _OutOfClock
+            tried.add(key)
+        if not removed:
+            return None
 
 
 def _reroot(carried: list[Search | None], mover: int, reply: Sequence[Move], game: Game) -> bool:
@@ -940,7 +1266,7 @@ def check_replay(res: GameResult, replay: Replay) -> list[str]:
     if replay.positions != len(res.actions) + 1:
         problems.append(f"{replay.positions} positions for {len(res.actions)} actions")
     expected = {"checkmate": "checkmate", "stalemate": "stalemate"}.get(res.end, "none")
-    if res.end in ("checkmate", "stalemate", "turn_cap", "action_limit") and replay.last_terminal != expected:
+    if res.end in ("checkmate", "stalemate", "turn_cap", "action_limit", "flag") and replay.last_terminal != expected:
         problems.append(f"the last position is {replay.last_terminal!r}, the game ended {res.end}")
     with Game.from_pgn(res.record) as g:
         g.replay_all()
@@ -994,11 +1320,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-hunt", action="store_true", help="stage E10: no Hunt at the roots (on under 100 boards)")
     parser.add_argument("--no-settling", action="store_true", help="stage E10: no settling scans (on under 50 boards)")
     parser.add_argument("--no-assets", action="store_true", help="stage E10: no asset-map boosts")
+    parser.add_argument("--hunt-suggest", action="store_true", help="H43: Hunt's suggested lines raise their root edges (6e)")
     parser.add_argument("--hunt-ms", type=float, default=50.0, help="Hunt's budget per question (6b'': 50 ms)")
     parser.add_argument("--settling-ms", type=float, default=50.0, help="each settling scan's budget (50 ms)")
     parser.add_argument("--verification-threads", type=int, default=5, help="the provers' threads (M13: 5)")
     parser.add_argument("--decision-log", type=Path, help="stage E10, H44: write every game's decisions here for t5d-audit")
+    parser.add_argument("--time", type=float, default=0.0, help="stage E11, match play only: each side's clock in seconds (0: none)")
+    parser.add_argument("--increment", type=float, default=0.0, help="... and seconds added after each of its actions")
+    parser.add_argument("--allocator", choices=sorted(ALLOCATORS), default="integral", help="6o's arm (with --time)")
+    parser.add_argument("--no-signals", action="store_true", help="6o: the stop/extend table off (with --time)")
+    parser.add_argument("--model-clock", action="store_true", help="the cost model's deterministic clock (with --time)")
     args = parser.parse_args(argv)
+    if args.time > 0 and (args.mode or ["self", "match"]) != ["match"]:
+        parser.error("--time is match play's clock: add --mode match alone (self-play's budgets are PCR's)")
     if args.optimistic and (args.mode or ["self", "match"]) != ["match"]:
         parser.error("--optimistic is match play only (register D9): add --mode match alone")
     splits = args.split or (["ply"] if args.optimistic else ["ply", "flat"])
@@ -1035,10 +1369,16 @@ def main(argv: list[str] | None = None) -> int:
                         hunt=not args.no_hunt,
                         settling=not args.no_settling,
                         asset_map=not args.no_assets,
+                        hunt_suggest=args.hunt_suggest,
                         hunt_ms=args.hunt_ms,
                         settling_ms=args.settling_ms,
                         verification_threads=args.verification_threads,
                         decision_log=args.decision_log is not None,
+                        time=args.time,
+                        increment=args.increment,
+                        allocator=args.allocator,
+                        signals=not args.no_signals,
+                        model_clock=args.model_clock,
                     )
                     with torch.no_grad():
                         res = play_game(evaluators if mode == "match" else evaluators[0], cfg, net_cfg=net_cfg)
@@ -1083,6 +1423,7 @@ if __name__ == "__main__":
 
 
 __all__ = [
+    "RESERVED_OVERRIDES",
     "TERMINAL_NODES",
     "UNSETTLED_NOTES",
     "GameResult",
@@ -1096,6 +1437,7 @@ __all__ = [
     "play_game",
     "replay_problems",
     "replay_with_gate",
+    "steering_header",
     "turn_start_verdict",
     "write_record",
 ]

@@ -878,19 +878,34 @@ class Classifier {
 
   bool take_check() {
     if (checks_ >= budget_.checks) return false;
+    if (deadline_passed()) return false;  // stage E11's gating: the rest Unknown
     ++checks_;
     return true;
   }
 
+  // A deadline passed: no check taken, no search started (issue 406; E11's
+  // gating reaches tier 2's checks too - take_check).
   bool deadline_passed() const {
     return budget_.deadline && std::chrono::steady_clock::now() >= *budget_.deadline;
   }
 
   Finish search(const GameState& s) {
-    if (spent_ >= budget_.search_nodes || deadline_passed()) return Finish{};
+    if (spent_ >= budget_.search_nodes) return Finish{};
+    if (deadline_passed()) {
+      // Past the deadline no search starts (issue 406; the E11 review's S8): a
+      // root search given no time left still runs until the Budgeter first
+      // reads its clock - up to 64 nodes (search_internal.hpp) - and settles
+      // nothing it could rely on. Only the state's own searches come here
+      // past it (a move's loop stops first): counted.
+      ++stats_.root_searches_past_deadline;
+      return Finish{};
+    }
     std::optional<std::chrono::nanoseconds> left;
     if (budget_.deadline) {
-      left = std::chrono::duration_cast<std::chrono::nanoseconds>(*budget_.deadline - std::chrono::steady_clock::now());
+      // Never negative (the deadline may pass between the test above and now);
+      // never far: a deadline is made by deadline_after, under 1e9 s away.
+      left = std::max(std::chrono::nanoseconds{0}, std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                       *budget_.deadline - std::chrono::steady_clock::now()));
     }
     const Finish f =
         search_finish(s, budget_.search_nodes - spent_, budget_.max_bytes, budget_.detector, left);

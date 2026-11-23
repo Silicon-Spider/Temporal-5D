@@ -53,7 +53,7 @@ from __future__ import annotations
 import hashlib
 import math
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Protocol, runtime_checkable
 
@@ -63,10 +63,10 @@ import torch
 from ..net.cache import CachedEvaluator, Epoch, input_digest
 from ..net.model import NetOutput, T5DNet
 from ..net.state import PositionState, collate, relayout, to_piece_centric
-from .capi import T5D_SPLIT_FLAT, T5D_VALUE_LOGITS, T5D_VALUE_PROBABILITIES
+from .capi import T5D_SPLIT_FLAT, T5D_TIME_STOP_NONE, T5D_TIME_STOP_SEARCH, T5D_VALUE_LOGITS, T5D_VALUE_PROBABILITIES
 from .convert import Position, to_position
 from .errors import EngineInternalError
-from .search import LeafView, Search
+from .search import LeafView, Search, TimeManager, TimePlan, TimeVerdict
 
 PositionLike = Position | PositionState
 
@@ -811,6 +811,141 @@ def run_search(
     return stats, driver
 
 
+@dataclass
+class TimedSearch:
+    """One timed decision (``run_timed_search``): its plan, its last verdict (``stop``: why it
+    ended - ``T5D_TIME_STOP_SEARCH`` where the search stopped itself, ``search_stop`` then saying
+    how: ``"finished"`` or ``"exhausted"``), the seconds it took by its clock, and the serve
+    loop's statistics over its slices."""
+
+    plan: TimePlan
+    verdict: TimeVerdict
+    seconds: float
+    stats: ServeStats
+    search_stop: str | None = None
+    slices: int = 0
+
+
+#: Slices before any root child has a visit, in a row, that leave none visited before
+#: ``run_timed_search`` gives up on the exception (a move needs a visit; the E11 review's S3) - the
+#: engine's ``kNoProgressSlices``, a placeholder (build-log spec issue 482).
+NO_PROGRESS_SLICES = 16
+
+
+def run_timed_search(
+    search: Search,
+    evaluator: Evaluator,
+    tm: TimeManager,
+    *,
+    remaining: float,
+    increment: float = 0.0,
+    moves_left: float = math.nan,
+    effort: Sequence[float] | None = None,
+    model_clock: bool = False,
+    clock: Callable[[], float] | None = None,
+    regs_per_board: int = 2,
+    global_regs: int = 16,
+    value_kind: int = T5D_VALUE_LOGITS,
+) -> TimedSearch:
+    """One decision of ``search`` on a clock (stage E11; ``t5d/timeman.hpp``'s ``run_timed`` with
+    Python as the evaluator): ``tm.begin``, then slices - each ``serve`` over a ``CStepDriver`` of
+    ``batch_size`` playouts, the engine's own ``Search::run`` slice, so a deterministic evaluator
+    builds the tree the engine's ``run_timed`` builds - with ``tm.check`` before each, until a
+    stop; then ``tm.end`` - however the run returns (the E11 review's S2). On the wall clock the
+    search's deadline is the hard bound for the run - the earlier of it and one the caller set
+    (the rules engine's calls inside a batch stop at it; a 0 s bound a deadline already passed,
+    never 0 - none: the E11 review's L3) - but not inside a slice run before any root child has
+    a visit (the exception, a move needs a visit: the root's listing completes - M1) for the root's
+    own listing alone, which runs under the caller's (``Search.lift_root_listing``; S4: every other
+    call keeps the bound); the caller's deadline is restored after, exactly (``Search.deadline`` and
+    ``set_deadline_at``; S2), as the engine's ``run_timed`` restores it; ``model_clock``: the
+    cost model's clock (elapsed NaN), deterministic. ``effort``: the root's effort distribution
+    for E8 (off unless the time manager's ``difficulty_weighting``). ``clock``: a clock of the
+    driver's in seconds (a test's virtual clock) in place of the wall clock - the engine's
+    ``run_timed`` with a ``Clock``: the checks and the decision's seconds read it, and the search
+    is given no deadline (that is the steady clock's). Match play's: self-play takes no clock (its
+    budgets are PCR's), so no self-play guard is needed here - and none of D9's flat-form refusal
+    is relaxed."""
+    if model_clock and clock is not None:
+        raise ValueError("run_timed_search: model_clock or a clock, not both")
+    if int(search.params.split) == T5D_SPLIT_FLAT and policy_source(evaluator) != "normal":
+        raise ValueError(FLAT_OPTIMISTIC)
+    start_epoch(search, evaluator, regs_per_board=regs_per_board, global_regs=global_regs)
+    batch = 1 if search.params.synchronous else max(int(search.params.batch_size), 1)  # the engine's slice
+    before = search.info()
+    plan = tm.begin(search, remaining=remaining, increment=increment, moves_left=moves_left, effort=effort)
+    now = time.perf_counter if clock is None else clock
+    steady = clock is None and not model_clock  # the wall clock: the search's deadline is its own
+    t0 = now()
+    stats = ServeStats()
+    out_stop: str | None = None
+    slices = 0
+    # The caller's deadline, restored exactly when the run returns (S2), and the hard bound as the
+    # search's deadline - the earlier of the two; a 0 s bound (a clock at the overhead) is a
+    # deadline already passed, never 0 - which means none (the review's L3).
+    held, held_left = search.deadline()
+    held_end = time.perf_counter() + held_left  # when the caller's deadline passes (inf: never)
+    if steady and max(plan.hard_seconds, 1e-9) < held_left:
+        search.set_deadline(max(plan.hard_seconds, 1e-9))
+    lifted = False  # the forced slice's: the root's own listing under the caller's deadline (M1, S4)
+    idle = 0  # forced slices in a row that left no root child visited (S3)
+    try:
+        while True:
+            verdict = tm.check(search, math.nan if model_clock else now() - t0)
+            if verdict.stop != T5D_TIME_STOP_NONE:
+                break
+            if time.perf_counter() >= held_end:
+                # The caller's deadline passed (S3): stop, as the engine's run_timed does.
+                out_stop = "deadline"
+                verdict = replace(verdict, stop=T5D_TIME_STOP_SEARCH)
+                break
+            found = search.children()
+            edgeless = not found
+            forced = not any(c.visits > 0 for c in found)  # the engine's condition (S2)
+            # The exception (a move needs a visit): until a root child has one, the root's own
+            # listing runs without the hard bound - under the caller's deadline - so that it
+            # completes (the review's M1); every other call keeps the bound (S4) - the engine's
+            # run_timed's condition, no root child visited (S2).
+            if steady and forced != lifted:
+                search.lift_root_listing(held if forced else None)
+                lifted = forced
+            driver = CStepDriver(search, playouts=batch, regs_per_board=regs_per_board, global_regs=global_regs, value_kind=value_kind)
+            st = serve(driver, evaluator, batch_size=batch)
+            slices += 1
+            stats.rounds += st.rounds
+            stats.leaves += st.leaves
+            stats.largest_batch = max(stats.largest_batch, st.largest_batch)
+            stats.batch_sizes.extend(st.batch_sizes)
+            stats.collect_seconds += st.collect_seconds
+            stats.evaluate_seconds += st.evaluate_seconds
+            stats.deliver_seconds += st.deliver_seconds
+            if driver.stop in ("finished", "exhausted"):
+                out_stop = driver.stop
+                verdict = replace(verdict, stop=T5D_TIME_STOP_SEARCH)
+                break
+            # No progress (S3): a forced slice after which no root child has a visit - one that
+            # leaves a root with no edge as it found it, or NO_PROGRESS_SLICES of them in a row.
+            if forced:
+                after = search.children()
+                if not any(c.visits > 0 for c in after):
+                    idle += 1
+                    if (edgeless and not after) or idle >= NO_PROGRESS_SLICES:
+                        out_stop = "exhausted"
+                        verdict = replace(verdict, stop=T5D_TIME_STOP_SEARCH)
+                        break
+    finally:
+        search.lift_root_listing(None)
+        search.set_deadline_at(held)
+        tm.end(search)
+    if model_clock:
+        after = search.info()
+        work = max(after.evaluations - before.evaluations, (after.playouts - before.playouts) / tm.params.playouts_per_evaluation_cap)
+        seconds = work * plan.seconds_per_evaluation
+    else:
+        seconds = now() - t0
+    return TimedSearch(plan=plan, verdict=verdict, seconds=seconds, stats=stats, search_stop=out_stop, slices=slices)
+
+
 class UniformEvaluator:
     """Logits 0 for every move, no submit logit (the search's placeholder share), WDL logits
     (0, 0, 0) - the value exactly 0, the draw probability 1/3 - and the categorical's mass on
@@ -846,11 +981,13 @@ __all__ = [
     "POLICY_SOURCES",
     "SearchDriver",
     "ServeStats",
+    "TimedSearch",
     "UniformEvaluator",
     "check_evaluation",
     "engine_epoch",
     "policy_source",
     "run_search",
+    "run_timed_search",
     "start_epoch",
     "serve",
     "state_of",
