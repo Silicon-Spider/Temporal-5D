@@ -6775,6 +6775,37 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     longer says the search scores capped positions as the game will - the search values a capped
     node whose verdict is unknown as a draw where the game ends it unscored (values only: such a
     game's targets are masked).
+    **Verified.** The survivors re-run with the mutation pass's runner on a fresh copy of the final
+    tree (a102584; one mutant at a time, builds and BLAS threads at 3): KILLED - M08
+    (play_an_unsettled_turn_start_at_the_cap_is_unknown_h22), M09
+    (play_a_verdict_the_memory_ceiling_stops_ends_the_game_unknown_h22), M10
+    (play_terminal_budget_is_the_searchs_own_and_refuses_none_h22,
+    play_exe_terminal_nodes_ends_an_unsettled_game_unscored_h22), M17 and M21
+    (play_a_choice_unsettled_off_the_witness_puts_the_game_back_after_two_moves_h22,
+    play_an_unsettled_choice_after_a_move_puts_the_game_back_h22), M18
+    (play_a_choice_unsettled_off_the_witness_puts_the_game_back_after_two_moves_h22), M24
+    (capi_search_verifies_a_chosen_move_within_a_budget_h22), M26
+    (test_the_budgeted_verification_keeps_the_memory_ceiling), M28
+    (test_checks_and_nodes_reach_their_own_tiers), M31
+    (test_the_bindings_default_verification_is_exact), M39
+    (test_netplay_rolls_back_the_whole_action_after_two_moves), M42
+    (test_netplay_cli_takes_terminal_nodes), M47
+    (test_netplay_decision_log_survives_an_unsettled_choice), M54
+    (test_generator_drops_the_dropped_actions_resignation_event), M56 and M62
+    (test_generator_drops_the_whole_action_after_two_moves). M12 (the verification limits tier 2's
+    checks too) survives, equivalent in practice as the review found: with the budget at 2,000,000 -
+    100,000 at the smallest tested - tier 2's checks never bind before tier 3's nodes on a tested
+    position. A note on the runner: it rebuilds the engine for each C++ mutant and only at its end
+    from the pristine sources, so the Python mutants that follow a C++ one in its list run against
+    that mutant's library - the first pass had M39, M42 and M47 "killed" by the memory-ceiling test
+    under M26's library; re-run alone on the pristine library, each is killed by its own test
+    (above). The copy restored pristine (its sources' hash). Final checks on a102584: engine 785 of
+    785 (`--werror`; 27 minutes, the machine loaded); long_detectors 2 of 2; ruff clean (check;
+    format, 140 files); pytest - the whole `tests/engine` directory and the train files that play or
+    read games - 743 passed, 1 skipped (test_records' opt-in T5D_RECORDS run; T5D_REQUIRE_ENGINE=1);
+    verify ok; gate commit ok (SMOKE TEST - PASSED, baseline 41 compared, 0 declined; proof channel
+    DISABLED). No search path changed (`mcts.cpp`, the scanner and the prover untouched since
+    193b517): no Lazy SMP run owed; no truth source changed: no nightly owed.
 
 402. **6f's settling scans: their wrapper is not on main** (§13.1 6f "verify the proof-export
     invariant under TT churn for Hunt and the settling scans (§11.3)"; §11.4 "df-pn at the
@@ -11319,3 +11350,13 @@ entry changes in the same edit as its code, which the standing rule defers to up
   Checks: ruff clean (check; format, 140 files); decision 13's two Python test files, 12 passed
   (T5D_REQUIRE_ENGINE=1); verify ok. No engine file changed: the engine was not rebuilt; the round's
   checks run on its final tree.
+- **2026-11-24 - Decision 13's review round** (`lane/engine`; issue 414; edits 309-311, 307
+  reworded; main 98f68c1 merged first, c65d9e5). Five commits: X2 with L6, L8, C-L1 and F5's seam
+  (73e6430); the missing tests, X1, X6, X7, L4, L10 (cb7130c); netplay's replay, the binding's
+  range, the records, the callback - X5, L3, L5, L7 (39f6797); the record - X3, X4, L1, L2, L9
+  (a102584); and this verification. The survivors' re-run: 16 of 16 killed by named tests, M12
+  equivalent in practice (issue 414). Coordination: `lane/search`'s phase 2 edits `selfplay.cpp` and
+  `netplay.py`; this round's hunks there are the witness step and `off_tree` in `make_legal`, the
+  clock rule at a verdict, the seam, `TurnWitness`, `verdict_params`, `replay_problems` and the
+  `TerminalNodes` header - whichever lands second reconciles them. Checks: as issue 414's last
+  paragraph.

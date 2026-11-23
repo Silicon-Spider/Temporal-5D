@@ -10,6 +10,22 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - Decision 13's review, verified: the survivors re-run and the round's checks
+
+The review round of decision 13 (build-log issue 414) closes with its verification: 16 of the
+mutation pass's 16 survivors killed, each by a named test, on a fresh copy of the final tree,
+and M12 equivalent in practice, as the review found (issue 414 lists them). Final checks on
+a102584: engine 785 of 785 (`--werror`; 27 minutes, the machine loaded); long_detectors 2 of
+2; ruff clean (check; format, 140 files); pytest - the whole `tests/engine` directory and the
+train files that play or read games - 743 passed, 1 skipped (test_records' opt-in T5D_RECORDS
+run; T5D_REQUIRE_ENGINE=1); verify ok; gate commit ok (SMOKE TEST - PASSED, baseline 41
+compared, 0 declined; proof channel DISABLED). No search path changed (`mcts.cpp`, the scanner
+and the prover untouched since 193b517): no Lazy SMP run owed; no truth source changed: no
+nightly owed. No code changed.
+
+Spec: none - the round's edits 309-311 stand as proposed, 307 reworded. The proof channel
+stays off.
+
 ### 2026-11-24 - Decision 13's review: the record (X3, X4, L1, L2, L9)
 
 From the review of decision 13 (build-log issue 414): the readings that change training data
