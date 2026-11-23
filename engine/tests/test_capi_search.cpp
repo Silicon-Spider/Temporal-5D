@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <limits>
@@ -1177,6 +1178,92 @@ TEST(capi_search_choose_advance_and_reply) {
   std::uint64_t after = 0;
   REQUIRE_EQ(t5d_search_digest(s.get(), &after), T5D_OK);
   CHECK_EQ(after, before);
+}
+
+TEST(capi_search_verifies_a_chosen_move_within_a_budget_h22) {
+  // Register H22 (§11.0, 2026-11-15 review): the game loop's exact questions
+  // take a node budget. t5d_search_verify_budgeted: within no budget a chosen
+  // unknown move stays unknown and stays a child; within T5D_NO_LIMIT both it
+  // is t5d_search_verify; between, deterministic and monotone - once a budget
+  // settles it, every larger one gives the same answer. Bare kings: every
+  // White move is the royal's, so the fast classification settles none.
+  const char* bare[] = {"[k7/8/8/8/8/8/8/7K:0:1:w]"};
+  t5d_game* raw = nullptr;
+  REQUIRE_EQ(t5d_game_new_from_fen(bare, 1, 8, 8, T5D_PARITY_INFER, T5D_TO_MOVE_INFER, T5D_RULES_STANDARD, &raw,
+                                   nullptr),
+             T5D_OK);
+  const Game g(raw);
+  t5d_search_params p = quick_params();
+  p.legality_checks = 0;
+  p.legality_nodes = 0;
+  p.verify_unknown = 0;
+  p.hunt = 0;
+  p.settling = 0;
+  p.asset_map = 0;
+  const auto searched = [&] {
+    SearchHandle s = new_search(g.get(), p);
+    REQUIRE_EQ(t5d_search_run(s.get(), T5D_EVALUATOR_UNIFORM, 0, 32, nullptr), T5D_OK);
+    return s;
+  };
+  const auto legality_of_child = [](const t5d_search* s, std::size_t i) {
+    t5d_root_child c;
+    REQUIRE_EQ(t5d_search_child(s, i, &c, nullptr, 0, nullptr), T5D_OK);
+    return c.legality;
+  };
+  const auto children = [](const t5d_search* s) {
+    t5d_search_summary info;
+    REQUIRE_EQ(t5d_search_info(s, &info), T5D_OK);
+    return info.root_children;
+  };
+  const SearchHandle s = searched();
+  const std::uint64_t n = children(s.get());
+  REQUIRE(n > 0);
+  for (std::size_t i = 0; i < n; ++i) CHECK_EQ(legality_of_child(s.get(), i), T5D_LEGALITY_UNKNOWN);
+  int32_t legality = -1;
+  REQUIRE_EQ(t5d_search_verify_budgeted(s.get(), 0, 0, 0, &legality, nullptr), T5D_OK);
+  CHECK_EQ(legality, T5D_LEGALITY_UNKNOWN);
+  CHECK_EQ(children(s.get()), n);
+  CHECK_EQ(legality_of_child(s.get(), 0), T5D_LEGALITY_UNKNOWN);
+  REQUIRE_EQ(t5d_search_verify_budgeted(s.get(), 0, T5D_NO_LIMIT, T5D_NO_LIMIT, &legality, nullptr), T5D_OK);
+  const SearchHandle twin = searched();
+  int32_t exact = -1;
+  REQUIRE_EQ(t5d_search_verify(twin.get(), 0, &exact, nullptr), T5D_OK);
+  CHECK_EQ(legality, exact);
+  CHECK_EQ(legality, T5D_LEGALITY_LEGAL);
+  CHECK_EQ(legality_of_child(s.get(), 0), T5D_LEGALITY_LEGAL);
+  // Tier 3's nodes alone (no checks): the same answer from two fresh searches,
+  // and once settled, settled the same at every larger budget.
+  int32_t settled = T5D_LEGALITY_UNKNOWN;
+  std::size_t unknown_budgets = 0;
+  const std::uint64_t budgets[] = {0, 1, 2, 4, 16, 64, 1024, std::uint64_t{1} << 20};
+  for (const std::uint64_t nodes : budgets) {
+    int32_t a = -1;
+    int32_t b = -1;
+    const SearchHandle x = searched();
+    const SearchHandle y = searched();
+    REQUIRE_EQ(t5d_search_verify_budgeted(x.get(), 0, 0, nodes, &a, nullptr), T5D_OK);
+    REQUIRE_EQ(t5d_search_verify_budgeted(y.get(), 0, 0, nodes, &b, nullptr), T5D_OK);
+    CHECK_EQ(a, b);
+    if (settled != T5D_LEGALITY_UNKNOWN) CHECK_EQ(a, settled);
+    if (a == T5D_LEGALITY_UNKNOWN) {
+      ++unknown_budgets;
+    } else {
+      settled = a;
+    }
+  }
+  std::printf("  bare kings: %llu root children; unknown within the smallest %zu of 8 node budgets, then %d\n",
+              static_cast<unsigned long long>(n), unknown_budgets, settled);
+  CHECK_EQ(settled, T5D_LEGALITY_LEGAL);
+  CHECK(unknown_budgets >= 1);  // no budget settles nothing
+  // Refused: no search, nowhere to answer, no such child, a batch waiting.
+  CHECK_EQ(t5d_search_verify_budgeted(nullptr, 0, 0, 0, &legality, nullptr), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_search_verify_budgeted(s.get(), 0, 0, 0, nullptr, nullptr), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_search_verify_budgeted(s.get(), 9999, 0, 0, &legality, nullptr), T5D_ERR_ARGUMENT);
+  const SearchHandle waiting = searched();
+  std::size_t leaves = 0;
+  REQUIRE_EQ(t5d_search_gather(waiting.get(), 4, T5D_NO_LIMIT, &leaves, nullptr), T5D_OK);
+  REQUIRE(leaves > 0);
+  CHECK_EQ(t5d_search_verify_budgeted(waiting.get(), 0, 0, 0, &legality, nullptr), T5D_ERR_ARGUMENT);
 }
 
 TEST(capi_search_takes_the_moves_made_from_the_game_a6) {

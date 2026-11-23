@@ -10,6 +10,49 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - Decision 13's game loops: the terminal test within a node budget, and the unscored ending (H22)
+
+Review decision 13 (register H22, ruled binding by the user on 2026-11-23) says the game
+loop's terminal test takes a node budget, never a time limit, and a turn start it cannot
+settle ends the game unscored, never a guessed mate; the same budget covers whether a chosen
+move is legal. Built in every game loop (build-log issue 413, settling issue 408): one budget
+for each turn start's verdict and each chosen move's verification - C++
+`PlayParams::terminal_nodes` (`kTerminalNodes`) and `t5d-play --terminal-nodes`; Python
+`PlayConfig.terminal_nodes` and `GeneratorConfig.terminal_nodes` (`netplay.TERMINAL_NODES`,
+`--terminal-nodes`), the generator's recorded in `generator_config` (record format version 2
+kept) - and a new C function, `t5d_search_verify_budgeted`
+(`engine/include/t5d/capi_search.h`, `src/capi_search.cpp`), bound as `Search.verify(index,
+checks=, nodes=)` (`python/t5d/engine/search.py`, `capi.py`). The value is a placeholder:
+2,000,000 nodes, the search's own `mate_nodes`, so the loop and its searches cannot disagree.
+A verdict the budget does not reach, or a decision with no child shown legal within it, ends
+the game "unknown" (`GameEnd::Unknown`): the question in `GameRecord::unsettled` /
+`GameResult.unsettled` and the record's Termination header; an unsettled choice drops the
+action under way (the record ends at its turn start, the game handle put back), where before
+it threw. The target side was already on main (issue 731). `engine/src/selfplay.cpp`,
+`include/t5d/selfplay.hpp`, `tools/play_record.cpp`, `tools/t5d_play.cpp`,
+`python/t5d/engine/netplay.py`, `python/t5d/train/selfplay.py` (and `records.py`'s docstring),
+`engine/README.md`. Tests: one C API test, three play-loop tests and a t5d-play test
+(`test_capi_search.cpp`, `test_legality_cost.cpp`, `test_play_exe.cpp`);
+`python/tests/engine/test_terminal_budget.py` and
+`python/tests/train/test_generator_budget.py`. Issue 406's deadline tests now set the budget
+exact (they test the deadline); test_selfplay.cpp's `check_game` takes the ruled Unknown end,
+which one of its games now reaches - Very Small - Open, the flat form, a turn start at 88
+boards that 2,000,000 nodes do not settle. Checks: engine 778 of 778 (`--werror`; 27 minutes,
+the machine loaded to 97-100% by another lane's job); long_detectors 2 of 2; ruff clean
+(check; format, 136 files); pytest - the whole `tests/engine` directory and the train files
+that play or read games (test_generator_budget, test_unscored, test_mechanics, test_records,
+test_seeded_starts, test_selfplay_pool, test_steering, test_targets, test_trainer,
+test_completed_q_arm, test_target_arms, test_qat) - 600 passed, 1 skipped (test_records'
+opt-in T5D_RECORDS run), T5D_REQUIRE_ENGINE=1; verify ok; gate commit ok (SMOKE TEST - PASSED,
+baseline 41 compared, 0 declined; proof channel DISABLED). Lazy SMP and the nightly not owed:
+no search, prover or scanner path and no truth source changed.
+
+Spec: §11.0 (the game loop's budget), §12.3, §12.8, §13 ("Exactness is the other cost"), §16;
+register H22, I15, H37, I3 - proposed edits 306 (§11.0: built, and the placeholder value), 307
+(§13), 308 (§16: H22 moved to the as-built entries, superseding the code round's edit 411's
+second half). No truth source changed (`T5D_TRUTH_SOURCES`), no search or prover path; the
+proof channel stays off.
+
 ### 2026-11-23 - Build log: the current state at the engine lane's merge
 
 `docs/BUILD_LOG.md`: `lane/engine`'s line under "Now" says what merged and what comes next (decision 13,

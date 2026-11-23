@@ -727,6 +727,7 @@ _SIGNATURES: dict[str, tuple[object, list[object]]] = {
     "t5d_search_choose": (c_int32, [_SEARCH, POINTER(c_size_t), POINTER(c_int32), _ERR]),
     "t5d_search_choose_by_visits": (c_int32, [_SEARCH, c_double, c_double, POINTER(c_size_t), _ERR]),
     "t5d_search_verify": (c_int32, [_SEARCH, c_size_t, POINTER(c_int32), _ERR]),
+    "t5d_search_verify_budgeted": (c_int32, [_SEARCH, c_size_t, c_uint64, c_uint64, POINTER(c_int32), _ERR]),
     "t5d_search_advance": (c_int32, [_SEARCH, c_size_t, _ERR]),
     "t5d_search_advance_action": (c_int32, [_SEARCH, POINTER(MoveRecord), c_size_t, _ERR]),
     "t5d_search_root_game": (c_int32, [_SEARCH, POINTER(_GAME), _ERR]),

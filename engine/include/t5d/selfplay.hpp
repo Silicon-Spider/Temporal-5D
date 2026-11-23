@@ -71,11 +71,26 @@ enum class GameEnd : std::uint8_t {
   Checkmate = 0,  ///< E4's detector: the side to move is checkmated
   Stalemate,      ///< E4's detector: a draw (C10)
   TurnCap,        ///< I11's convention: scored as a draw
-  Unknown,        ///< the detector could not decide (H37): the game stops unjudged
+  Unknown,        ///< unscored (H22): a question the game loop's budget left unsettled (GameRecord::unsettled)
   ActionLimit,    ///< PlayParams::max_actions: a safety stop, not a rule
   TimeLimit,      ///< PlayParams::max_seconds: a safety stop, not a rule
 };
 const char* game_end_name(GameEnd end) noexcept;
+
+/// Register H22 (§11.0; review decision 13, 2026-11-15): which of the game
+/// loop's two exact questions an Unknown game ended on - the turn start's
+/// verdict, or whether a chosen move is legal (no child shown legal within
+/// the budget). None for every other end.
+enum class Unsettled : std::uint8_t { None = 0, Verdict, Choice };
+const char* unsettled_name(Unsettled u) noexcept;  ///< "", "verdict", "choice"
+
+/// H22: the game loop's node budget for its exact questions, in search nodes
+/// (SearchBudget's - deterministic, never a time limit). A PLACEHOLDER: the
+/// spec gives no figure; it is SearchParams::mate_nodes' default, the budget
+/// each fresh search's own root check runs under, so that the loop and its
+/// searches cannot disagree (a test holds the two equal); Python's
+/// netplay.TERMINAL_NODES is the same.
+inline constexpr std::uint64_t kTerminalNodes = 2'000'000;
 
 /// Self-play's search parameters: the search's defaults with root Dirichlet
 /// noise ON (E1, §8.4) and the asset map OFF (a named placeholder: I2's steered
@@ -88,6 +103,16 @@ struct PlayParams {
   SearchParams search = self_play_search_defaults();
   /// Playouts per decision (the node budget).
   std::uint64_t playouts = 64;
+  /// H22 (§11.0): the node budget of the game loop's two exact questions -
+  /// each turn start's verdict (detect_mate) and the verification of a chosen
+  /// move the expansion's budget left unknown (LegalityOptions' search nodes;
+  /// tier 2's checks unlimited) - under the memory ceiling search.mate_bytes. A
+  /// verdict it does not reach ends the game Unknown (never a mate, H37); a
+  /// verification it leaves unknown gives way to the most visited child known
+  /// legal, and with none the game ends Unknown at the action's turn start (the
+  /// action under way is not recorded). UINT64_MAX: exact (the behaviour before
+  /// the ruling); 0 refused. Deterministic, unlike max_seconds.
+  std::uint64_t terminal_nodes = kTerminalNodes;
   /// I11 - handed to the search too, so that it scores capped positions as the
   /// game will.
   TurnCap turn_cap{};
@@ -112,7 +137,7 @@ struct PlayParams {
   /// exact verification it stops gives way to the most visited child known
   /// legal - or, with none, ends the game there. 0, or 1e9 or more (+infinity
   /// included; t5d/mcts.hpp's THE DEADLINE): none - and then the verdicts and
-  /// verifications have no time limit, as no node limit (H37). NaN or a
+  /// verifications have no time limit, only terminal_nodes (H22). NaN or a
   /// negative value: refused. Not deterministic - for tools, never for
   /// training games.
   /// What it does not reach bounds its overshoot: the flat form's turn
@@ -188,6 +213,8 @@ struct GameRecord {
   /// D2's arm the game was searched under (the audit lane's log names it).
   TurnSplit split = TurnSplit::BoardMove;
   GameEnd end = GameEnd::Unknown;
+  /// An Unknown game's question (H22); None otherwise.
+  Unsettled unsettled = Unsettled::None;
   /// 0 white, 1 black, -1 none (no optional: g++ 13/14 warn on copying one).
   int winner = -1;
   /// Searches run: under the board-move split one per move and one per

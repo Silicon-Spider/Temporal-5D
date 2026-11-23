@@ -297,7 +297,7 @@ build. *(2026-11-23: they carry them now.)*
   evaluator (G12); the unscored ending in records and targets (decision 13).
 - **Search and engine lanes.** The tree form under MCGS, merging at evaluated nodes only, and
   section 15.2's tree-form row under the graph (decision 10); a node budget for the terminal test
-  in Python's play loops and the training generator (decision 13); on/off switches for the asset
+  in Python's play loops and the training generator (decision 13 - *built on `lane/engine`, 2026-11-24: issue 413*); on/off switches for the asset
   map and Hunt's suggested lines for 6e's match tests; Gumbel root search behind a flag (E10),
   after I21's ranking; MLH steering in Lc0's form once the moves-left head is trained.
 - **Gate lane.** Nothing new. H48 waits for the user.
@@ -2136,7 +2136,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | H17 | built in part | (6f, 2026-10-23: the prover's five threads sharing a 1-entry TT give no false proof and every certificate E4 confirms - `prover_threads_survive_tt_churn`; issue 402; its counts clock-budgeted, 73-74 confirmed and 35-36 certificates - MT-03's review, issue 409.) Lazy SMP in the scanner (E5c): same-root threads, a shared TT and a concurrent solved store; in-game decay and rung helpers wait for the search; no help for exhaustive refutations (measured on Guard, now in the register). **The shared stores' data race on Windows - fixed 2026-10-22** (`lane/engine`; found at E-A6's review, where `scanner_lazy_smp_store_refuses_contradictions` segfaulted in 11 of 600 runs on the development machine - MSYS2 ucrt64 g++ 16.2, Release; gdb: `same_position` under `ConcurrentSolvedStore::put`). The cause, confirmed in winpthreads' source and by experiment: libstdc++'s `std::shared_mutex` is a `pthread_rwlock_t` with the static initialiser; winpthreads initialises it on its first call and returns `EINVAL` to the threads that lose that race (8 threads on 64 fresh locks: 149,878 and 156,542 of 1,024,000 `pthread_rwlock_wrlock` calls, in two runs; `pthread_mutex_lock` never failed); libstdc++ ignores the error - so a losing thread ran its critical section without the lock, then unlocked a lock it did not hold. Every store the scanner's and the prover's threads share is first taken by all of them at once (a scanner's own; Guard's and Hunt's, built per call; the disproof stores). Fixed by construction: both stores' shards are behind `ShardLock` (`t5d/scanner.hpp`), a `std::mutex` - libstdc++'s `lock()` throws on any error the platform reports, never returning without the lock. A warm-up (each shard's lock taken once at construction; 0 crashes in 600 runs at E-A6's review) was not chosen: it rests on winpthreads' internals, not on the lock's contract, and keeps the slow lock. The audit: no other `std::shared_mutex`, `shared_lock` or `shared_timed_mutex` in `engine/`; the TTs are lockless; MCGS and the evaluation cache have no lock and are single-threaded (H15) - `t5d_search_new_sharing`, `EvalCache` and the Python `Search` now say that searches sharing a cache are used one at a time. Tests (`test_shared_stores.cpp`): `shared_store_lock_excludes_at_first_concurrent_use` and `shared_stores_hold_at_first_concurrent_use` - built with the old lock (`3f04f8e` with the new test file, in a scratch copy) each failed in every run - 120 of 120 on 2026-10-17, 50 of 50 on 2026-10-22 (the lock test with 136-1,003 overlaps a run over 2026-10-17 and 2026-10-22, the store test by crashing) - and with `ShardLock` neither failed in 500 (2026-10-17) or 300 (2026-10-22) runs; `scanner_lazy_smp_store_refuses_contradictions` failed with the old stores in 14 of 600 runs on 2026-10-17 (10 crashes, 3 stores holding a position twice, 1 lost distance) and 85 of 600 on 2026-10-22 (58 crashes), and with the new in 0 of 1,000 each day. The cost, indicative (a shared machine; not in MEASUREMENTS): winpthreads' reader-writer lock takes about 1.4 µs a call and a process-wide spinlock, so the mutex is far faster here - store operations about 25× as many at 1 thread and 450-1,000× as many at 5 and 12; at 5 threads Hunt 1.45-1.69×, Guard 2.71-2.90× and the scanner 1.22-1.34× the nodes per second (two days; at 1 thread 0.94-1.07×, noise, and the same nodes and proofs as the old build). `scanner.hpp`, `scanner.cpp`, `prover.hpp` and `prover.cpp` are truth sources: the code signature changes, no verdict logic (M17's row; issue 147). Linux (glibc) not yet run: the engine job (ubuntu-24.04, g++ 13/14) runs the tests on every push, but no GitHub Actions job has started on any branch since 2026-10-17 09:56 UTC, the nightly of 2026-10-22 included ("recent account payments have failed or your spending limit needs to be increased") - re-run the engine workflow once billing is fixed. Issue 146, edit 120; the old lock also leaked Windows handles (about 2.75 per lock used; review of 8d6849f) |
 | H18 | built, tested | 5D Zobrist: coordinate-free content hash per board, multiply-rotate with (timeline, half-turn), addition across boards, ruleset ID, player to move, parity, creators, board size; incremental equals from-scratch; duplicated boards never cancel (engine E1, E2) |
 | H19 | built, tested | Proofs export to the solved store at once; the TT holds estimates only; class-relative disproofs live in their own store, never the solved store (E8, E9 - now in the register). **Under TT churn (6f, MT-03, 2026-10-23, `lane/engine`)**: with a 1- or 2-entry TT, settling as the scans run it (full df-pn, external stores) answers as the default TT does wherever both decide, every proof and disproof is in its store at return and a fresh prover answers from the stores with no expansion, at 1 and 5 threads; Hunt's mates are found under the same churn, certified, its disproof store untouched (`prover_proofs_survive_tt_churn_h19`, `prover_threads_survive_tt_churn`, `hunt_finds_its_mates_under_tt_churn`, `long_` twins). Through the settling wrapper: after E10's merge (issue 402); Hunt observed through `hunt_prover_options` (issue 403). **Review correction (2026-11-01, MT-03's review; fixed 2026-11-02, issue 409):** the churn barely moved those searches (a 1-entry TT changed the expansions at 66 of 2,034 random roots, never a status) and the disproof check was vacuous (any solved-store entry but a Win passed; a stored Draw could not fail). Now: the TT keeps estimates only by construction - it refuses a proven or disproven entry, tested (`prover_tt_keeps_estimates_never_facts`); workloads where churn carries weight (`prover_churn_takes_effect_where_the_tt_carries_weight`: 63 of 248 roots' searches change, statuses never; Hunt's: 13 of 54); a disproof in its store at class and depth or its stored fact checked (a Loss the game tree confirms after each of E4's listed actions, a stalemate by E4); a stored proof never read beyond its depth (re-asked shallower). Edit 301 |
-| H22 | built, tested | All five items of §11.0 (E1, E2, E4); the register's wording now matches what is built (proposed edit 40, applied upstream) |
+| H22 | built, tested | All five items of §11.0 (E1, E2, E4); the register's wording now matches what is built (proposed edit 40, applied upstream); the game loop's terminal test within a node budget and the unscored ending (review decision 13): built 2026-11-24 in the C++ loop, netplay and the training generator (issue 413; edits 306-308) - match play's reading waits on E11 |
 | H23 | built, tested | The gate, oracle and engine sides. The engine is configured in `gate.toml` (`./build/engine/t5d-gate`, full mode, 2026-10-17; the root's build on every platform, with a time limit of its own, `[engine] timeout_s`) and compared in every tier: commit, a smoke test (H47), PASSED, locally and in CI (run 39009070712); nightly PASSED locally (2026-10-17, under the two-oracle rule), gating Standard - Half Reflected and Standard - Reversed Royalty; Standard - Turn Zero, gated since H51, has one oracle behind cwmtt/tesseractMageOChicken and is not - not yet run in CI with the engine (step 2). Since CHECKPOINT 8 (H47, built 2026-10-17) a ruleset is gated only when two oracles stand behind each of its records, and the commit tier holds the engine to its baseline (spec issues 131-133). The release tier, the one that can enable the proof channel, is not yet run with it: its oracle layer fails on H48's 17 notes until the re-recording. The proof channel stays disabled (H23, H41). Kairos (H52, CHECKPOINT 9) is pinned and its query surface confirmed (`lane/gate`, 2026-10-23); its two sources join the nightly and release tiers once the quiet-machine block records their golden files. CHECKPOINT 10: Kairos is in ftxi's lineage - the two-oracle bar counts lineages (H47) - and the sign-off run leaves it out |
 | H24, H26, H28 | built, tested | The generator and the 5dpgn/5DFEN parser are in-house (`engine/`), written from `docs/rules/README.md` and the notation spec's text (551 engine tests on `lane/gate` after H51's review); boundary clean. H28's one exception - the export-form record converted by the harness (CHECKPOINT 3) - is now in the register. Where the specification says when to write a token and not how to read one that disagrees, the reader reads leniently: the capture mark since H51 (2026-10-17, rulebook R11; `PgnOptions::capture_marks`), as the annotations (T15) and turn numbers before it - the move read as its squares define it, the mismatch a warning (`PgnReplay::warnings()`). H26 since CHECKPOINT 9: Kairos is the fifth submodule (pinned 2026-10-23, `lane/gate`), harness only; its NOTICE says parts of it derive from ftxi - ruled at CHECKPOINT 10: one lineage with ftxi; the reuse rule binds between oracles too, and every oracle's NOTICE, credits and pinned code are read at each pin bump |
 | H27 | built, tested | The oracle harness, committed 2026-10-01. Tiered CI as H47 reads it since CHECKPOINT 8 (built 2026-10-17): ftxi per commit as a smoke test that gates nothing - two oracles are needed to gate a ruleset - and fails an engine that declines a record it read on the last green run, or reads none; cwmtt and Chess in 5D nightly and before releases; a run restricted to chosen sources or records is never a tier result. Upstream reports (CHECKPOINT 8: defects as bug reports, disagreements with a documented rule as questions citing the source; drafted by the agent, filed by the owner), in `docs/checkpoints/upstream/`: the two defects of R7 as bug reports (2026-10-01), ftxi's reading of the check test as a question (2026-10-17, spec issue 126: five representative positions, one per rule question RQ1-RQ4; the 147 R1 entries' `upstream` names it), and three notation-reader gaps (2026-11-08, issue 579: ftxi's signed timeline labels, KD-0054, and 5d-chess-js's signed `(>Lx)` token as bug reports; ftxi's refusal of an empty last sub-turn as a question) - none filed yet. CHECKPOINT 9: Kairos pinned under `oracles/third_party/kairos` (lock tier nightly) - wired as sources `kairos` and `kairos:naive`, enabled in no tier until its golden files are recorded (issue 530) |
@@ -2232,7 +2232,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | G12 | built, tested (2026-11-22); the gain GPU-deferred | Self-play as a pool of concurrent games behind one evaluator (section 7.8): `python/t5d/engine/pool.py` (the padded-token planner, `SharedEvaluator` with one service thread, `GamePool` with game threads; shutdown and failures reach every caller) and `python/t5d/train/selfplay_pool.py` (`python -m t5d.train.selfplay_pool`; records plus a `pool.json` of the batching conditions). Placeholders: 65,536 padded tokens, 64 positions, 25% padding, 32 games (command line: 8 games, 2 leaves). Records unchanged (version 2): a pooled game writes the alone game's record byte for byte with an exact evaluator or merging off (tested); under merged forwards of a network, to tolerance (issue 723). Refused: the cached and phase-form evaluators. Not built: match play's batch cap and prefetch; worker processes; the gain (Gate 1 step 2, M19). Issues 723, 724, 728 |
 | I1 | not started (rule) | Self-play training: no training runs in the untrained build (the brief); the pilot run (M18) comes after §15.5 |
 | I2 | built, tested (engine round 2c, E10; targets M21 commit 2) | Targets from the pruned visits - the search-value targets too (CHECKPOINT 7). The engine side (engine ABI round 2c, issue 153): per root child its visits, priors with and without the noise, q, value variance, E3's factor, `boost`, `steered_visits`, `forced_visits`, and the root's effective cPUCT; search-side forced playouts not built. **The steering counts are real since E10 (2026-10-23)**: `boost` = the noise-free prior less the unsteered one (`prior_unsteered`, appended), `steered_visits` the root visits PUCT would have given another child with the unsteered priors (`steered_rule`, issue 179); a self-play game through Python's generator records non-zero steered visits and the targets exclude them (`python/tests/train/test_steering.py`). **The E10 review measured the counterfactual definition failing** - with exclusion the boosted moves' share of the target fell to 0.032 where the unsteered search gave 0.499 (issue 179(a)): the definition is unvalidated, **self-play runs without the asset map** until one is (issue 450, put to the user), and the targets' replica now unsteers the noised prior by (1 - ε) x the boost (179(c)). The targets (`python/t5d/train/targets.py`): KataGo's forced-playout pruning at target construction against a replica of the root's PUCT, a one-visit remainder dropped; steered visits excluded (`policy_mode="exclusion"`, the placeholder) or kept at a weight (`"provenance"`) - open, 6e; the replica's prior without the boost; the policy, soft-policy, categorical, short-term and deblundering values and the q_ratio blend's root WDL all from the pruned visits. Placeholders: issue 235 |
-| I3 | built in part | Match play as I3 configures it: root noise off, the final rule (LCB), the tree carried (`t5d-play --match`, E6a; netplay's `mode="match"`, N5). The mature regime is training-time. In the untrained build: the curriculum hooks as interfaces only (H44, step 2) and I18's resignation rule (built: M21 commit 3, `lane/net` - off until the value head is calibrated); MLH steering and early adjudication parked (issue 300; "Parked", below) |
+| I3 | built in part | Match play as I3 configures it: root noise off, the final rule (LCB), the tree carried (`t5d-play --match`, E6a; netplay's `mode="match"`, N5). The mature regime is training-time. In the untrained build: the curriculum hooks as interfaces only (H44, step 2) and I18's resignation rule (built: M21 commit 3, `lane/net` - off until the value head is calibrated); MLH steering and early adjudication parked (issue 300; "Parked", below); the unscored ending of H22 built (issue 413) |
 | I4 | principle | Confidence-family mechanisms never scale down the confidence-independent layer - followed: C24 is add-only; E8 (not started) to follow |
 | I5 | built, tested (M21 commit 3, `lane/net`) | PCR in the training generator (`train/selfplay.py`, `PCRConfig`): each decision full with probability 0.25 (KataGo's), drawn from the game's seed and the decision's index, else cheap at the full cap / 8 without root noise (placeholders, issue 236); only full searches emit policy, soft-policy, categorical and effort targets (`train/targets.py`). Difficulty-biasing only as a mixture: `difficulty_mix` < 1 enforced, > 0 not built (the root's effort output is not delivered - issue 236). `engine/netplay.py` and `t5d-play` unchanged (no PCR: they write no training records) |
 | I6 | built behind its arm, tested (M21 commit 3, `lane/net`) | A prototype: its epistemic triggers as 6u's sampler arms (`train/sampler.py`): the persistent bucket (`BucketTracker`: a (board-count range, phase) bucket's realised error above a threshold at each of the last checkpoints boosts its rows) and raw variance; its realised-error arm superseded by I12 (not an arm). Constants placeholders (issue 236) |
@@ -6122,6 +6122,9 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     and let the search's budgets carry the position; for the chosen move, the most visited
     child known legal (the memory ceiling's fallback, already built). Either changes training
     games, so it is a decision, not a fix.
+    *Ruled 2026-11-15 (review decision 13, register H22: a node budget, never a time limit; a turn
+    start it cannot settle ends the game unscored), ruled binding by the user 2026-11-23, and built
+    2026-11-24 in the C++ play loop, netplay and the training generator: issue 413.*
 409. **MT-01/02/03's mutation review: what it found, what changed, what the survivors do now**
     (§15.4, §11.1, §13.1 6f, §11.3; register H41, H19, H17, H43; issues 400-405; edits 300-302).
     The review (2026-11-01; 47 mutants and 3 combinations, on a copy) found no bug in the engine
@@ -6330,6 +6333,72 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     outcomes (a root stuck, or never listed again) and 18 invariant failures (the root's memory
     count stale); with the fix none (the same 557 faults, 476 of them leaving the root unlisted,
     each listed by the later playout; 18 s).
+413. **Decision 13's game loops, built: the terminal test within a node budget, and the unscored
+    ending** (register H22, I15, H37, I3; §11.0, §12.3, §12.8, §13, §16; review decision 13 of
+    2026-11-15, ruled binding by the user 2026-11-23; settles issue 408). Built on `lane/engine`
+    from the handed-over plan (d13), each step checked against main as it now is.
+    **The budget.** One node budget for the game loop's two exact questions - each turn start's
+    verdict (`detect_mate`) and the verification of a chosen move the expansion left unknown (tier
+    3's search nodes; tier 2's checks unlimited) - under the memory ceiling `mate_bytes`. C++:
+    `PlayParams::terminal_nodes` (`kTerminalNodes`), `t5d-play --terminal-nodes`. Python:
+    `PlayConfig.terminal_nodes` and `GeneratorConfig.terminal_nodes` (`netplay.TERMINAL_NODES`;
+    `python -m t5d.engine.netplay --terminal-nodes`), the generator's in every record's
+    `generator_config` (format version 2 kept). The C API: `t5d_search_verify_budgeted` (checks and
+    nodes; `T5D_NO_LIMIT` both is `t5d_search_verify`), bound as `Search.verify(index, checks=,
+    nodes=)` and in `_SIGNATURES` (a library without it is refused at load). 1 to UINT64_MAX
+    (exact); 0 refused.
+    **The value, a PLACEHOLDER**: 2,000,000 search nodes, the search's own `mate_nodes` default -
+    the budget each fresh search's root check already runs under, so the loop and its searches
+    cannot disagree; tests pin the three together (the plan's recommended answer).
+    **The unscored ending.** A verdict the budget does not reach ends the game "unknown"
+    (`GameEnd::Unknown`, `Unsettled::Verdict`). A chosen move left unknown gives way to the most
+    visited child known legal, as built, and with none the game ends "unknown" at the action's turn
+    start (`Unsettled::Choice`): the action under way is not recorded - in Python its decisions,
+    their positions and resignation events leave the I15 record, and the game handle is put back
+    from a copy taken at the turn start. Before the ruling that case threw ("the memory ceiling").
+    The question goes into `GameRecord::unsettled` / `GameResult.unsettled` and the 5dpgn
+    Termination: "unknown (the turn start's verdict stayed unknown within the game loop's budget,
+    H22: unscored; never a mate)" or "unknown (no move could be shown legal within the game loop's
+    budget, H22: unscored)". No new end kind: "unknown" was unscored end to end, and the target side
+    (issue 731, `TargetConfig.unscored_whole_blend` off) masks its outcome targets.
+    **Readings taken** (the plan's recommended answers; the documents leave them open): (a) one end
+    name, "unknown", the question beside it; (b) an unsettled choice drops the partial action - it
+    has no place in record format version 2; (c) the rules before the cap, as built: a capped turn
+    start the budget cannot settle is "unknown", not a drawn cap; (d) the memory ceiling counts with
+    the budget (its Unknown is the same unsettled question); (e) `max_seconds` stays a tool's safety
+    stop (`time_limit`), outside the ruling, whose "never a time limit" bounds the terminal test -
+    now bounded by nodes in every loop; (f) match play's reading ("the engine's own turn needs no
+    verdict") waits on E11's clock (`lane/search`): until then the C++ loop's and netplay's match
+    mode end "unknown" as self-play does.
+    **Where the plan was out of date or wrong.** Its part 9, the C++ loop, waited on lane/engine's
+    merge - now done, so it is built here. The rollback copies the game at the action's turn start
+    (`Game.copy()`) instead of the plan's `game_at` replay, which would have had to rebuild I22's
+    seeded starts. The target side and its tests were already on main (issue 731). G12's pool runs
+    `generate_game` per game, so it takes the budget unchanged. The plan's two-board royal-only
+    start lets one king jump cover both boards (the action ends after one move): the mid-action
+    tests use three timelines, where no single move lets White submit.
+    **Counted and measured.** The engine's own
+    `selfplay_games_end_by_checkmate_stalemate_or_the_cap` now ends one of its ten games unscored -
+    Very Small - Open, the flat form, seed 2: 18 actions, a turn start at 88 boards whose verdict
+    2,000,000 nodes do not settle (2.9 s of verdicts, the machine loaded); it passed before because
+    the exact verdict ran until it settled (the suite's slowest test). At 191 boards 2 million nodes
+    stop the verdict in 3.8 s (MEASUREMENTS, "Exact move legality's cost"). So the placeholder ends
+    some games well below the turn cap's 300 boards and near the generator's 80: for the pilot run,
+    the share of games ended unscored per board-count range, from which the budget is set (§13:
+    unscored endings fall where large-board data is thinnest).
+    **Tests.** Engine: `capi_search_verifies_a_chosen_move_within_a_budget_h22`;
+    `play_terminal_budget_is_the_searchs_own_and_refuses_none_h22`,
+    `play_a_turn_start_the_budget_cannot_settle_ends_the_game_unscored_h22` and
+    `play_a_choice_the_budget_cannot_settle_ends_the_game_unscored_h22` (test_legality_cost.cpp);
+    `play_exe_terminal_nodes_ends_an_unsettled_game_unscored_h22` and `--terminal-nodes 0` refused.
+    Changed: issue 406's deadline tests set the budget exact (they test the deadline, not the
+    budget); test_selfplay.cpp's `check_game` takes the ruled Unknown end (unscored, the verdict
+    unknown within the same budget, checked within it). Python:
+    `tests/engine/test_terminal_budget.py` (the binding, the default, the verdict unknown or exact
+    and deterministic, both unscored endings with the rollback, determinism under a budget) and
+    `tests/train/test_generator_budget.py` (the budget in the record, the unknown record's round
+    trip and targets, a record with no decision, the dropped partial action). Proposed edits 306
+    (§11.0), 307 (§13), 308 (§16).
 
 402. **6f's settling scans: their wrapper is not on main** (§13.1 6f "verify the proof-export
     invariant under TT churn for Hunt and the settling scans (§11.3)"; §11.4 "df-pn at the
@@ -9662,6 +9731,36 @@ repository's copies, which upstream has still to take:
     on the state alone, a classification a deadline cut met another list's evaluation and the
     search threw; "one network input" made exact, not a new rule (§8.5's search purity and
     §15.2's purity row unchanged).
+306. **§11.0's budget paragraph (H22 built)**: now - "**The game loop asks item 3's question under a
+    budget** (2026-11-15 review, settling BUILD_LOG issue 408; ruled, and not yet built in the
+    Python loops)." Proposed - "(2026-11-15 review, settling BUILD_LOG issue 408; built in the C++
+    play loop, netplay and the training generator, BUILD_LOG issue 413)", and after "never a time
+    limit, which would make a record irreproducible" add: "- its value a placeholder, the search's
+    own terminal-check budget (2,000,000 nodes, §16), so the loop asks nothing of a turn start that
+    a fresh search's root check does not -". Why: issue 413 (the plan's recommended value; the spec
+    gave none).
+307. **§13's "Exactness is the other cost"**: now - "The game's turn-start verdict and the
+    verification of a chosen move before it is played are exact with no node limit (H37) ... The
+    game loop's answer - ruled, not yet built in the Python loops - is a node budget and an unscored
+    ending, never a guessed mate (§11.0)." Proposed - "Exact, with no node limit, the game's
+    turn-start verdict and the verification of a chosen move have each been measured past twenty to
+    thirty minutes at ~190 boards ... The game loop's answer is a node budget and an unscored
+    ending, never a guessed mate (§11.0): at the placeholder budget the 191-board verdict stops
+    unknown within 4 s, and the engine's own test games end unscored from 88 boards (BUILD_LOG issue
+    413) - the pilot run measures how often, by board count, and sets the budget." Why: issue 413.
+308. **§16 (H22 as built)**: now - under "Ruled in the 2026-11-15 review, and not yet built":
+    "**H22**: the game loop's terminal test takes a node budget, and a turn start it cannot settle
+    ends the game unscored (§11.0)." Proposed - remove it there (or keep only "H22 at match play:
+    the engine's own turn needs no verdict - waits on E11's clock"), and add under "Search": "**H22,
+    the game loop's exact questions.** One node budget for each turn start's verdict and for the
+    verification of a chosen move the expansion left unknown: 2,000,000 search nodes, the search's
+    own `mate_nodes` - a placeholder (`PlayParams::terminal_nodes`,
+    `PlayConfig`/`GeneratorConfig.terminal_nodes`; the C API's `t5d_search_verify_budgeted`). A
+    question it leaves unsettled ends the game "unknown" - unscored, never a mate - the record's
+    Termination naming the question; an unsettled choice drops the action under way, the record
+    ending at its turn start. A wall-clock stop (`max_seconds`) is a tool's safety stop, never
+    training's." This supersedes the second half of the code round's edit 411 ("the loops' node
+    budget is still to build"). Why: issue 413.
 
 <!-- A new list, so that the numbers from 137 render as written. -->
 
@@ -10691,3 +10790,19 @@ entry changes in the same edit as its code, which the standing rule defers to up
   ok (SMOKE TEST - PASSED, baseline 41 compared, 0 declined; proof channel DISABLED). No truth
   source changed (main changed none since af0c19b, and `mcts.cpp` is not one) and nothing here
   touches the scanner, so neither the nightly gate nor the Lazy SMP test is owed.
+- **2026-11-24 - Decision 13's game loops** (`lane/engine`, from main d4c7fb9; issue 413; edits
+  306-308; the plan handed over from the review's code round). The terminal test and the chosen
+  move's verification within one node budget (2,000,000, a placeholder) in the C++ play loop,
+  netplay and the training generator, the unscored ending with its question in the record, and the C
+  API's `t5d_search_verify_budgeted`. Coordination: `lane/search`'s phase 2 edits `selfplay.cpp`,
+  netplay and the timed loop and adopts this budget from main; this change keeps to the terminal
+  test and the unscored ending, so whichever lands second reconciles `selfplay.cpp` (here: the
+  verdict's budget, `make_legal`'s no-child case and the end after a stopped action). Checks: engine
+  778 of 778 (`--werror`; 27 minutes, the machine loaded to 97-100% by another lane's job);
+  long_detectors 2 of 2; ruff clean (check; format, 136 files); pytest - the whole `tests/engine`
+  directory and the train files that play or read games (test_generator_budget, test_unscored,
+  test_mechanics, test_records, test_seeded_starts, test_selfplay_pool, test_steering, test_targets,
+  test_trainer, test_completed_q_arm, test_target_arms, test_qat) - 600 passed, 1 skipped
+  (test_records' opt-in T5D_RECORDS run), T5D_REQUIRE_ENGINE=1; verify ok; gate commit ok (SMOKE
+  TEST - PASSED, baseline 41 compared, 0 declined; proof channel DISABLED). Lazy SMP and the nightly
+  not owed: no search, prover or scanner path and no truth source changed.

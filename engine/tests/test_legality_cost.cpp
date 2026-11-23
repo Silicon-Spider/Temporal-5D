@@ -27,6 +27,7 @@
 #include <sys/wait.h>
 #endif
 
+#include "play_record.hpp"
 #include "t5d/expand.hpp"
 #include "t5d/legal.hpp"
 #include "t5d/mcts.hpp"
@@ -37,6 +38,7 @@
 #include "t5d/variants.hpp"
 #include "test_framework.hpp"
 #include "test_play.hpp"
+#include "test_positions.hpp"
 
 namespace {
 
@@ -206,6 +208,7 @@ TEST(play_flat_with_exact_legality_ends_on_its_stop) {
   pp.search.expand.square_features = SquareFeatures::None;
   pp.playouts = 800;
   pp.max_seconds = 1.0;
+  pp.terminal_nodes = std::numeric_limits<std::uint64_t>::max();  // exact: a test of the deadline, not of H22's budget
   const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
   const auto t0 = std::chrono::steady_clock::now();
   const mcts::GameRecord g = mcts::play_game(s, *ev, pp);
@@ -234,6 +237,7 @@ TEST(play_deadline_reaches_a_turn_start_verdict) {
   pp.search.hunt = pp.search.settling = false;
   pp.playouts = 32;
   pp.max_seconds = 2.0;
+  pp.terminal_nodes = std::numeric_limits<std::uint64_t>::max();  // exact: a test of the deadline, not of H22's budget
   const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Material);
   const auto t0 = std::chrono::steady_clock::now();
   const mcts::GameRecord g = mcts::play_game(s, *ev, pp);
@@ -558,6 +562,7 @@ TEST(play_cache_across_decisions_with_a_stop) {
     pp.search.legality = LegalityOptions::nodes(200'000);
     pp.playouts = 2;
     pp.max_seconds = secs;
+    pp.terminal_nodes = std::numeric_limits<std::uint64_t>::max();  // exact: a test of the deadline, not of H22's budget
     const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
     mcts::GameRecord g(s);
     CHECK_NOTHROW(g = mcts::play_game(s, *ev, pp));
@@ -597,6 +602,7 @@ TEST(play_with_a_stop_from_sparse_starts_and_small_variants_never_throws) {
     pp.seed = 1000 + static_cast<std::uint64_t>(g);
     pp.search.seed = pp.seed;
     pp.max_seconds = 0.05 + 0.017 * static_cast<double>((g * 7) % 23);
+    pp.terminal_nodes = std::numeric_limits<std::uint64_t>::max();  // exact: a test of the deadline, not of H22's budget
     const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform, pp.seed);
     mcts::GameRecord r(st.state);
     CHECK_NOTHROW(r = mcts::play_game(st.state, *ev, pp));
@@ -805,6 +811,7 @@ TEST(play_totals_count_a_timed_out_decision) {
   {  // (a) its search runs to the deadline - no choice is made after it (M1): deterministic
     pp.playouts = std::uint64_t{1} << 30;
     pp.max_seconds = 0.3;
+    pp.terminal_nodes = std::numeric_limits<std::uint64_t>::max();  // exact: a test of the deadline, not of H22's budget
     const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
     mcts::GameRecord g(s);
     CHECK_NOTHROW(g = mcts::play_game(s, *ev, pp));
@@ -1037,6 +1044,7 @@ TEST(play_no_child_known_legal_at_the_deadline_ends_time_limit) {
   pp.match_play = true;  // the most visited child: the steered one
   pp.playouts = 2;
   pp.max_seconds = 1.0;
+  pp.terminal_nodes = std::numeric_limits<std::uint64_t>::max();  // exact: a test of the deadline, not of H22's budget
   Steering steer(find_move(s, "(+2T2)Kb4(+1T1)a4"));
   Sleepy ev(steer, 0.85, true);
   const auto t0 = std::chrono::steady_clock::now();
@@ -1065,6 +1073,7 @@ TEST(play_no_move_is_played_after_the_deadline) {
   pp.search.verify_unknown = false;
   pp.playouts = 2;
   pp.max_seconds = 1.0;
+  pp.terminal_nodes = std::numeric_limits<std::uint64_t>::max();  // exact: a test of the deadline, not of H22's budget
   pp.decision_log = true;
   Steering steer(find_move(s, "(+2T2)Kb4(+1T1)a4"));
   Sleepy ev(steer, 0.85, true);
@@ -1104,6 +1113,7 @@ TEST(play_fallback_after_a_cut_verification_plays_a_child_known_legal) {
     pp.match_play = true;
     pp.playouts = 4;  // the root, the first move twice (lazily verified: unknown), the second (legal)
     pp.max_seconds = stop;
+    pp.terminal_nodes = std::numeric_limits<std::uint64_t>::max();  // exact: a test of the deadline, not of H22's budget
     pp.decision_log = true;
     TwoSteering steer(steered, legal);
     mcts::GameRecord g(s);
@@ -1151,6 +1161,7 @@ TEST(play_late_verdict_gets_the_time_left) {
   pp.search.mate_nodes = 20'000;
   pp.playouts = 1;
   pp.max_seconds = 6.0;
+  pp.terminal_nodes = std::numeric_limits<std::uint64_t>::max();  // exact: a test of the deadline, not of H22's budget
   const std::unique_ptr<mcts::Evaluator> material = mcts::make_evaluator(mcts::BuiltinEvaluator::Material);
   Sleepy ev(*material, 1.0, true);
   const mcts::GameRecord g = mcts::play_game(s, ev, pp);
@@ -1158,4 +1169,114 @@ TEST(play_late_verdict_gets_the_time_left) {
                mcts::game_end_name(g.end));
   CHECK(g.end == mcts::GameEnd::TimeLimit);
   CHECK(g.seconds < pp.max_seconds + 0.2);  // the late verdict cut at the deadline
+}
+
+// ---- H22: the game loop's node budget (review decision 13, settling issue 408) ---------------------
+
+TEST(play_terminal_budget_is_the_searchs_own_and_refuses_none_h22) {
+  // Register H22 (§11.0): the game loop's two exact questions take a node budget - a PLACEHOLDER,
+  // the search's own mate_nodes default, the budget each fresh search's root check runs under
+  // (Python's netplay.TERMINAL_NODES is pinned to the same). 0 settles nothing: refused.
+  CHECK_EQ(mcts::kTerminalNodes, std::uint64_t{2'000'000});
+  CHECK_EQ(mcts::PlayParams{}.terminal_nodes, mcts::kTerminalNodes);
+  CHECK_EQ(mcts::SearchParams{}.mate_nodes, mcts::kTerminalNodes);
+  mcts::PlayParams pp;
+  pp.terminal_nodes = 0;
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
+  CHECK_THROWS_AS(mcts::play_game(variant_start(*find_variant("Standard"), RuleOptions{}), *ev, pp),
+                  std::invalid_argument);
+}
+
+TEST(play_a_turn_start_the_budget_cannot_settle_ends_the_game_unscored_h22) {
+  // H22: "a turn start that neither yields a legal action nor exhausts within the budget ends the
+  // game unscored ... An unknown is never scored as a mate." A mated start (Kh1, Qg2 protected by
+  // Kf3): within one node fewer than its proof needs the game ends Unknown at once - its question
+  // the verdict, "*", unscored, no action, the record's Termination saying so; within the proof's
+  // nodes, and exactly, it ends Checkmate. Deterministic: the same game twice.
+  const GameState s = t5d_test::game({"[8/8/8/8/8/5k2/6q1/7K:0:1:w]"}, BoardSize{8, 8});
+  mcts::PlayParams pp;
+  pp.search = quiet(pp.search);
+  std::uint64_t least = 0;  // the fewest nodes in which the game's detector proves the mate
+  for (std::uint64_t n = 1; n <= 100'000 && least == 0; n = n < 64 ? n + 1 : n * 2) {
+    SearchBudget b = SearchBudget::nodes(n);
+    b.max_bytes = pp.search.mate_bytes;
+    if (detect_mate(s, pp.search.detector, b).verdict == Outcome::Checkmate) least = n;
+  }
+  REQUIRE(least > 1);
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
+  std::uint64_t below = least - 1;
+  for (std::uint64_t n = least - 1; n >= 1; --n) {  // the largest budget below the proof's that leaves it unknown
+    SearchBudget b = SearchBudget::nodes(n);
+    b.max_bytes = pp.search.mate_bytes;
+    if (detect_mate(s, pp.search.detector, b).verdict == Outcome::Unknown) {
+      below = n;
+      break;
+    }
+  }
+  pp.terminal_nodes = below;
+  const mcts::GameRecord a = mcts::play_game(s, *ev, pp);
+  const mcts::GameRecord b = mcts::play_game(s, *ev, pp);
+  const std::string record = tools::play_record(a, "custom");
+  std::fprintf(stderr, "  the mate proven within %llu nodes; within %llu: %s (%s)\n",
+               static_cast<unsigned long long>(least), static_cast<unsigned long long>(below),
+               mcts::game_end_name(a.end), mcts::unsettled_name(a.unsettled));
+  CHECK(a.end == mcts::GameEnd::Unknown);
+  CHECK(a.unsettled == mcts::Unsettled::Verdict);
+  CHECK(a.actions.empty());
+  CHECK_EQ(a.winner, -1);
+  CHECK_EQ(a.result(), std::string("*"));
+  CHECK_EQ(a.white_score(), -1.0);
+  CHECK(record.find("[Termination \"unknown (the turn start's verdict stayed unknown within the game loop's budget, "
+                    "H22: unscored; never a mate)\"]") != std::string::npos);
+  CHECK(b.end == a.end && b.unsettled == a.unsettled && tools::play_record(b, "custom") == record);
+  for (const std::uint64_t n : {least, std::numeric_limits<std::uint64_t>::max()}) {
+    pp.terminal_nodes = n;
+    const mcts::GameRecord m = mcts::play_game(s, *ev, pp);
+    CHECK(m.end == mcts::GameEnd::Checkmate);
+    CHECK(m.unsettled == mcts::Unsettled::None);
+    CHECK_EQ(m.winner, 1);
+    CHECK(tools::play_record(m, "custom").find("[Termination \"checkmate\"]") != std::string::npos);
+  }
+}
+
+TEST(play_a_choice_the_budget_cannot_settle_ends_the_game_unscored_h22) {
+  // H22: "a choice that stays unknown within it is passed over for the most visited child known to
+  // be legal - as built - and with none known the game ends unscored." Issue 406's Q3 node with no
+  // legality budget in the search (every move unknown; nothing verified there), the choice steered
+  // onto a move whose exact proof needs 531,432 nodes, the game loop's budget 100,000: the
+  // verification stays unknown, no child is known legal, and the game ends Unknown at the action's
+  // turn start - its question the choice, no decision, no action, the start the final state, the
+  // record replaying to it - where before the ruling it threw (the memory ceiling's message).
+  // No clock is read: the same game twice.
+  const GameState s = fixture("q3-flat-node.5dpgn", q3());
+  mcts::PlayParams pp;
+  pp.search = quiet(pp.search);
+  pp.search.split = mcts::TurnSplit::BoardMove;
+  pp.search.legality = LegalityOptions::budgeted(0, 0);
+  pp.search.verify_unknown = false;
+  pp.match_play = true;  // the most visited child: the steered one
+  pp.playouts = 2;
+  pp.terminal_nodes = 100'000;
+  Steering steer(find_move(s, "(+2T2)Kb4(+1T1)a4"));
+  mcts::GameRecord a(s);
+  CHECK_NOTHROW(a = mcts::play_game(s, steer, pp));
+  const mcts::GameRecord b = mcts::play_game(s, steer, pp);
+  std::fprintf(stderr, "  %.2f s (verdicts %.2f s, verification %.2f s), %s (%s), %llu verified choices, %llu decisions\n",
+               a.seconds, a.seconds_verdicts, a.seconds_search_verify, mcts::game_end_name(a.end),
+               mcts::unsettled_name(a.unsettled), static_cast<unsigned long long>(a.verified_choices),
+               static_cast<unsigned long long>(a.decisions));
+  CHECK(a.end == mcts::GameEnd::Unknown);
+  CHECK(a.unsettled == mcts::Unsettled::Choice);
+  CHECK(a.actions.empty());
+  CHECK_EQ(a.decisions, std::uint64_t{0});
+  CHECK(a.verified_choices >= 1);
+  CHECK(a.final_state == s);
+  CHECK_EQ(a.white_score(), -1.0);
+  const std::string record = tools::play_record(a, "custom");
+  CHECK(record.find("[Termination \"unknown (no move could be shown legal within the game loop's budget, H22: "
+                    "unscored)\"]") != std::string::npos);
+  PgnReplay replay(read_pgn(record), PgnOptions{}, q3());
+  CHECK_NOTHROW(replay.play_all());
+  CHECK_EQ(replay.actions_played(), std::size_t{0});
+  CHECK(b.end == a.end && b.unsettled == a.unsettled && b.verified_choices == a.verified_choices);
 }

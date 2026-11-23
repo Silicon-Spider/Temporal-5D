@@ -205,7 +205,8 @@ TEST(play_exe_command_line) {
        {std::vector<std::string>{"--max-actions", "4294967296"}, std::vector<std::string>{"--cap-turns", "2147483648"},
         std::vector<std::string>{"--cap-boards", "18446744073709551615"}, std::vector<std::string>{"--max-seconds", "nan"},
         std::vector<std::string>{"--max-seconds", "-1"}, std::vector<std::string>{"--playouts", "0"},
-        std::vector<std::string>{"--temperature", "inf"}, std::vector<std::string>{"--batch", "0"}}) {
+        std::vector<std::string>{"--temperature", "inf"}, std::vector<std::string>{"--batch", "0"},
+        std::vector<std::string>{"--terminal-nodes", "0"}}) {
     CHECK_EQ(run(T5D_PLAY_EXE, bad, {}, dir / "o.txt", dir / "e.txt"), 2);
     CHECK(read_all(dir / "e.txt").find("range") != std::string::npos ||
           read_all(dir / "e.txt").find("finite") != std::string::npos);
@@ -254,4 +255,31 @@ TEST(play_exe_max_seconds_ends_with_its_record) {
   REQUIRE_EQ(run(T5D_PLAY_EXE, far, {}, dir / "far.5dpgn", dir / "far-stderr.txt"), 0);
   CHECK(read_all(dir / "far.5dpgn") == read_all(dir / "none.5dpgn"));
   CHECK(read_all(dir / "far.5dpgn").find("action_limit") != std::string::npos);
+}
+
+TEST(play_exe_terminal_nodes_ends_an_unsettled_game_unscored_h22) {
+  // Register H22 (§11.0): --terminal-nodes is the game loop's node budget. Within one node the
+  // start's verdict is unknown: the game ends there, unscored - "*", no action, the Termination
+  // naming the question. The default budget and an exact one (UINT64_MAX) play the same game at
+  // this size (the ladder off: one thread, deterministic).
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::path(T5D_TEST_SCRATCH) / "play-exe";
+  fs::create_directories(dir);
+  const std::vector<std::string> base{"--variant", "Standard", "--seed", "5", "--max-actions", "2", "--playouts", "16",
+                                      "--no-hunt", "--no-settling", "--no-assets"};
+  std::vector<std::string> one = base;
+  one.insert(one.end(), {"--terminal-nodes", "1"});
+  REQUIRE_EQ(run(T5D_PLAY_EXE, one, {}, dir / "one.5dpgn", dir / "one-stderr.txt"), 0);
+  const t5d::PgnRecord rec = t5d::read_pgn(read_all(dir / "one.5dpgn"));
+  REQUIRE(rec.header("Termination") != nullptr);
+  CHECK(*rec.header("Termination") ==
+        "unknown (the turn start's verdict stayed unknown within the game loop's budget, H22: unscored; never a mate)");
+  CHECK(*rec.header("Result") == "*");
+  CHECK(rec.actions.empty());
+  std::vector<std::string> exact = base;
+  exact.insert(exact.end(), {"--terminal-nodes", "18446744073709551615"});
+  REQUIRE_EQ(run(T5D_PLAY_EXE, base, {}, dir / "budgeted.5dpgn", dir / "budgeted-stderr.txt"), 0);
+  REQUIRE_EQ(run(T5D_PLAY_EXE, exact, {}, dir / "exact.5dpgn", dir / "exact-stderr.txt"), 0);
+  CHECK(read_all(dir / "budgeted.5dpgn") == read_all(dir / "exact.5dpgn"));
+  CHECK(read_all(dir / "budgeted.5dpgn").find("action_limit") != std::string::npos);
 }

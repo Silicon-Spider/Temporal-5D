@@ -649,6 +649,17 @@ T5D_API t5d_status t5d_search_choose_by_visits(const t5d_search* search, double 
 T5D_API t5d_status t5d_search_verify(t5d_search* search, size_t index, int32_t* legality,
                                      char** error);
 
+/* t5d_search_verify within a budget - tier 2's checks and tier 3's search
+ * nodes in all (LegalityOptions; T5D_NO_LIMIT both: exactly
+ * t5d_search_verify), under the search's memory ceiling (mate_bytes): the game
+ * loop's verification of a chosen move under its node budget (register H22,
+ * §11.0: "the same budget covers the loop's other exact question"; Python's
+ * play loops and the training generator). A move the budget leaves undecided
+ * is T5D_LEGALITY_UNKNOWN and stays a child; an illegal one is removed, as
+ * t5d_search_verify removes it. Deterministic: no clock is read. */
+T5D_API t5d_status t5d_search_verify_budgeted(t5d_search* search, size_t index, uint64_t checks,
+                                              uint64_t nodes, int32_t* legality, char** error);
+
 /* Re-roots on root child `index` (C12): its statistics carried, every node the
  * new root cannot reach deleted, cached evaluations kept. */
 T5D_API t5d_status t5d_search_advance(t5d_search* search, size_t index, char** error);

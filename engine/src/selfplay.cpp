@@ -57,6 +57,15 @@ const char* game_end_name(GameEnd end) noexcept {
   return "?";
 }
 
+const char* unsettled_name(Unsettled u) noexcept {
+  switch (u) {
+    case Unsettled::None: return "";
+    case Unsettled::Verdict: return "verdict";
+    case Unsettled::Choice: return "choice";
+  }
+  return "?";
+}
+
 std::string GameRecord::result() const {
   if (end == GameEnd::Checkmate) return winner == 0 ? "1-0" : "0-1";
   if (end == GameEnd::Stalemate) return "1/2-1/2";
@@ -89,6 +98,10 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
   SearchParams sp = params.search;
   sp.turn_cap = params.turn_cap;
   if (params.match_play) sp.root_noise = false;  // §12.3: noise off at match play
+  if (params.terminal_nodes == 0) {
+    throw std::invalid_argument(
+        "PlayParams::terminal_nodes: 1 or more (UINT64_MAX: exact) - the game loop's node budget (H22)");
+  }
   if (params.guard_final && !sp.proof_channel) {
     throw std::invalid_argument(
         "PlayParams::guard_final: Guard's refutation is a proof, and no proof may change play until the proof "
@@ -126,7 +139,10 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
     if (!deadline) return 0;
     return std::max(std::chrono::duration<double>(time_left(*deadline)).count(), 1e-6);
   };
-  SearchBudget verdict_budget;  // no node limit: a verdict is a proof (H37)
+  // H22 (§11.0): the turn-start verdict within the game loop's node budget -
+  // a verdict is a proof (H37), and one the budget does not reach ends the
+  // game Unknown, never a mate.
+  SearchBudget verdict_budget = SearchBudget::nodes(params.terminal_nodes);
   verdict_budget.max_bytes = sp.mate_bytes;
   for (;;) {
     // A turn start: the rules first, then the cap's convention.
@@ -148,7 +164,8 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       break;
     }
     if (r.verdict == Outcome::Unknown) {
-      g.end = GameEnd::Unknown;
+      g.end = GameEnd::Unknown;  // unscored (H22): the budget or the memory ceiling stopped it
+      g.unsettled = Unsettled::Verdict;
       break;
     }
     if (params.turn_cap.reached(s)) {
@@ -168,7 +185,10 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
     // count (the network sees it; equal states with other counts are other nodes).
     int moves_made = 0;
     const GameState action_start = s;
+    // The action stopped: the deadline - or, with unsettled_choice, no child
+    // shown legal within terminal_nodes (H22: the game ends Unknown).
     bool timed_out = false;
+    bool unsettled_choice = false;
     for (bool submitted = false; !submitted;) {
       // The safety stop before every decision, not only at turn starts; a
       // partial action is not recorded (the record ends at the turn start).
@@ -265,15 +285,18 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       }
       std::size_t pick = *chosen;
       // A move is played only once known legal: one the expansion's budget left
-      // unknown is classified exactly first - illegal, it is removed and the
-      // choice made again; still unknown (the memory ceiling, or max_seconds'
-      // deadline), the most visited child known legal is played instead - or,
-      // with none and the deadline passed, the game stops there (TimeLimit).
-      LegalityOptions exact = LegalityOptions::exact();
+      // unknown is classified first, within terminal_nodes (H22: "the same
+      // budget covers the loop's other exact question") - illegal, it is
+      // removed and the choice made again; still unknown (the node budget, the
+      // memory ceiling, or max_seconds' deadline), the most visited child known
+      // legal is played instead - or, with none, the game stops at the action's
+      // turn start: Unknown (H22), or TimeLimit with the deadline passed.
+      LegalityOptions exact = LegalityOptions::nodes(params.terminal_nodes);
       exact.max_bytes = sp.mate_bytes;
       exact.deadline = deadline;
       std::vector<RootChild> children = search->root_children();
-      // False: the deadline passed with no child known legal.
+      // False: no child known legal - unsettled_choice set unless the deadline
+      // passed - or the deadline passed with no choice left to make.
       const auto make_legal = [&]() -> bool {
         while (children.at(pick).legality != MoveLegality::Legal) {
           const MoveLegality v = search->verify(pick, exact);
@@ -295,8 +318,8 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
             }
           }
           if (best == children.size()) {
-            if (deadline_passed()) return false;
-            throw std::logic_error("play: no root child could be shown legal (the memory ceiling)");
+            unsettled_choice = !deadline_passed();
+            return false;
           }
           pick = best;
         }
@@ -410,7 +433,8 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
     }
     if (timed_out) {
       s = action_start;
-      g.end = GameEnd::TimeLimit;
+      g.end = unsettled_choice ? GameEnd::Unknown : GameEnd::TimeLimit;
+      if (unsettled_choice) g.unsettled = Unsettled::Choice;
       break;
     }
     g.actions.push_back(std::move(action));

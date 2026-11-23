@@ -2,10 +2,20 @@
 
 Register G9: PyTorch hosts the network and drives the engine's search through the C API, so the
 generator is Python. It plays as ``engine.netplay``'s self-play does - a turn start judged first
-(E4's exhaustive detector, then I11's cap), a fresh search per decision sharing the previous
-one's evaluation cache (C14), root noise on, a chosen child made known legal before it is played
-- and writes, per decision, the record ``train.records`` defines (register I15, spec section
-12.8). ``netplay.play_game`` is unchanged: it plays and writes a 5dpgn, and writes no record.
+(E4's exhaustive detector within the game loop's node budget, ``GeneratorConfig.terminal_nodes``;
+then I11's cap), a fresh search per decision sharing the previous one's evaluation cache (C14),
+root noise on, a chosen child made known legal within the same budget before it is played - and
+writes, per decision, the record ``train.records`` defines (register I15, spec section 12.8).
+``netplay.play_game`` plays the same way and writes a 5dpgn, and no record.
+
+* **The unscored ending (register H22, review decision 13)**: a turn start whose verdict the budget
+  does not reach, or a decision with no child shown legal within it, ends the game "unknown" -
+  never a mate. The record's ``end`` is "unknown" and its Termination says which question went
+  unanswered (``netplay.UNSETTLED_NOTES``); an unsettled choice drops the action under way (its
+  decisions, their positions and resignation events), the record ending at that action's turn
+  start (a partial action has no place in format version 2). ``train.targets`` masks such a game's
+  outcome-derived targets (I15) and keeps its search-derived ones. The budget enters the header
+  through ``generator_config``.
 
 * **D2's arms**: the board-move split (``"ply"``), the tree form (``"tree"``) and the flat form
   (``"flat"``). Under the flat form a decision is a whole turn: its root children are turns (record
@@ -86,6 +96,7 @@ from ..engine.capi import (
     MOVE_DTYPE,
     T5D_LEGALITY_ILLEGAL,
     T5D_LEGALITY_LEGAL,
+    T5D_NO_LIMIT,
     T5D_SPLIT_BOARD_MOVE,
     T5D_SPLIT_FLAT,
     T5D_SPLIT_TREE,
@@ -94,7 +105,7 @@ from ..engine.convert import Position, relations_for
 from ..engine.evaluator import Evaluation, Evaluator, policy_source, run_search
 from ..engine.expansion import Move
 from ..engine.game import Game, relation_bits
-from ..engine.netplay import turn_start_verdict, write_record
+from ..engine.netplay import TERMINAL_NODES, UNSETTLED_NOTES, turn_start_verdict, write_record
 from ..engine.search import RootChild, Search, search_params
 from ..net.config import NetConfig
 from ..net.quant import TRUNK_QUANT_FIELDS, trunk_format
@@ -205,6 +216,10 @@ class GeneratorConfig:
     cap_turns: int = 6  # I11 (0: none)
     cap_boards: int = 80
     max_actions: int = 200  # a safety stop, not a rule (scored like I11's cap: unscored, "action_limit")
+    #: Register H22 (review decision 13): the node budget of each turn start's verdict and of a chosen
+    #: move's verification (``netplay.TERMINAL_NODES``, a placeholder; 1 to ``T5D_NO_LIMIT``, exact). A
+    #: question it leaves unsettled ends the game unscored ("unknown"; its outcome targets masked, I15).
+    terminal_nodes: int = TERMINAL_NODES
     seed: int = 1
     window_k: int = 8
     root_noise: bool = True
@@ -228,6 +243,8 @@ class GeneratorConfig:
             )
         if self.playouts < 1 or self.batch_size < 1 or self.max_actions < 1:
             raise ValueError("playouts, batch_size and max_actions must be positive")
+        if not 1 <= self.terminal_nodes <= T5D_NO_LIMIT:
+            raise ValueError("terminal_nodes: 1 to T5D_NO_LIMIT (exact) - the game loop's node budget (H22)")
         pcr = self.pcr
         if not 0.0 <= pcr.full_fraction <= 1.0 or not 1 <= pcr.cheap_cap(self.playouts) <= self.playouts:
             raise ValueError("PCR: full_fraction in [0, 1], and the cheap cap between 1 and the full cap (I5)")
@@ -385,11 +402,15 @@ def network_info(evaluator, net_cfg: NetConfig, *, seed: int | None = None, swa_
     }
 
 
-def _choose(search: Search, temperature: float, random: float, rerun: Callable[[], None]) -> tuple[int, str, int]:
+def _choose(
+    search: Search, temperature: float, random: float, rerun: Callable[[], None], *, nodes: int = T5D_NO_LIMIT
+) -> tuple[int | None, str, int]:
     """The decision's child: sampled from the visits at ``temperature`` (<= 0: the most visited),
-    then made known legal - a chosen unknown child is classified exactly first (illegal: removed
-    and the choice made again; still unknown: the most visited child known legal). The pick, how
-    it was chosen (``records.CHOICE_CODES``) and the children found illegal on the way."""
+    then made known legal - a chosen unknown child is classified first within ``nodes`` (the game
+    loop's budget, H22; illegal: removed and the choice made again; still unknown: the most visited
+    child known legal). The pick, how it was chosen (``records.CHOICE_CODES``) and the children found
+    illegal on the way; the pick None (and no choice) when no child could be shown legal within the
+    budget - the game ends unscored."""
     illegal = 0
 
     def choose_now() -> int:
@@ -400,7 +421,7 @@ def _choose(search: Search, temperature: float, random: float, rerun: Callable[[
     choice = "sampled" if temperature > 0 else "most_visited"
     pick = choose_now()
     while search.child(pick).legality != T5D_LEGALITY_LEGAL:
-        verdict = search.verify(pick)
+        verdict = search.verify(pick, nodes=nodes)
         if verdict == T5D_LEGALITY_LEGAL:
             break
         if verdict == T5D_LEGALITY_ILLEGAL:
@@ -409,7 +430,7 @@ def _choose(search: Search, temperature: float, random: float, rerun: Callable[[
             continue
         legal = [c for c in search.children() if c.legality == T5D_LEGALITY_LEGAL]
         if not legal:
-            raise RuntimeError("no root child could be shown legal (the memory ceiling)")
+            return None, "", illegal  # H22: none known legal within the budget - the game ends unscored
         pick, choice = max(legal, key=lambda c: c.visits).index, "verified_fallback"
         break
     return pick, choice, illegal
@@ -569,6 +590,8 @@ def generate_game(
     actions: list[list[Move]] = []
     shared: Search | None = None
     end, winner = "", None
+    unsettled = ""  # H22: an "unknown" end's question - "verdict" or "choice" (netplay.UNSETTLED_NOTES)
+    turn_start: Game | None = None  # the action's turn start, while its moves are played one by one
     # The searches' parameters (each decision's seed and root temperature are its own, recorded per decision).
     searches = {"full": params_dict(search_parameters(game, cfg, relations, seed=0, noise=cfg.root_noise))}
     if cfg.pcr.enabled:
@@ -579,17 +602,22 @@ def generate_game(
     resigned = False
     try:
         while True:
-            verdict = turn_start_verdict(game, cfg)
+            verdict = turn_start_verdict(game, cfg)  # within cfg.terminal_nodes (H22)
             if verdict is not None:
                 end = verdict
                 if verdict == "checkmate":
                     winner = 1 - game.info().to_move
+                if verdict == "unknown":
+                    unsettled = "verdict"  # unscored, never a mate
                 break
             if len(actions) >= cfg.max_actions:
                 end = "action_limit"
                 break
             action: list[Move] = []
             a = len(actions)
+            first = len(decisions)  # the action's first decision (dropped with it if a choice stays unsettled)
+            if not flat:
+                turn_start = game.copy()
             while True:
                 d = len(decisions)
                 ginfo = game.info()
@@ -624,7 +652,10 @@ def generate_game(
                 if resigning:
                     pick, choice, illegal = -1, "resigned", 0
                 else:
-                    pick, choice, illegal = _choose(search, t, decision_random(cfg.seed, d, SALT_CHOICE), rerun)
+                    pick, choice, illegal = _choose(search, t, decision_random(cfg.seed, d, SALT_CHOICE), rerun, nodes=cfg.terminal_nodes)
+                    if pick is None:  # H22: no move shown legal within the budget - the game ends unscored
+                        unsettled = "choice"
+                        break
                 info = search.info()
                 children = search.children()
                 best = search.choose_by_visits(0.0, 0.5)
@@ -699,13 +730,26 @@ def generate_game(
                 action.append(child.moves[0])
             if resigned:
                 break
+            if unsettled:  # the action under way is not recorded: its decisions go, the game back at its turn start
+                del decisions[first:]
+                del positions[first:]
+                events[:] = [e for e in events if e["decision"] < first]
+                if turn_start is not None:
+                    game.close()
+                    game, turn_start = turn_start, None
+                end = "unknown"
+                break
             actions.append(action)
+            if turn_start is not None:
+                turn_start.close()
+                turn_start = None
         snap = game.snapshot()
         final = game.expand(square_features="none")
         active = sorted({int(p) for p, live in zip(final.timeline.tolist(), final.active.tolist(), strict=True) if live})
         decided = "1-0" if winner == 0 else "0-1"
         result = {"checkmate": decided, "resign": decided, "stalemate": "1/2-1/2"}.get(end, "*")
         termination = end + (" (self-play's convention, I11: scored as a draw; not a game rule)" if end == "turn_cap" else "")
+        termination += UNSETTLED_NOTES.get(unsettled, "")
         # The start as the record names it. A seeded game's 5dpgn (I22) is the continuation from its
         # start's 5DFEN boards - as lossy as 5DFEN is; its exact start is header["seeded_start"].
         if picked is not None:
@@ -769,6 +813,8 @@ def generate_game(
     finally:
         if shared is not None:
             shared.close()
+        if turn_start is not None:
+            turn_start.close()
         game.close()
     record = GameRecord(header=header, decisions=decisions)
     targets = build_targets(record, target_config, positions=positions if keep_positions else None)

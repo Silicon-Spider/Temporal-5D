@@ -9,9 +9,11 @@ written strictly (the adapter's reader lets nothing pass: no warning). It
 mirrors the engine's ``play_game`` (``src/selfplay.cpp``; ``t5d-play``) step for step:
 
 * **A turn start is judged first** - by a probe search whose root classification is E4's
-  exhaustive detector with no node budget (H37): checkmate, stalemate, or a verdict the
-  detector could not reach (the game stops unjudged); then I11's turn cap (turns or
-  boards), scored as a draw; then the safety stop on the number of actions.
+  exhaustive detector within the game loop's node budget (``PlayConfig.terminal_nodes``;
+  register H22, section 11.0: a node budget, never a time limit): checkmate, stalemate, or a
+  verdict the budget did not reach - the game ends *unscored* ("unknown", never a mate; H37);
+  then I11's turn cap (turns or boards), scored as a draw; then the safety stop on the number
+  of actions.
 * **Self-play** (``mode="self"``): a fresh search per decision (C14), each sharing the
   previous one's evaluation cache (``t5d_search_new_sharing``), root Dirichlet noise on
   (E1), the move sampled from the root's visits at ``temperature`` for the first
@@ -35,10 +37,13 @@ mirrors the engine's ``play_game`` (``src/selfplay.cpp``; ``t5d-play``) step for
   the flat form (``"flat"``) - a decision is a whole turn, generated best first by the engine and
   submitted with its last move (it replaced the enumerating whole-turn arm, ``"turn"``, retired).
 * **A move is played only once known legal**: a chosen child the legality budget left
-  unknown is classified exactly first (``Search.verify``) - illegal, it is removed and the
-  choice made again; still unknown, the most visited child known legal is played. Every
+  unknown is classified first within the same node budget (``Search.verify``; H22: "the same
+  budget covers the loop's other exact question") - illegal, it is removed and the choice made
+  again; still unknown, the most visited child known legal is played; with none, the game ends
+  unscored at the action's turn start (the action under way is not recorded). Every
   move goes through the game handle (``Game.apply`` matches it against the generated moves)
-  and every submission through ``Game.submit`` (legal: C4, R1).
+  and every submission through ``Game.submit`` (legal: C4, R1). ``GameResult.unsettled`` and
+  the record's Termination header say which question went unanswered.
 
 The record is the engine reader's long form (``engine/tools/play_record.cpp`` writes the
 same): headers Mode, Board, Result, Termination (I11's cap named a convention, not a rule),
@@ -91,6 +96,21 @@ SPLITS = {"ply": T5D_SPLIT_BOARD_MOVE, "flat": T5D_SPLIT_FLAT, "tree": T5D_SPLIT
 SPLIT_NAMES = {"ply": "board-move split", "flat": "flat form", "tree": "tree form"}
 MODES = ("self", "match")
 
+#: Register H22 (section 11.0; review decision 13, 2026-11-15): the game loop's node budget for
+#: its two exact questions - a turn start's verdict and the verification of a chosen move - in
+#: search nodes (deterministic: never a time limit). A PLACEHOLDER: the spec gives no figure; it
+#: is the search's own ``mate_nodes`` default (``t5d/mcts.hpp``), the budget each fresh search's
+#: root check already runs under, so the loop and its searches cannot disagree (a test pins the
+#: two together), and the engine's ``kTerminalNodes`` (``t5d/selfplay.hpp``). ``T5D_NO_LIMIT``:
+#: exact, the behaviour before the ruling.
+TERMINAL_NODES = 2_000_000
+#: The record's Termination note for each question a game ended unscored on (``GameResult.unsettled``;
+#: the engine's ``tools/play_record.cpp`` writes the same).
+UNSETTLED_NOTES = {
+    "verdict": " (the turn start's verdict stayed unknown within the game loop's budget, H22: unscored; never a mate)",
+    "choice": " (no move could be shown legal within the game loop's budget, H22: unscored)",
+}
+
 #: A small network for end-to-end play on a CPU (random weights; nothing is trained): two
 #: layers at d = 64 - the F1 architecture's shape, scaled down so that a game takes seconds.
 SMALL = dict(
@@ -131,6 +151,9 @@ class PlayConfig:
     temperature_decisions: int = 16
     seed: int = 1
     max_actions: int = 200  # a safety stop, not a rule
+    #: H22: the node budget of the turn-start verdict and of a chosen move's verification
+    #: (``TERMINAL_NODES``, a placeholder; 1 to ``T5D_NO_LIMIT``, which is exact).
+    terminal_nodes: int = TERMINAL_NODES
     #: A custom start instead of ``variant``'s: 5DFEN board strings (the player to move inferred
     #: from the present, Q9); the record then names the board "custom" and writes them.
     start_fen: tuple[str, ...] | None = None
@@ -163,6 +186,8 @@ class PlayConfig:
             raise ValueError(FLAT_OPTIMISTIC)
         if self.playouts < 1 or self.batch_size < 1 or self.max_actions < 1:
             raise ValueError("playouts, batch_size and max_actions must be positive")
+        if not 1 <= self.terminal_nodes <= T5D_NO_LIMIT:
+            raise ValueError("terminal_nodes: 1 to T5D_NO_LIMIT (exact) - the game loop's node budget (H22)")
         if not (self.hunt_ms > 0 and self.settling_ms > 0 and 1 <= self.verification_threads <= 256):
             raise ValueError("the ladder's budgets positive, its threads 1 to 256")
 
@@ -176,6 +201,9 @@ class GameResult:
     actions: list[list[Move]]
     end: str  # "checkmate", "stalemate", "turn_cap", "unknown", "action_limit"
     winner: int | None  # 0 white, 1 black (checkmate only)
+    #: An "unknown" end's question (H22): "verdict" (a turn start the budget could not settle) or
+    #: "choice" (no move shown legal within it); "" for every other end.
+    unsettled: str = ""
     decisions: int = 0
     playouts: int = 0
     evaluations: int = 0  # leaves the network evaluated (the cache's hits not counted)
@@ -217,6 +245,7 @@ class GameResult:
             "seed": self.config.seed,
             "actions": len(self.actions),
             "end": self.end,
+            "unsettled": self.unsettled,
             "result": self.result,
             "final_boards": self.final_boards,
             "decisions": self.decisions,
@@ -307,11 +336,18 @@ def write_record(
 # --- playing ------------------------------------------------------------------------------------
 
 
-def turn_start_verdict(game: Game, cfg: PlayConfig) -> str | None:
+def turn_start_verdict(game: Game, cfg: PlayConfig, *, nodes: int | None = None) -> str | None:
     """A turn start's verdict: the probe search's root classification - E4's exhaustive
-    detector, no node budget (H37) - then I11's cap."""
+    detector within ``nodes`` (None: ``cfg.terminal_nodes``; register H22) - then I11's cap.
+    "unknown" where the budget (or the memory ceiling) stopped the detector: never a mate (H37);
+    the rules come before the cap, so an unsettled capped turn start is "unknown" too. ``cfg``:
+    a ``PlayConfig`` or the training generator's ``GeneratorConfig`` (its caps and budget)."""
     params = search_params(
-        game.lib, mate_nodes=T5D_NO_LIMIT, turn_cap_turns=cfg.cap_turns, turn_cap_boards=cfg.cap_boards, eval_cache_entries=0
+        game.lib,
+        mate_nodes=int(cfg.terminal_nodes if nodes is None else nodes),
+        turn_cap_turns=cfg.cap_turns,
+        turn_cap_boards=cfg.cap_boards,
+        eval_cache_entries=0,
     )
     with Search(game, turn_start=True, params=params) as probe:
         info = probe.info()
@@ -376,6 +412,7 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
     res = GameResult(config=cfg, record="", actions=[], end="", winner=None)
     shared: Search | None = None  # self-play: the previous decision's search, the cache's donor (C14)
     carried: list[Search | None] = [None, None]  # match play: each side's search
+    turn_start: Game | None = None  # the action's turn start, while its moves are played one by one
     try:
         while True:
             v0 = time.perf_counter()
@@ -385,12 +422,16 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                 res.end = verdict
                 if verdict == "checkmate":
                     res.winner = 1 - game.info().to_move
+                if verdict == "unknown":
+                    res.unsettled = "verdict"  # H22: unscored, never a mate
                 break
             if len(res.actions) >= cfg.max_actions:
                 res.end = "action_limit"
                 break
             mover = game.info().to_move
             action: list[Move] = []
+            if cfg.split != "flat":  # a choice left unsettled mid-action puts the game back here (H22)
+                turn_start = game.copy()
             if cfg.mode == "match" and carried[mover] is not None and res.actions and not _reroot(carried, mover, res.actions[-1], game):
                 res.reroot_fallbacks += 1
             while True:
@@ -412,10 +453,11 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                     search, evaluator, playouts=cfg.playouts, batch_size=cfg.batch_size, self_play=cfg.mode != "match", **regs
                 )
                 pick = _choose(search, cfg, res, stats, evaluator, regs, rng)
-                if cfg.decision_log:
+                if cfg.decision_log and pick is not None:
                     res.decision_log.append(_decision_entry(game, search, pick, len(res.actions), res.decisions, action, start.even))
                 after = search.info()
-                res.decisions += 1
+                if pick is not None:  # a decision is counted where a move is played
+                    res.decisions += 1
                 res.playouts += after.playouts - before.playouts
                 res.evaluations += after.evaluations - before.evaluations
                 res.cache_hits += after.cache_hits - before.cache_hits
@@ -423,6 +465,9 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                 res.network_seconds += stats.evaluate_seconds
                 res.collect_seconds += stats.collect_seconds
                 res.deliver_seconds += stats.deliver_seconds
+                if pick is None:  # H22: no move shown legal within the budget - the game ends unscored
+                    res.end, res.unsettled = "unknown", "choice"
+                    break
                 child = search.child(pick)
                 submitted = False
                 if cfg.split == "flat":
@@ -441,11 +486,20 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                     search.advance(pick)
                 if submitted:
                     break
+            if res.end:  # an unsettled choice: the action under way is not recorded, the game back at its turn start
+                if turn_start is not None:
+                    game.close()
+                    game, turn_start = turn_start, None
+                break
             res.actions.append(action)
+            if turn_start is not None:
+                turn_start.close()
+                turn_start = None
         snap = game.snapshot()
         res.final_boards = len(snap.boards)
         res.final_fingerprint = snap.fingerprint
         termination = res.end + (" (self-play's convention, I11: scored as a draw; not a game rule)" if res.end == "turn_cap" else "")
+        termination += UNSETTLED_NOTES.get(res.unsettled, "")
         extra = [
             ("White", "t5d netplay"),
             ("Black", "t5d netplay"),
@@ -474,6 +528,8 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
         for s in [shared, *carried]:
             if s is not None:
                 s.close()
+        if turn_start is not None:
+            turn_start.close()
         game.close()
     res.seconds = time.perf_counter() - t0
     return res
@@ -589,9 +645,10 @@ def decision_log_lines(res: GameResult, *, demotion_share: float = 0.3) -> list[
     return lines
 
 
-def _choose(search: Search, cfg: PlayConfig, res: GameResult, stats, evaluator, regs, rng) -> int:
+def _choose(search: Search, cfg: PlayConfig, res: GameResult, stats, evaluator, regs, rng) -> int | None:
     """The decision's child: the final rule (match) or visit sampling (self-play), then made
-    known legal (a chosen unknown child is classified exactly first)."""
+    known legal (a chosen unknown child is classified first, within ``cfg.terminal_nodes``;
+    H22). None: no child could be shown legal within the budget - the game ends unscored."""
 
     def visited() -> bool:
         return any(c.visits > 0 for c in search.children())
@@ -608,7 +665,7 @@ def _choose(search: Search, cfg: PlayConfig, res: GameResult, stats, evaluator, 
 
     pick = choose_now()
     while search.child(pick).legality != T5D_LEGALITY_LEGAL:
-        verdict = search.verify(pick)
+        verdict = search.verify(pick, nodes=cfg.terminal_nodes)
         res.verified_choices += 1
         if verdict == T5D_LEGALITY_LEGAL:
             break
@@ -617,7 +674,7 @@ def _choose(search: Search, cfg: PlayConfig, res: GameResult, stats, evaluator, 
             continue
         legal = [c for c in search.children() if c.legality == T5D_LEGALITY_LEGAL]
         if not legal:
-            raise RuntimeError("no root child could be shown legal (the memory ceiling)")
+            return None  # H22: with none known legal within the budget, the game ends unscored
         pick = max(legal, key=lambda c: c.visits).index
     return pick
 
@@ -788,6 +845,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cap-turns", type=int, default=6)
     parser.add_argument("--cap-boards", type=int, default=80)
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument(
+        "--terminal-nodes", type=int, default=TERMINAL_NODES, help="H22: the game loop's node budget for its verdicts and verifications"
+    )
     parser.add_argument("--threads", type=int, default=4, help="torch CPU threads (the machine is shared)")
     parser.add_argument("--out", type=Path, help="write each record here (a directory)")
     parser.add_argument("--no-replay", action="store_true", help="do not replay the records through t5d-gate")
@@ -834,6 +894,7 @@ def main(argv: list[str] | None = None) -> int:
                         cap_turns=args.cap_turns,
                         cap_boards=args.cap_boards,
                         seed=args.seed + 101 * g,
+                        terminal_nodes=args.terminal_nodes,
                         optimistic=args.optimistic,
                         hunt=not args.no_hunt,
                         settling=not args.no_settling,
@@ -868,6 +929,7 @@ def main(argv: list[str] | None = None) -> int:
         "batch": args.batch,
         "cap_turns": args.cap_turns,
         "cap_boards": args.cap_boards,
+        "terminal_nodes": args.terminal_nodes,
     }
     total_s = sum(s["seconds"] for s in summaries) or math.nan
     totals = {
@@ -885,6 +947,8 @@ if __name__ == "__main__":
 
 
 __all__ = [
+    "TERMINAL_NODES",
+    "UNSETTLED_NOTES",
     "GameResult",
     "PlayConfig",
     "Replay",

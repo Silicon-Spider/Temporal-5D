@@ -51,7 +51,9 @@ weights; ``config`` - the ``NetConfig``; ``seed``; ``swa_snapshots``), ``value_s
 (``"wdl"``: the search backs up W - L of the network's WDL, D3 since engine ABI round 2a),
 ``search`` (every ``t5d_search_params`` field of the full and the cheap searches, the expand
 options and legality budget included - ``params_dict``), ``expand`` (the input's window and
-typed relations, the register counts), ``generator_config``, ``seed``, ``result`` (``end``,
+typed relations, the register counts), ``generator_config`` (its ``terminal_nodes``: the game
+loop's node budget, register H22; a record written before it lacks the key), ``seed``, ``result``
+(``end`` - ``"unknown"`` for a game ended unscored, H22, its outcome targets masked -
 ``winner``, ``result``, ``actions``, ``final_boards``, ``final_fingerprint``,
 ``final_active_timelines``), ``pgn`` (the game's 5dpgn), ``resign`` (``enabled`` and the
 would-resign events, I18), ``proof_refs`` (solved-store references: always empty - no proof

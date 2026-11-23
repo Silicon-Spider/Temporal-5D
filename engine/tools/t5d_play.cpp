@@ -9,7 +9,7 @@
 //            [--no-widening] [--e2] [--e3] [--proof-channel] [--batch N] [--synchronous]
 //            [--match] [--final visits|lcb] [--temperature T] [--temperature-decisions N]
 //            [--noise | --no-noise] [--cap-turns N] [--cap-boards N] [--max-actions N]
-//            [--mate-nodes N] [--max-seconds S] [--seed S]
+//            [--mate-nodes N] [--terminal-nodes N] [--max-seconds S] [--seed S]
 //            [--no-hunt] [--no-settling] [--no-assets] [--hunt-ms MS]
 //            [--settling-ms MS] [--verification-threads N] [--guard-final]
 //            [--decision-log FILE] [--no-moves-after-shift] [--rules ENCODING]
@@ -43,6 +43,12 @@
 // (H44; JSONL "t5d-decisions" v1, tools/audit.hpp - t5d-audit reads it): the
 // game, its final moves, PV changes and demotions; the game's id the first
 // 16 hex digits of the record's SHA-256.
+// --terminal-nodes N is the game loop's node budget (H22; 2,000,000, a
+// placeholder - kTerminalNodes; 18446744073709551615: exact) for each turn
+// start's verdict and a chosen move's verification: a verdict it does not
+// reach, or no move shown legal within it, ends the game unscored ("unknown",
+// "*"; the Termination header says which; never a mate). --mate-nodes is the
+// searches' own budget for the turn starts in their trees.
 // --max-seconds stops a long game (a safety stop, "*": checked before every
 // decision; each search's deadline, and the deadline of each turn start's
 // verdict and of a chosen move's exact verification - what it stops is
@@ -92,7 +98,7 @@ void usage(std::FILE* to) {
       "                [--match] [--final visits|lcb] [--temperature T]\n"
       "                [--temperature-decisions N] [--noise | --no-noise] [--cap-turns N]\n"
       "                [--cap-boards N]\n"
-      "                [--max-actions N] [--mate-nodes N]\n"
+      "                [--max-actions N] [--mate-nodes N] [--terminal-nodes N]\n"
       "                [--max-seconds S] [--seed S]\n"
       "                [--no-hunt] [--no-settling] [--no-assets] [--hunt-ms MS]\n"
       "                [--settling-ms MS] [--verification-threads N] [--guard-final]\n"
@@ -279,6 +285,8 @@ int main(int argc, char** argv) {
         params.max_actions = static_cast<std::uint32_t>(number_in(a, value(), 1, kU32));
       } else if (std::strcmp(a, "--mate-nodes") == 0) {
         params.search.mate_nodes = number_in(a, value(), 1, kAny);
+      } else if (std::strcmp(a, "--terminal-nodes") == 0) {
+        params.terminal_nodes = number_in(a, value(), 1, kAny);  // H22: UINT64_MAX exact
       } else if (std::strcmp(a, "--max-seconds") == 0) {
         params.max_seconds = real(a, value());
       } else if (std::strcmp(a, "--seed") == 0) {
