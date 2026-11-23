@@ -21,9 +21,11 @@ concurrency:
 jobs:
   build-and-test:
     runs-on: ubuntu-24.04
-    # The build and the 718 tests take about 24 minutes on a runner (issue 535's
-    # fault sweeps added some 3-4); 45 leaves room for a slow runner.
-    timeout-minutes: 45
+    # 60 minutes: the suite took 23 to 24 minutes on a runner at main 032db11 (2026-11-23; 724
+    # tests, about 8 of those minutes issue 535's fault sweeps) and a slower runner the same
+    # day needed more than the 30 this was - its tests ran 37% longer and the job was cancelled
+    # at 655 of 724. A runner's speed is not the suite's: the limit is a backstop for a hang.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:

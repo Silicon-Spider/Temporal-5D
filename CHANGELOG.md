@@ -10,7 +10,7 @@ the spec describes the change.
 
 ## Unreleased
 
-### 2026-11-23 - `lane/fix535` and `lane/net` merged for main; the engine CI job's time limit raised to 45 minutes
+### 2026-11-23 - `lane/net` merged for main, with `lane/fix535` (which main also took itself)
 
 The user asked for the old branches to be cleared and the ones with new work merged. On the
 branch of pull request Silicon-Spider/Temporal-5D#2, for main:
@@ -34,12 +34,10 @@ branch of pull request Silicon-Spider/Temporal-5D#2, for main:
   mechanisms to be reconciled. Both lanes were being pushed to on 2026-11-23.
 - **`lane/audit` and `lane/gate`** hold nothing main lacks. Their deletion from GitHub was asked
   for; this session's permissions do not allow it, so it is the user's to do.
-- **`.github/workflows/engine.yml`: the time limit is 45 minutes, up from 30.** The pull
-  request's g++-13 job was cancelled at 30 minutes with every test passed up to that point; the
-  same commit's push run passed in about 23.5 minutes. Since issue 535's fault sweeps, the
-  engine job takes about 23.5 minutes on a runner (`lane/fix535`'s own run, 2026-11-17), against
-  16-20 minutes before. That is too close to 30 for a slow runner. No test, budget or check
-  changes.
+- **`.github/workflows/engine.yml`: unchanged by this branch in the end.** The pull request's
+  g++-13 job was cancelled at the 30-minute limit with every test passed up to that point; the
+  same commit's push run passed in about 23.5 minutes. This branch raised the limit to 45. Main
+  then set 60 for the same reason (issue 735, 4e9267e), and main's file is taken at the merge.
 - **`docs/BUILD_LOG.md`:** the lane lines and a session-log entry with the checks.
 - **Main merged into the branch** (5847134: main's merge of `lane/fix535`, the spec review and
   the review's code). The conflicts were in this file and the build log only. They were resolved
@@ -52,11 +50,37 @@ branch of pull request Silicon-Spider/Temporal-5D#2, for main:
   paragraph.
 - **CI on the merged tree.** `tests/net/test_displacement_far.py`'s far-table fingerprint (main's,
   4149e87) fails the same way on main's own CI at 032db11. Its absolute sum is about 2e-9
-  relative off, against a 1e-9 bound. It is main's failure, not this branch's, and the fix is
-  left to main; a comment on the pull request says so.
+  relative off, against a 1e-9 bound. It was main's failure, not this branch's (a comment on the
+  pull request says so), and main fixed it in 4e9267e (issue 735), merged in here.
 
 Spec: none - merges (the merged entries carry their own `Spec:` lines) and a CI time limit; no
 part of the spec describes either. The review's findings propose no spec edit.
+
+### 2026-11-23 - CI on main after the code round: a fingerprint's tolerance fitted to a small set, and the engine job's time limit
+
+The first CI on the review's code (main 032db11) passed the oracle gate's commit tier and failed
+in two places (`docs/BUILD_LOG.md`, issue 735).
+
+- **One Linux-only test failure** (network job, 1 of 2,291): the fingerprint of B15's two far
+  tables differed from the development machine's by 2.0e-9 relative in its absolute sum, past the
+  1e-9 that `_same` (`python/tests/net/test_params.py`) allows. That bound was set on large
+  parameter sets, whose per-value last-bit differences average out; the far tables are 108 values.
+  `_same` takes the number of values summed (`values=`) and fits the bound to it - 1e-7 over their
+  square root, never under 1e-9 - and `python/tests/net/test_displacement_far.py` passes it. No
+  recorded fingerprint changed, and every other caller keeps 1e-9.
+- **The engine job ran out of time on a slow runner**: `build-and-test (g++-14)` was cancelled at
+  its 30-minute limit with 655 of 724 tests run, while `(g++-13)` passed in 23 minutes on the same
+  commit. The suite is 23 to 24 minutes on a runner since today's merges (issue 535's fault
+  sweeps, with the tree form's arms under graph search now inside them, are about 8 of them; the
+  tree form's own tests about half a minute). `.github/workflows/engine.yml`: `timeout-minutes` 30
+  -> 60. No test was trimmed.
+
+**Checks**: `tests/net/test_params.py` and `tests/net/test_displacement_far.py`: 48 passed; `ruff
+check` and `ruff format --check` clean on both. The workflow's change is one value and a comment
+above it at the same indentation; it was not parsed here (no YAML parser on this machine). The
+fixes are proven only by the next CI run on Linux.
+
+Spec: no part of the spec describes this - a test's tolerance and a CI job's time limit.
 
 ### 2026-11-23 - Four answers from the user on the code round's questions: the padding's default, the human games, the two token budgets, register E12
 

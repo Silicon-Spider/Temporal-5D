@@ -281,7 +281,8 @@ def test_the_far_off_arms_parameters_are_those_recorded_before_the_review():
     assert set(on) - set(off) == {"displacement.far_time", "displacement.far_timeline"} and set(off) <= set(on)
     assert [n for n in on if n in off] == list(off), "and in the same order"
     assert all(torch.equal(p, on[n]) for n, p in off.items())
-    _same(_fingerprint({n: p for n, p in on.items() if n not in off}), _FAR_SEED_7, 2)
+    far = {n: p for n, p in on.items() if n not in off}
+    _same(_fingerprint(far), _FAR_SEED_7, 2, values=sum(p.numel() for p in far.values()))  # 108 values: a small set's bound
 
 
 def test_the_far_off_arm_is_the_default_network_without_the_far_terms():
