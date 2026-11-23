@@ -340,6 +340,12 @@ struct Node {
   bool submit_legal = false;    // ... legal (C4), else kept pruned
   bool has_eval = false;
   bool inherited = false;     // tree form: expanded on its parent's logits, never evaluated
+  // Tree form under MCGS (§8.5, C11): made by a move that fired no gate - its
+  // path's own: in no table, never found, one parent; cleared when a re-root
+  // makes it the root. And fired_gate's index (0-4) for the move that made the
+  // node, judged in ensure_child (-1: none fired, or not that combination).
+  bool path_local = false;
+  std::int8_t gate = -1;
   std::int8_t lo = -1;        // solver bounds, the mover's view
   std::int8_t hi = 1;
   std::uint32_t visits = 0;
@@ -949,16 +955,6 @@ struct Search::Impl {
       throw std::invalid_argument("SearchParams::tree_gates: a mask of kGateBetween, kGateCapture, kGateCheck, "
                                   "kGatePresent and kGateAlways, not " + std::to_string(p.tree_gates));
     }
-    if (p.split == TurnSplit::Tree && p.graph) {
-      // Parked, not a design refusal (build-log spec issue 301): under MCGS a
-      // mid-turn node is made by the first path to reach it, so the priors it
-      // inherits and whether it was evaluated at all would be that path's.
-      throw std::invalid_argument(
-          "SearchParams: the tree form (split Tree) is refused under graph search (graph) - under MCGS an "
-          "inside-turn node's inherited priors, and whether the network evaluated it, would depend on the path "
-          "that created it, and identity is the state (§8.5, C11; §14.4 and C21 refuse path-dependent "
-          "evaluations); the documents do not say how the two combine (build-log spec issue 301)");
-    }
     if (p.split == TurnSplit::Tree && !p.tree_inherit_value && uncertainty_read()) {
       // 6m's rule (check_evaluation): a signal that is read must be given.
       // Without its parent's value an inherited node has no uncertainty signal
@@ -1211,7 +1207,20 @@ struct Search::Impl {
     }
     NodeId id = kNoNode;
     const std::size_t made = s.multiverse().board_count() - nodes_[pid].state.multiverse().board_count();
-    if (params_.graph) {
+    // D2's tree form under MCGS (§8.5, C11; build-log spec issue 301): only
+    // evaluated nodes are graph nodes, and the gate on this edge's own move
+    // decides which kind it leads to - nothing else does. A gate fires: a graph
+    // node, found or entered below. None: a path-local node of this edge's own,
+    // never looked up and never entered - an inherited node belongs to the path
+    // that made it and is never merged, even where another move's gate made an
+    // evaluated node of the same state. A submit edge leads to a turn start,
+    // always a graph node. The gate is judged before any node is made, so a
+    // failure in it leaves none.
+    const bool tree_move = params_.graph && params_.split == TurnSplit::Tree && moves_made != 0;
+    const int gate = tree_move ? fired_gate(nodes_[pid].state, nodes_[pid].edges[ei].move, s) : -1;
+    const bool local = tree_move && gate < 0;
+    const std::size_t nodes_before = nodes_.size();
+    if (params_.graph && !local) {
       const std::uint64_t key = key_of(s);
       const NodeId found = find_node(key, s, moves_made);
       if (found != kNoNode) {
@@ -1232,6 +1241,10 @@ struct Search::Impl {
       }
     } else {
       id = make_node(std::move(s), moves_made, made);
+    }
+    if (tree_move && nodes_.size() != nodes_before) {  // made here, not found (nothing here throws)
+      nodes_[id].path_local = local;
+      nodes_[id].gate = static_cast<std::int8_t>(gate);
     }
     nodes_[pid].edges[ei].child = id;  // nothing below throws: the node made is linked
     if (nodes_[id].dead_end) {
@@ -2371,13 +2384,15 @@ struct Search::Impl {
   // into mid-turn node cid - its bit's index (between 0, capture 1, check 2,
   // present 3, always 4) - or -1: none. The cheapest are tested first.
   int fired_gate(NodeId pid, std::size_t ei, NodeId cid) {
+    return fired_gate(nodes_[pid].state, nodes_[pid].edges[ei].move, nodes_[cid].state);
+  }
+  // ... on the move `m` from `before` to `after` (under MCGS judged before the
+  // child's node exists: ensure_child).
+  int fired_gate(const GameState& before, const Move& m, const GameState& after) {
     const std::uint32_t gates = params_.tree_gates;
     if ((gates & kGateAlways) != 0) return 4;
     if ((gates & kGatesInteraction) == 0) return -1;
     const auto t0 = std::chrono::steady_clock::now();
-    const GameState& before = nodes_[pid].state;
-    const GameState& after = nodes_[cid].state;
-    const Move& m = nodes_[pid].edges[ei].move;
     int fired = -1;
     if ((gates & kGatePresent) != 0 && (params_.tree_present == PresentShift::Rewind
                                             ? after.present() < before.present()
@@ -2683,7 +2698,9 @@ struct Search::Impl {
   // more than epsilon is corrected the same way (the one epsilon for both).
   bool needs_residual(NodeId pid, std::size_t ei, NodeId cid) const noexcept {
     const Node& c = nodes_[cid];
-    if (!c.expanded || c.terminal != Terminal::None || solved(c) || c.stuck || c.visits == 0) {
+    // (A path-local node - the tree form's inherited ones under MCGS - is a
+    // tree node: one edge leads to it, whose statistics are the node's.)
+    if (c.path_local || !c.expanded || c.terminal != Terminal::None || solved(c) || c.stuck || c.visits == 0) {
       return false;
     }
     const Edge& e = nodes_[pid].edges[ei];
@@ -2869,7 +2886,9 @@ struct Search::Impl {
         // the root, a turn start (the turn complete) and a gated node are leaves.
         if (params_.split == TurnSplit::Tree && cur != root_ && !n.turn_start) {
           const NodeId pid = path_[path_.size() - 2].node;
-          const int gate = fired_gate(pid, path_.back().edge, cur);
+          // Under MCGS the gate was judged when the node was made (ensure_child):
+          // a path-local node's is -1 and pid its only parent; a graph node's fired.
+          const int gate = params_.graph ? static_cast<int>(n.gate) : fired_gate(pid, path_.back().edge, cur);
           if (gate < 0) {
             if (!inherit(cur, pid)) return Selected::DeadEnd;
             continue;
@@ -3587,12 +3606,15 @@ struct Search::Impl {
     kept.reserve(order.size());
     // The graph's table of the kept nodes, entered in their new order as
     // register_node enters them (of two with one identity - a key collision -
-    // the first keeps the entry).
+    // the first keeps the entry). The tree form's path-local nodes stay out of
+    // it (§8.5) - but for the new root: the root is the network's, so a graph
+    // node (its flag cleared below, once nothing can fail).
     std::unordered_map<std::uint64_t, NodeId> table;
     if (params_.graph) {
       table.reserve(order.size());
       for (std::size_t i = 0; i < order.size(); ++i) {
         const Node& n = nodes_[order[i]];
+        if (n.path_local && i != 0) continue;
         table.emplace(identity(n.key, n.moves_made), static_cast<NodeId>(i));
       }
     }
@@ -3608,6 +3630,7 @@ struct Search::Impl {
     stats_.nodes_collected += nodes_.size() - kept.size();
     nodes_ = std::move(kept);
     root_ = 0;
+    nodes_[0].path_local = false;  // the root is a graph node (entered in the table above)
     tree_bytes_ = 0;
     for (const Node& n : nodes_) tree_bytes_ += n.bytes;
     purge_cache();
@@ -3662,7 +3685,10 @@ struct Search::Impl {
     }
     for (NodeId id = 0; id < nodes_.size(); ++id) {
       if (!seen[id]) fail("a node the root does not reach", id);
-      if (!params_.graph && id != root_ && parents[id] != 1) fail("a tree node with " + std::to_string(parents[id]) + " parents", id);
+      // (A path-local node of the tree form under MCGS is a tree node: never merged.)
+      if ((!params_.graph || nodes_[id].path_local) && id != root_ && parents[id] != 1) {
+        fail("a tree node with " + std::to_string(parents[id]) + " parents", id);
+      }
     }
     // Memory (review finding L7): each node's count is node_bytes of it as it
     // is, and memory_bytes' sum is theirs - after a failure as after anything.
@@ -3679,9 +3705,12 @@ struct Search::Impl {
     // a node of its own identity - the lowest id holding it (the first made, or
     // after a re-root the first in the new order, as register_node enters them;
     // a later node with that identity is an unshared one, a key collision).
+    // The tree form's path-local nodes are in no table: the graph's nodes are
+    // the evaluated ones only (§8.5, C11).
     if (params_.graph) {
       std::unordered_map<std::uint64_t, NodeId> lowest;
       for (NodeId id = 0; id < nodes_.size(); ++id) {
+        if (nodes_[id].path_local) continue;
         lowest.emplace(identity(nodes_[id].key, nodes_[id].moves_made), id);  // ids ascend: the first stays
       }
       for (const auto& [key, id] : table_) {
@@ -3689,6 +3718,7 @@ struct Search::Impl {
           throw std::logic_error("search invariant: the graph's table names node " + std::to_string(id) + " of " +
                                  std::to_string(nodes_.size()));
         }
+        if (nodes_[id].path_local) fail("a table entry names a path-local node (inherited nodes are never merged)", id);
         if (identity(nodes_[id].key, nodes_[id].moves_made) != key) fail("a table entry of another identity", id);
         if (lowest.at(key) != id) fail("a table entry not the lowest id of its identity", id);
       }
@@ -3714,7 +3744,8 @@ struct Search::Impl {
         through_wq += e.wq;
         through_wd += e.wd;
         if (e.visits > 0 && e.child == kNoNode) fail("a visited edge without a child", id);
-        if (!params_.graph && e.child != kNoNode && nodes_[e.child].visits != e.visits) {
+        if (e.child != kNoNode && (!params_.graph || nodes_[e.child].path_local) &&
+            nodes_[e.child].visits != e.visits) {
           fail("a tree edge's visits differ from its child's", id);
         }
         // An action ends only by a submit edge (D8), and a submit edge always ends
@@ -3771,6 +3802,19 @@ struct Search::Impl {
         if (params_.split != TurnSplit::Tree) fail("an inherited node outside the tree form", id);
         if (n.has_eval || n.turn_start) fail("an inherited node evaluated, or a turn start", id);
         if (n.ends != 0 && !solved(n)) fail("a visit ended at an inherited node", id);
+      }
+      // ... under MCGS (§8.5, C11): the nodes a move that fired no gate made
+      // are path-local, and only they are inherited; every other node below the
+      // root is a graph node - a turn start, or a mid-turn node a gate's move made.
+      const bool tree_graph = params_.graph && params_.split == TurnSplit::Tree;
+      if (n.path_local) {
+        if (!tree_graph) fail("a path-local node outside the tree form under graph search", id);
+        if (id == root_ || n.turn_start) fail("a path-local node the root, or a turn start", id);
+        if (n.has_eval || n.gate >= 0) fail("a path-local node evaluated, or made by a move that fired a gate", id);
+        if (n.expanded && !n.inherited) fail("a path-local node expanded otherwise than on inherited priors", id);
+      } else if (tree_graph && id != root_) {
+        if (n.inherited) fail("an inherited node that is a graph node", id);
+        if (!n.turn_start && n.gate < 0) fail("a mid-turn graph node no gate's move made", id);
       }
       if (static_cast<std::uint64_t>(n.visits) != n.ends + through) {
         fail("visits " + std::to_string(n.visits) + " != ends " + std::to_string(n.ends) +
@@ -3847,6 +3891,7 @@ struct Search::Impl {
                          (static_cast<std::uint64_t>(n.stuck) << 25) |
                          (static_cast<std::uint64_t>(n.dead_end) << 26) |
                          (static_cast<std::uint64_t>(n.inherited) << 27) |
+                         (static_cast<std::uint64_t>(n.path_local) << 28) |
                          (static_cast<std::uint64_t>(n.instantiated) << 32));
       for (const Edge& e : n.edges) {
         h = combine(h, bits_of(e.prior));
@@ -4279,6 +4324,7 @@ NodeView Search::node(NodeId id) const {
   v.eval_moves_left = n.eval_moves_left;
   v.evaluated = n.has_eval;
   v.inherited = n.inherited;
+  v.path_local = n.path_local;
   v.k0 = n.k0;
   v.instantiated = n.instantiated;
   v.edge_count = n.edges.size();

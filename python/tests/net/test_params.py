@@ -1,13 +1,22 @@
 """Parameter counts against spec section 9.2 (F1 ~21.5M with all heads; F2's L24-ff12 44.0M) and
 section 4.1 (B15's displacement table, "about 1.6M parameters - ~7% of the network").
 
-Exact v1 count (default config): 22,965,683 =
+Exact v1 count (default config): 22,969,139 =
     embeddings 28,864 + trunk attention 4,198,400 + trunk FFN 16,814,080
     + trunk norms 8,448 + policy 134,925 (its promotion offset 3,341 among them)
     + value 80,698 + submit 257 + D2's leave head 257 + aux 76,586 (the soft policy's 69,390 among them)
     + B15's displacement table 1,623,168 (16 layers x 8 heads x 12,681 entries: 54
       board-distance classes x 225, 368 line entries, 162 register entries, 1 global - the
-      unstated details at their placeholders, spec issues 205-208).
+      unstated details at their placeholders, spec issues 205-208)
+    + B15's two per-axis far tables 3,456 (16 layers x 8 heads x (19 Delta-time + 8 Delta-timeline
+      buckets): B6's tables, kept beyond the exact classes).
+B15's per-axis far tables (register B6 and B15, section 4.1; the 2026-11-15 review, decision 1: "a
+far pair ... adds B6's two clamped log-bucket scalars ... for 3,456 parameters") added 3,456 to
+22,965,683 - a ruling that changed the default network. They are drawn from a generator of their
+own, so every other parameter is as before, bit for bit: the fingerprints below leave the two new
+tensors out and are unedited, and ``disp_far_axis=False`` is the 22,965,683 network. Ablation 2's
+layer-shared arm (``disp_layer_shared``, off) is 21,444,179: B15 at 8 x (12,681 + 27) = 101,664, a
+sixteenth of 1,626,624. (``test_displacement_far.py`` holds both arms' functions.)
 Register D2's flat head (section 8.2: "per-board policy marginals - a head change") added 257 to
 22,965,426: one "leave it" logit per board, a linear readout (256 + 1) of the board's pooled state
 (placeholders, spec issue 241), always built and drawn from a generator of its own - every other
@@ -30,8 +39,9 @@ the pooled submit logit, the heads' pools, moves-left in turns and the acting pl
 global registers add nothing.
 B15 (CHECKPOINT 6, the v1 default) added the table to 21,338,634 (21,341,971 with M20's
 dispositions); section 9.2's "~21.5M" predates it (spec issue 210): the network without the
-table - ablation 2's no-table arm, ``displacement_bias=False`` - is 21,341,971, and that is
-what section 9.2's figure is held to below.
+table - ablation 2's no-table arm, ``displacement_bias=False`` - was 21,341,971 then (21,342,515
+today: neither the table nor the per-axis far tables), and that is what section 9.2's figure is
+held to below.
 F5 (CHECKPOINT 6, section 9.3) took 20,736 from stage N5's 21,359,370: the norms are
 RMSNorm-style gains without biases (33 x 256 = 8,448 fewer) and the Q, K and V projections
 have no biases (16 x 3 x 256 = 12,288 fewer); the attention-output and FFN biases stay.
@@ -41,34 +51,51 @@ registers (M20) - (256 + 1; ``submit_head="pointer"`` has none).
 Section 9.2's "~21.5M with all heads" also counts board-pair smolgen (<0.1M, B12,
 prototype): stage N2 builds it behind a flag, 47,136 parameters as relative cells
 (test_n2_model.py); its "base 256x16, ff8: 21.0M" is the trunk. B9's default masks add no
-parameter. F2's larger arm, L24-ff12, is 46,895,091 as built (D2's leave head's 257 among them): 44,460,082 (section 9.2: 44.0M)
-and B15's 24 x 8 x 12,681 = 2,434,752 (A6's 8,768 among the 44,460,082; D3's rebuild -12,079, D4's +3,598).
+parameter. F2's larger arm, L24-ff12, is 46,900,275 as built: 44,460,339 (section 9.2: 44.0M; A6's
+8,768 and D2's leave head's 257 among them, D3's rebuild -12,079, D4's +3,598), B15's table 24 x 8 x
+12,681 = 2,434,752 and its per-axis far tables 24 x 8 x 27 = 5,184 (46,895,091 before them).
 B16's status table (committed with the cached configuration) adds 304 to a block-causal
 network and nothing to the v1, whose scope is dense.
 Register A8's board-layout embedding (a prototype behind its flag, off) adds nothing to the v1;
-on, 2,629,120 - 25,594,803 (``test_layout.py``; its FFN's width a placeholder, spec issue 240).
+on, 2,629,120 - 25,598,259 (``test_layout.py``; its FFN's width a placeholder, spec issue 240) -
+and, at ablation 6p's second arm (section 2.2, the 2026-11-15 review: its FFN at 1x), 1,709,824 -
+24,678,963; the two arms are the presets ``"6p-layout-ff8"`` and ``"6p-layout-ff1"``. (Before
+B15's per-axis far tables: 25,594,803 and 24,675,507.)
 """
 
 from __future__ import annotations
+
+from dataclasses import replace
 
 import pytest
 import torch
 
 from t5d.net import NetConfig, build_model, parameter_breakdown
+from t5d.net.bench import CONFIGS as BENCH_CONFIGS
+from t5d.net.layout import layout_parameters
 
-V1_TOTAL = 22_965_683
-F2_TOTAL = 46_895_091
+V1_TOTAL = 22_969_139
+F2_TOTAL = 46_900_275
 #: B15's table in the v1 (16 layers) and in F2's arm (24 layers).
 V1_DISPLACEMENT = 16 * 8 * 12_681
 F2_DISPLACEMENT = 24 * 8 * 12_681
+#: B15's two per-axis far tables (B6's 19 Delta-time and 8 Delta-timeline buckets, per head per
+#: layer; the 2026-11-15 review) in the v1 and in F2's arm - the default network's totals above
+#: moved by them, from 22,965,683 and 46,895,091.
+V1_FAR = 16 * 8 * (19 + 8)
+F2_FAR = 24 * 8 * (19 + 8)
+#: A8's board-layout embedding with its FFN at the placeholder's 8x and at ablation 6p's 1x arm.
+A8_FF8 = 2_629_120
+A8_FF1 = 1_709_824
 
 
 def test_v1_parameter_count():
     counts = parameter_breakdown(build_model(NetConfig()))
     assert counts["total"] == V1_TOTAL, counts
     assert counts["attn.displacement"] == V1_DISPLACEMENT == 1_623_168, "B15: section 4.1's ~1.6M"
+    assert counts["attn.displacement_far"] == V1_FAR == 3_456, "section 4.1: B6's per-axis terms, 3,456 parameters"
     assert abs(counts["attn.displacement"] / counts["total"] - 0.07) < 0.005, "section 4.1: ~7% of the network"
-    assert abs(counts["total"] - V1_DISPLACEMENT - 21.5e6) / 21.5e6 < 0.02, "section 9.2: ~21.5M with all heads (before B15)"
+    assert abs(counts["total"] - V1_DISPLACEMENT - V1_FAR - 21.5e6) / 21.5e6 < 0.02, "section 9.2: ~21.5M with all heads (before B15)"
     trunk = counts["trunk.attention"] + counts["trunk.ffn"] + counts["trunk.norms"]
     assert abs(trunk - 21.0e6) / 21.0e6 < 0.01, "section 9.2 ladder: base 256x16 ff8 = 21.0M"
     aux = sum(v for k, v in counts.items() if k.startswith("aux."))
@@ -98,8 +125,31 @@ def test_f2_larger_arm_preset():
     counts = parameter_breakdown(build_model(cfg))
     assert counts["total"] == F2_TOTAL, counts["total"]
     assert counts["attn.displacement"] == F2_DISPLACEMENT, "B15's table: one per layer"
-    assert abs(counts["total"] - F2_DISPLACEMENT - 44.0e6) / 44.0e6 < 0.02, "section 9.2: 44.0M (before B15)"
+    assert counts["attn.displacement_far"] == F2_FAR == 5_184, "B15's per-axis far tables: one pair per layer"
+    assert abs(counts["total"] - F2_DISPLACEMENT - F2_FAR - 44.0e6) / 44.0e6 < 0.02, "section 9.2: 44.0M (before B15)"
     assert NetConfig() == NetConfig.preset("F1"), "F1 stays the default"
+
+
+def test_6p_board_layout_arm_presets():
+    """Ablation 6p's two board-layout arms (register A8, section 2.2; the 2026-11-15 review: "the
+    FFN's width is part of the arm: 6p tests it at 1x ... beside the 8x placeholder") are named - in
+    ``PRESETS`` and, by the same names, in ``bench.CONFIGS`` - and their totals pinned. An arm differs
+    from the v1 in A8 alone, and no default moved. (The built networks' breakdowns are
+    ``test_layout.py``'s: these counts are ``layout_parameters``', which it holds the build to.)"""
+    ff8, ff1 = NetConfig.preset("6p-layout-ff8"), NetConfig.preset("6p-layout-ff1")
+    assert ff8 == NetConfig(board_layout_embedding=True) == NetConfig(board_layout_embedding=True, layout_ffn_ratio=8)
+    assert ff1 == NetConfig(board_layout_embedding=True, layout_ffn_ratio=1)
+    assert replace(ff1, board_layout_embedding=False, layout_ffn_ratio=8) == NetConfig(), "the arm differs from the v1 in A8 alone"
+    assert NetConfig(**BENCH_CONFIGS["6p-layout-ff8"]) == ff8 and NetConfig(**BENCH_CONFIGS["6p-layout-ff1"]) == ff1
+    assert layout_parameters(ff8)["total"] == A8_FF8 and layout_parameters(ff1)["total"] == A8_FF1
+    assert A8_FF8 - A8_FF1 == 7 * (2 * 256 * 256 + 256) == 919_296, "seven fewer widths of the two matrices and the hidden bias"
+    assert V1_TOTAL + A8_FF8 == 25_598_259 and V1_TOTAL + A8_FF1 == 24_678_963
+    default = NetConfig()
+    assert default == NetConfig.preset("F1"), "F1 stays the default"
+    assert (default.board_layout_embedding, default.layout_ffn_ratio) == (False, 8), "the flag stays off, the placeholder at 8x"
+    for unknown in ("6p-layout-ff2", "A8-ff1"):
+        with pytest.raises(ValueError, match="unknown preset"):
+            NetConfig.preset(unknown)
 
 
 def test_the_cached_configuration_adds_b16s_table():
@@ -125,8 +175,12 @@ def test_flag_parameters_are_small():
         "D8's other readout form: each head's own f and g (the soft policy's too)"
     )
     no_table = parameter_breakdown(build_model(NetConfig(displacement_bias=False)))
-    assert no_table["attn.displacement"] == 0 and no_table["total"] == V1_TOTAL - V1_DISPLACEMENT, "ablation 2's no-table arm"
-    assert "rope.binned_bias" not in no_table, "B6 is removed (superseded by B15)"
+    assert no_table["attn.displacement"] == no_table["attn.displacement_far"] == 0, "ablation 2's no-table arm: no B15 at all"
+    assert no_table["total"] == V1_TOTAL - V1_DISPLACEMENT - V1_FAR == 21_342_515, "ablation 2's no-table arm"
+    assert "rope.binned_bias" not in no_table, "B6 is removed (superseded by B15, which keeps its two tables beyond the exact classes)"
+    pre_review = parameter_breakdown(build_model(NetConfig(disp_far_axis=False)))
+    assert pre_review["attn.displacement_far"] == 0 and pre_review["attn.displacement"] == V1_DISPLACEMENT
+    assert pre_review["total"] == V1_TOTAL - V1_FAR == 22_965_683, "disp_far_axis off: B15 as built before the 2026-11-15 review"
 
 
 def test_m20s_dispositions_have_no_switch():
@@ -147,6 +201,12 @@ def test_m20s_dispositions_have_no_switch():
 _SMALL = dict(trunk_dtype="fp32", n_layers=2, d_model=64, n_heads=2, ffn_ratio=4, policy_dim=64, value_hidden=64, opp_policy_dim=32)
 _NEW = ("value.short_term.", "value.error.", "aux.soft_policy.", "aux.opp_reply.", "optimistic.", "leave.")
 _PRE_D3 = (64, (-28.9795080817193, -896.406780811631, 15039.884536167086))
+#: B15's two per-axis far tables (the 2026-11-15 review) are later than every fingerprint in this
+#: file: each fingerprinted set leaves them out (their names would otherwise shift the ranks the
+#: sums are weighted by), and the pinned counts and sums stand unedited - which is the evidence that
+#: adding them moved no earlier parameter's draw. Their own draw is pinned in
+#: ``test_displacement_far.py``.
+_LATER = ("displacement.far_",)
 
 
 def _fingerprint(params: dict) -> tuple[float, float, float]:
@@ -180,7 +240,7 @@ def test_the_parameters_before_d3_are_drawn_as_before(flags):
     """Every parameter that existed before D3 is drawn as before: D3's rebuild, D4's heads and
     D9's prototype - whatever their flags - leave every earlier parameter as it was drawn."""
     model = build_model(NetConfig(**_SMALL, **flags), seed=7)
-    kept = {n: p for n, p in model.named_parameters() if not n.startswith(_NEW)}
+    kept = {n: p for n, p in model.named_parameters() if not n.startswith(_NEW + _LATER)}
     count, expected = _PRE_D3
     assert len(kept) == count
     _same(_fingerprint(kept), expected, count)
@@ -206,7 +266,7 @@ def test_the_parameters_before_d2s_flat_head_are_drawn_as_before(flags, pool):
     generator, pinned."""
     kw = {} if flags == "default" else dict(opp_reply=True, optimistic_policy=True, soft_policy=False)
     model = build_model(NetConfig(**_SMALL, **kw, leave_pool=pool), seed=7)
-    kept = {n: p for n, p in model.named_parameters() if not n.startswith("leave.")}
+    kept = {n: p for n, p in model.named_parameters() if not n.startswith(("leave.", *_LATER))}
     count, expected = _PRE_D2[flags]
     assert len(kept) == count
     _same(_fingerprint(kept), expected, count)
@@ -217,7 +277,7 @@ def test_the_parameters_before_d2s_flat_head_are_drawn_as_before(flags, pool):
 @pytest.mark.slow
 def test_the_v1s_parameters_before_d2s_flat_head_are_drawn_as_before():
     model = build_model(NetConfig(), seed=0)
-    kept = {n: p for n, p in model.named_parameters() if not n.startswith("leave.")}
+    kept = {n: p for n, p in model.named_parameters() if not n.startswith(("leave.", *_LATER))}
     count, expected = _PRE_D2_V1
     assert len(kept) == count
     _same(_fingerprint(kept), expected, count)

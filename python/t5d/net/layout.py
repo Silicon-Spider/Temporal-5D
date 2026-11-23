@@ -44,8 +44,11 @@ As built (``BoardLayoutEmbedding``), per board of every position:
    covers it), width ``layout_ffn_ratio * d`` (8x, the trunk's: 1,051,136 parameters with F5's
    kept biases, ``out_ffn_bias``), on every valid token - squares, per-board and global registers
    (Lc0's tokens are all squares, so "after the embedding" is every token); padding stays zero.
-   ``layout_ffn_ratio = 0`` drops it - not the register's A8, which has one: section 15.3's cost
-   row's "without the FFN" probe.
+   The width is part of the arm (section 2.2, register A8; 2026-11-15 review): 8x is the
+   placeholder, and ablation 6p's second arm is the same block at 1x (``layout_ffn_ratio = 1``,
+   preset ``"6p-layout-ff1"``: 256 -> 256 -> 256, 131,840 parameters - A8 then 1,709,824 against
+   2,629,120 at 8x). ``layout_ffn_ratio = 0`` drops it - not the register's A8, which has one:
+   section 15.3's cost row's "without the FFN" probe.
 
 Every step is per board and per token: a token's layout channels read its own board's contents
 and its own canonical cell, nothing of other boards and nothing of the board's state-dependent

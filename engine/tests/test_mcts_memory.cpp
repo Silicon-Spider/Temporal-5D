@@ -170,14 +170,15 @@ TEST(mcts_an_allocation_failure_in_gather_or_deliver_leaves_the_search_consisten
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
   std::size_t gather_faults = 0;
   std::size_t deliver_faults = 0;
-  // The ply split in a tree and a graph, and D2's tree form (a tree only), whose
-  // inherited expansions happen inside gather.
-  for (const int arm : {0, 1, 2}) {
-    const bool graph = arm == 1;
+  // The ply split in a tree and a graph, and D2's tree form in a tree and a
+  // graph (§8.5: its gates judged before a child is made), whose inherited
+  // expansions happen inside gather.
+  for (const int arm : {0, 1, 2, 3}) {
+    const bool graph = arm == 1 || arm == 3;
     for (long long k = 0; k < 2400; k += 13) {
       SearchParams p = quick();
       p.graph = graph;
-      if (arm == 2) p.split = TurnSplit::Tree;
+      if (arm >= 2) p.split = TurnSplit::Tree;
       Search s(start("Standard - Two Timelines"), p);
       s.run(*uniform, Limits{40});
       std::size_t n = 0;
@@ -303,7 +304,9 @@ TEST(mcts_an_allocation_failure_never_leaves_a_node_the_root_does_not_reach) {
   // reaches ("a node the root does not reach"), in every split's graph. Every
   // allocation of one gather is tried, each on a fresh search (their number
   // counted first, on an identical one): the ply split in a graph and a tree
-  // and D2's tree form (a tree only), a gather of 8; the flat form in a graph
+  // and D2's tree form in a tree and a graph (§8.5: a move's gate is judged,
+  // allocating, before its child is made - a path-local node enters no table),
+  // a gather of 8; the flat form in a graph
   // and a tree, from Standard (its turn starts cheap to judge) and a gather of
   // 2 - each new turn start is judged by the mate detector before it is
   // entered in the table, so a gather of 8 makes some 2,300 allocations.
@@ -317,6 +320,7 @@ TEST(mcts_an_allocation_failure_never_leaves_a_node_the_root_does_not_reach) {
   for (const Arm& arm : {Arm{TurnSplit::BoardMove, true, "Standard - Two Timelines", 8},
                          Arm{TurnSplit::BoardMove, false, "Standard - Two Timelines", 8},
                          Arm{TurnSplit::Tree, false, "Standard - Two Timelines", 8},
+                         Arm{TurnSplit::Tree, true, "Standard - Two Timelines", 8},
                          Arm{TurnSplit::Flat, true, "Standard", 2}, Arm{TurnSplit::Flat, false, "Standard", 2}}) {
     SearchParams p = without_ladder(quick());
     p.split = arm.split;
@@ -367,10 +371,12 @@ TEST(mcts_an_allocation_failure_in_a_reroot_leaves_the_search_consistent) {
   // the second's; the sweep ends on the point past the last allocation, a
   // re-root that goes through, and check_invariants reads the graph's table
   // (review finding M3: the sweep never saw a successful re-root before).
+  // D2's tree form too: in a graph its re-root leaves the path-local nodes out
+  // of the table and makes the new root a graph node (§8.5), whole or not at all.
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
   const GameState root = start("Standard - Two Timelines");
   const GameState far = after("Standard - Two Timelines", 3);  // no search here reaches it: advance_to makes its node
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat, TurnSplit::Tree}) {
     for (const bool graph : {false, true}) {
       SearchParams p = without_ladder(quick());
       p.split = split;
@@ -516,7 +522,6 @@ TEST(mcts_the_memory_estimate_follows_the_heap) {
   const std::unique_ptr<Evaluator> random = make_evaluator(BuiltinEvaluator::Random, 7);
   for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat, TurnSplit::Tree}) {
     for (const bool graph : {false, true}) {
-      if (split == TurnSplit::Tree && graph) continue;  // refused (build-log spec issue 301)
       SearchParams p = quick();
       p.split = split;
       p.graph = graph;

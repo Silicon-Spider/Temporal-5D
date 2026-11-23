@@ -2507,14 +2507,36 @@ the flat form was built, 2026-10-23, the flat form taking its slot, 1):
   They are tested cheapest first (always, present, between, capture, check);
   `SearchStats::gate_fired` counts the mid-turn leaves by the first that fired and
   `inherited_nodes` the nodes expanded without the network (`seconds_gates` the gates'
-  time). **Refused under MCGS** (`graph`; build-log spec issue 301): a mid-turn node would
-  inherit the priors, and the evaluated-or-not status, of the path that made it. §8.2's
+  time). **Under MCGS** (`graph`; §8.5 "The tree form under graph search", register C11
+  and D2 - ruled at the 2026-11-15 review, settling build-log spec issue 301; the
+  combination was refused before) only evaluated nodes are graph nodes: the root, turn
+  starts (the complete turn a submit edge reaches) and the mid-turn nodes a gate's move
+  made, each keyed by its state and count like every graph node. An inherited node's
+  priors, and whether it was evaluated at all, belong to the path that made it, so the
+  gate on a move edge's *own* move decides the kind of node the edge leads to, and
+  nothing else does: a gate fires - a graph node, found or entered in the table; none - a
+  **path-local** node (`NodeView::path_local`) made for that edge, in no table, never
+  found, with one parent, expanded on that parent's logits. That holds also where
+  another ordering's gated move already made an evaluated node of the same state: the
+  two stay apart, and the inherited one consults neither it nor the evaluation cache
+  (each edge's child is a function of the edge, not of which path the search tried
+  first). So the orderings of one turn meet at the first evaluated node - with the
+  default gates usually the node whose move shifts the present, at the latest the turn
+  start after the submission - and the duplicate inner nodes §8.5 accepts are among
+  `inherited_nodes`. A path-local node a re-root makes the root becomes a graph node
+  then (entered in the table; the root is always evaluated). The gate is judged when the
+  child is made (`ensure_child`, before any node exists, so a failure there leaves
+  none) and kept on the node. With `kGateAlways` no node is path-local and the search is
+  the ply split's graph search bit for bit. One limit: `advance_to`'s search of the
+  graph for a state that is not a child of the root finds graph nodes only, so a state
+  held only by a path-local node starts a fresh root. No parameter, statistic or C
+  struct was added (`graph` with `split` is the switch). §8.2's
   fixed board order is an add-on (issue 162), not built. Tested
   (`tests/test_mcts_tree.cpp`): §15.2's row bit for bit against the ply split (digest,
   statistics, root children, across a re-root) on every named variant, random-play roots
   with many timelines and deep travel, roots during an action and past the shift, every
-  tree configuration, budgeted and exact legality and the pseudo-legal seam, batched and
-  synchronous; with no gate the network sees only the root and turn starts; with one
+  tree and graph configuration, budgeted and exact legality and the pseudo-legal seam,
+  batched and synchronous; with no gate the network sees only the root and turn starts; with one
   gate exactly the mid-turn nodes whose move fires it (each predicate recomputed in the
   test), under both readings of the boards still to move (positions with an optional
   board, where they differ); the capture reading on constructed positions; the inherited
@@ -2524,7 +2546,21 @@ the flat form was built, 2026-10-23, the flat form taking its slot, 1):
   every move unknown; the pseudo-legal seam: illegal moves kept, dead ends found without
   the network); a carried root the tree form inherited evaluated once, its statistics
   kept, its priors a fresh root's (C++ and through the Python step API with the network);
-  §15.4's turn structure and dead ends; the refusal. The C step API reproduces it by
+  §15.4's turn structure and dead ends; the parameters' checks. Each of those runs in a
+  tree and under graph search alike, and the graph has its own: the gate on an edge's
+  own move decides the kind of node, from the moment it is made (every gate alone, the
+  four and none; a constructed position holds one state in an evaluated graph node and
+  in a path-local one, both submitting to one turn start); a path-local node has one
+  parent and no evaluation, a node with two parents is a graph node; no two graph nodes
+  hold one state and count while path-local ones do, an edge of each then leading to
+  one graph node or to two path-local ones; no cycle (every edge leads up a strict
+  order: more boards, or the same boards and a turn start); visits conserved, the
+  residual corrections accounted for edge by edge; the network asked once per evaluated
+  state with the cache off (a tree asks twice); a merged node's value and logits those
+  of a fresh root at its state; values from the acting player's view; the graph carried
+  across six re-roots, onto path-local children and graph nodes alike. The allocation
+  sweeps (`test_mcts_memory.cpp`, `test_mcts_faults.cpp`) and §15.4's configurations
+  (`test_mcts.cpp`) carry a tree-form graph arm. The C step API reproduces it by
   digest, and Python drives it (`T5D_SPLIT_TREE`, the `tree_*` fields, the summary's
   `inherited_nodes` and `gate_*`); `t5d-play --split tree [--tree-gates
   all|none|always|between,capture,check,present]` (refused with another split; the
@@ -2890,8 +2926,9 @@ included), action listings and verifications, and the game's own turn-start verd
 
 **Tests** (`tests/test_mcts.cpp`, `test_mcts_memory.cpp`, `test_selfplay.cpp`,
 `test_capi_search.cpp`, `test_play_exe.cpp`): §15.4's invariants under uniform and
-random evaluators, across six configurations (both splits, tree and graph, both node
-keys, widening on and off, E2 and E3, the proof channel on in three and off in three) -
+random evaluators, across ten configurations (the ply split and D2's flat and tree
+forms, each in a tree and a graph, both node keys, widening on and off, E2 and E3, the
+proof channel on in five and off in five) -
 `check_invariants()` holds visit counts and backed-up values consistent
 through backup (a node's visits = the visits that ended there + its edges'), no
 virtual loss left, every node reachable, bounds never contradicting their children,
@@ -4364,8 +4401,12 @@ Each is recorded where it is made (the header comments) and listed here:
   above, move by move; unmatched moves the lowest logit; submit's logit carried down),
   the inherited node's value (its parent's evaluation's, for FPU and E2/E5; off with a
   term that reads it refused), a gated node an ordinary leaf, the root always evaluated (a
-  carried inherited root re-evaluated by the network, its statistics kept); MCGS refused
-  (issue 301); §8.2's fixed
+  carried inherited root re-evaluated by the network, its statistics kept); under MCGS
+  only evaluated nodes are graph nodes (§8.5, ruled at the 2026-11-15 review - issue 301
+  settled), with two readings the ruling does not spell out, built as: a move that fires
+  no gate gets a path-local inherited node of its own even where an evaluated graph node
+  of the same state exists (the gate on the edge's own move decides), and a path-local
+  node a re-root makes the root is entered in the graph's table; §8.2's fixed
   board order not built (an add-on, issue 162).
 - **A6's turn state** (engine ABI round 1; build-log spec issues 143-145): the
   mandatory count is the state machine's own - A6's "−1 / −2 / 0" arithmetic holds only

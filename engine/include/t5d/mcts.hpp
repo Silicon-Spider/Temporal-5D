@@ -95,9 +95,26 @@
 //    kGateAlways (§15.2's "every interaction gate firing") every mid-turn
 //    node is a leaf and the search is the ply split's, bit for bit (H15's
 //    digest; memory_bytes() is not compared - a node is larger by the tree
-//    form's fields under every split). Refused with graph search (C11): under MCGS
-//    an inherited node's priors, and whether it was evaluated, would depend on
-//    the path that created it (build-log spec issue 301).
+//    form's fields under every split). UNDER GRAPH SEARCH (C11; §8.5, "The
+//    tree form under graph search", the 2026-11-15 review settling build-log
+//    spec issue 301) only EVALUATED nodes are graph nodes - the root, turn
+//    starts (the complete turn a submit edge reaches) and the mid-turn nodes a
+//    gate's move made, each keyed by its state and count as below. An
+//    inherited node's priors, and whether it was evaluated at all, are the
+//    path's, so the gate on a move edge's OWN move decides the kind of node
+//    the edge leads to, and nothing else does: a gate fires - a graph node,
+//    found or entered in the table; none - a PATH-LOCAL node (NodeView::
+//    path_local) made for that edge: in no table, never found, one parent,
+//    expanded on that parent's logits - also where another ordering's gated
+//    move made an evaluated graph node of the same state (the two stay
+//    apart; the inherited one consults neither it nor the evaluation cache).
+//    The orderings of one turn meet at the first evaluated node, at the
+//    latest the turn start after the submission. A path-local node a re-root
+//    makes the root is entered in the table then, and evaluated as above
+//    (advance_to's lookup of a state that is no child of the root finds graph
+//    nodes only: one held only by a path-local node starts a fresh root).
+//    With kGateAlways no node is path-local and the search is the ply split's
+//    graph search, bit for bit.
 //
 // HOW LEGALITY ENTERS. Through one call site (mcts.cpp, leaf_expansion): the
 // expansion of a leaf (t5d/expand.hpp) with ExpandOptions::legal_moves under
@@ -655,7 +672,8 @@ struct SearchParams {
   double variance_bonus_cap = 2.0;
 
   // ---- C11 (prototype): MCGS --------------------------------------------------------
-  /// Refused with split Tree (build-log spec issue 301).
+  /// With split Tree only evaluated nodes are graph nodes (TurnSplit::Tree,
+  /// above; §8.5).
   bool graph = false;
   /// The lineage reading (C23, ruled): states that differ in a branch origin
   /// are different positions for the network, so different nodes.
@@ -1122,7 +1140,9 @@ struct SearchStats {
   /// ... and mid-turn nodes sent to the network (or the cache) instead, by the
   /// first gate found to fire - indexed by the gate's bit (between, capture,
   /// check, present, always); tested in the order always, present, between,
-  /// capture, check (the cheapest first).
+  /// capture, check (the cheapest first). Under graph search a node is counted
+  /// once, by the gate of the move that made it (other moves into it fired
+  /// one too - or they would not lead to it - perhaps another).
   std::array<std::uint64_t, 5> gate_fired{};
   // Stage E10, the verification ladder - counted as its verdicts reach the
   // search (not part of digest()):
@@ -1223,6 +1243,11 @@ struct NodeView {
   /// are its parent's with tree_inherit_value, 0 without) - until a re-root
   /// makes it the root and the network evaluates it.
   bool inherited = false;
+  /// D2's tree form under graph search (§8.5, C11): made by a move that fired
+  /// no gate - the path's own node: in no table, never merged, one parent;
+  /// inherited once expanded. False everywhere else, and for a node a re-root
+  /// made the root (a graph node from then on).
+  bool path_local = false;
   double k0 = 0;
   std::size_t instantiated = 0;
   std::size_t edge_count = 0;

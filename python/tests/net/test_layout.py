@@ -9,6 +9,12 @@ embedding's FFN follows; nothing of it is quantised (G2); every attention path a
 compute the same function with it; and section 15.3's row - "~0.1% of attention at 44 boards;
 ~1.6M parameters at 16 channels" - is counted. The A7 mirror row with A8 on is in
 ``test_perspective.py``; the smoke optimiser steps are below.
+
+The FFN's width is part of the arm (section 2.2, register A8; the 2026-11-15 review): 8x is the
+placeholder and ablation 6p's second arm is 1x (``layout_ffn_ratio=1``). The 1x arm is run through
+the flag-off row, the FFN's form, cached = dense, the cost row and the smoke steps here (and the
+mirror in ``test_perspective.py``); the attention-path row stays at 8x - the embedding precedes
+every attention path and its width touches none.
 """
 
 from __future__ import annotations
@@ -63,6 +69,7 @@ FLAG_SETS = {
     "flagged": dict(typed_edge_bias=True, board_pair_smolgen=True, shaw_key_term=True, opp_reply=True, optimistic_policy=True),
     "cached": dict(attn_scope="block_causal"),
     "no_ffn_centre": dict(layout_ffn_ratio=0, layout_padding="centre", layout_channels=4),
+    "ffn_1x": dict(layout_ffn_ratio=1),  # ablation 6p's second arm
 }
 
 
@@ -100,13 +107,13 @@ def test_the_parameter_count():
     """At the v1's dimensions: the projection 1,536 -> 64 x 16 with its bias, 1,573,888 - section
     2.2's "about 1.6M" (the weight alone 1,572,864); the merge 16 -> 256, 4,096; the FFN at the
     placeholder's 8x, 1,051,136 (gain 256, 256 -> 2,048 -> 256 with F5's biases): 2,629,120, on
-    the v1's 22,965,683 - 25,594,803. Without the FFN 1,577,984."""
+    the v1's 22,969,139 - 25,598,259. Without the FFN 1,577,984."""
     v1 = parameter_breakdown(build_model(NetConfig()))
     counts = parameter_breakdown(build_model(NetConfig(**A8)))
     assert counts["embed.layout"] == 1_573_888 + 4_096 + 1_051_136 == 2_629_120
     assert layout_parameters(NetConfig(**A8)) == {"projection": 1_573_888, "merge": 4_096, "ffn": 1_051_136, "total": 2_629_120}
     assert abs(LAYOUT_FEATURES * LAYOUT_CELLS * 16 - 1.6e6) / 1.6e6 < 0.02, "section 2.2: about 1.6M at 16 channels"
-    assert counts["total"] == v1["total"] + 2_629_120 == 25_594_803
+    assert counts["total"] == v1["total"] + 2_629_120 == 25_598_259
     assert {k: v for k, v in counts.items() if k not in ("embed.layout", "total")} == {
         k: v for k, v in v1.items() if k not in ("embed.layout", "total")
     }
@@ -119,6 +126,34 @@ def test_the_parameter_count():
         cfg = NetConfig(**A8, **kw)
         assert parameter_breakdown(build_model(cfg))["embed.layout"] == layout_parameters(cfg)["total"], kw
     assert layout_parameters(NetConfig(**A8, layout_ffn_ratio=0))["total"] == 1_577_984
+
+
+def test_the_1x_arms_parameter_count():
+    """Ablation 6p's second arm (section 2.2: "6p tests it at 1x ... beside the 8x placeholder"): the
+    same projection and merge, the FFN at width d - gain 256, 256 -> 256 -> 256 with F5's biases,
+    131,840 - so A8 is 1,709,824, on the v1's 22,969,139 - 24,678,963; every other component is the
+    v1's."""
+    cfg = NetConfig(**A8, layout_ffn_ratio=1)
+    assert layout_parameters(cfg) == {"projection": 1_573_888, "merge": 4_096, "ffn": 131_840, "total": 1_709_824}
+    v1 = parameter_breakdown(build_model(NetConfig()))
+    counts = parameter_breakdown(build_model(cfg))
+    assert counts["embed.layout"] == 1_573_888 + 4_096 + 131_840 == 1_709_824
+    assert counts["total"] == v1["total"] + 1_709_824 == 24_678_963
+    assert {k: v for k, v in counts.items() if k not in ("embed.layout", "total")} == {
+        k: v for k, v in v1.items() if k not in ("embed.layout", "total")
+    }
+
+
+def test_the_two_arms_of_6p_differ_in_the_ffn_alone():
+    """The 8x and the 1x arm at one seed share every parameter but the FFN's two matrices and their
+    biases - the projection, the merge and the norm's gain included, which A8 draws first from its
+    own generator - so a comparison of the arms is a comparison of the width alone."""
+    ff8, ff1 = _model(9, **A8).state_dict(), _model(9, **A8, layout_ffn_ratio=1).state_dict()
+    ffn = [f"embed.layout.{name}" for name in ("ffn_in.weight", "ffn_in.bias", "ffn_out.weight", "ffn_out.bias")]
+    assert set(ff8) == set(ff1) and set(ffn) <= set(ff1)
+    assert all(torch.equal(ff8[k], ff1[k]) for k in ff8 if k not in ffn)
+    assert [tuple(ff1[k].shape) for k in ffn] == [(256, 256), (256,), (256, 256), (256,)]
+    assert [tuple(ff8[k].shape) for k in ffn] == [(2048, 256), (2048,), (256, 2048), (256,)]
 
 
 def test_the_configuration_is_validated():
@@ -280,14 +315,16 @@ def test_it_is_fp32_and_never_quantised():
 # --- the FFN after the embedding: its form (spec issue 240(b), a placeholder) ----------------------------
 
 
-def test_the_ffn_is_one_pre_norm_residual_block_on_every_valid_token():
+@pytest.mark.parametrize("ratio", [8, 1], ids=["ff8", "ff1"])
+def test_the_ffn_is_one_pre_norm_residual_block_on_every_valid_token(ratio):
     """Issue 240(b)'s documented form, bit for bit: with ``x0`` the embedding with the layout
     channels added and no FFN (the ``layout_ffn_ratio=0`` network of the same seed - A8's
     projection and merge are drawn first from its own generator, so they are the same
     parameters), the embedding is ``x0 + where(valid, W2 mish(W1 RMSNorm(x0)), 0)`` - after the
     layout channels, residual, pre-norm, Mish, on every valid token: the per-board and global
-    registers change as the squares do, padding stays zero."""
-    with_ffn = _model(9, **A8)
+    registers change as the squares do, padding stays zero. At the placeholder's 8x and at
+    ablation 6p's 1x (section 16's A8 entry: "at width 8d as the placeholder and 1d as 6p's arm")."""
+    with_ffn = _model(9, **A8, layout_ffn_ratio=ratio)
     without = _model(9, **A8, layout_ffn_ratio=0)
     layer = with_ffn.embed.layout
     for name in ("proj.weight", "proj.bias", "merge.weight"):
@@ -331,16 +368,17 @@ def test_every_attention_path_computes_the_same_function(scope):
 def test_cached_equals_one_full_pass(geometry):
     """Section 15.2's first row (C2, C17) with A8 on: along random search paths every node's cached
     evaluation equals one full block-causal pass - the layout is per board and intrinsic (with its
-    perspective), the FFN per token - several seeds, both paddings."""
-    for seed, padding in ((0, "a1"), (1, "centre"), (2, "a1")):
-        model = _cached_model(seed, board_layout_embedding=True, layout_padding=padding)
+    perspective), the FFN per token - several seeds, both paddings; and ablation 6p's 1x arm, on the
+    root and with the projection and merge of the 8x pass before it (so a failure is the width's)."""
+    for seed, padding, ratio in ((0, "a1", 8), (1, "centre", 8), (2, "a1", 8), (2, "a1", 1)):
+        model = _cached_model(seed, board_layout_embedding=True, layout_padding=padding, layout_ffn_ratio=ratio)
         root = _root(geometry, seed)
         tree = SearchTree(CachedEvaluator(model), root)
         node = tree.root
         for move in [None, *_random_moves(root, np.random.default_rng(seed), 5)]:
             if move is not None:
                 node = tree.child(node, move)
-            _close(tree.evaluate(node), reference_output(model, node.state), what=(geometry, seed, move))
+            _close(tree.evaluate(node), reference_output(model, node.state), what=(geometry, seed, ratio, move))
 
 
 # --- section 15.3's cost row -----------------------------------------------------------------------------
@@ -369,19 +407,65 @@ def test_the_cost_row():
         assert counted[True] - counted[False] == layout_flops(state.n_boards, batch.n_tokens, NetConfig(**A8, **kw))["total"]
 
 
+def test_the_1x_arms_cost_row():
+    """Ablation 6p's second arm (section 2.2: "at 1x (about 0.3% of the forward)"): the same
+    projection and merge, the FFN ``4 T d^2`` - one eighth of the placeholder's. At 44 boards (T =
+    2,920) 0.928 GFLOP, 0.66% of section 9.1's attention (the FFN alone 0.55%); at 240 boards (T =
+    15,856) 5.04 GFLOP. And the implementation issues exactly ``layout_flops`` at 1x: the counted
+    FLOPs with the arm exceed those without A8 by it, nothing else."""
+    cfg = NetConfig(**A8, layout_ffn_ratio=1)
+    t = 44 * 66 + 16
+    flops = layout_flops(44, t, cfg)
+    assert flops == {"projection": 138_412_032, "merge": 23_920_640, "ffn": 765_460_480, "total": 927_793_152}
+    attention = attention_flops(t, t, cfg)
+    assert abs(flops["total"] / attention - 0.00664) < 0.00005 and abs(flops["ffn"] / attention - 0.00548) < 0.00005
+    ff8 = layout_flops(44, t, NetConfig(**A8))
+    assert (flops["projection"], flops["merge"]) == (ff8["projection"], ff8["merge"]) and 8 * flops["ffn"] == ff8["ffn"]
+    assert layout_flops(240, 240 * 66 + 16, cfg)["total"] == 5_041_422_336
+    state = synthetic_state(15, 5)
+    batch = collate([state])
+    counted = {}
+    for on in (True, False):
+        model = _model(13, attn_impl="sdpa", board_layout_embedding=on, layout_ffn_ratio=1)
+        _, counted[on] = count_flops(lambda model=model, batch=batch: model(batch))
+    assert counted[True] - counted[False] == layout_flops(state.n_boards, batch.n_tokens, cfg)["total"]
+
+
+@pytest.mark.slow
+def test_the_arms_share_of_the_counted_forward():
+    """Section 2.2's two shares of the forward at 44 boards, counted on the v1 (16 layers, FP32
+    trunk, model seed 0, ``synthetic_state(0, 44)``: 2,920 tokens): the arm adds exactly
+    ``layout_flops`` - 927,793,152 FLOPs at 1x, "about 0.3% of the forward" (0.29% on the
+    316,148,587,072 counted without A8, 2026-11-22), and 6,286,016,512 at the placeholder's 8x, "2.0%
+    of the forward". The forward's own count is banded, not pinned: kernel-width work elsewhere
+    (register G11) may move it, the arm's own FLOPs it may not."""
+    batch = collate([synthetic_state(0, 44)])
+    assert batch.n_tokens == 2_920
+    counted = {}
+    for name, kw in (("off", {}), ("ff8", dict(**A8)), ("ff1", dict(**A8, layout_ffn_ratio=1))):
+        model = build_model(NetConfig(trunk_dtype="fp32", **kw), seed=0).eval()
+        _, counted[name] = count_flops(lambda model=model: model(batch))
+    assert counted["ff1"] - counted["off"] == 927_793_152
+    assert counted["ff8"] - counted["off"] == 6_286_016_512
+    assert 0.0025 < 927_793_152 / counted["off"] < 0.0035, 'section 2.2: "about 0.3% of the forward" at 1x'
+    assert 0.018 < 6_286_016_512 / counted["off"] < 0.022, 'section 2.2: "2.0% of the forward" at 8x'
+
+
 # --- smoke optimiser steps on synthetic rows (the user's rule: no training runs) --------------------------
 
 
 @pytest.mark.grad
-def test_smoke_steps_with_it_on():
-    """Three optimiser steps on synthetic rows with A8 on: every loss finite, a gradient on every A8
-    parameter, and every one of them moved."""
+@pytest.mark.parametrize("ratio", [8, 1], ids=["ff8", "ff1"])
+def test_smoke_steps_with_it_on(ratio):
+    """Three optimiser steps on synthetic rows with A8 on - at the placeholder's 8x FFN and at
+    ablation 6p's 1x: every loss finite, a gradient on every A8 parameter, and every one of them
+    moved."""
     from t5d.engine.netplay import SMALL
     from t5d.train.trainer import Trainer
     from tests.train.test_trainer import _config, _synthetic_rows
 
     _, _, rows = _synthetic_rows(0)
-    net = NetConfig(**SMALL, **A8)
+    net = NetConfig(**SMALL, **A8, layout_ffn_ratio=ratio)
     model = build_model(net, seed=1)
     before = {n: p.detach().clone() for n, p in model.embed.layout.named_parameters()}
     trainer = Trainer(model, net, _config())

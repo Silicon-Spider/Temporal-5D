@@ -3,8 +3,13 @@
 Board-pair smolgen's relative cells (``smolgen.py``) index its per-head table by these
 buckets of the signed Delta-time and the absolute Delta-timeline between two boards. They
 were B6's binned biases' buckets (stage N1); B6 is superseded by B15's displacement bias
-(CHECKPOINT 6) and removed, and its buckets live on here for B12, whose register row
-records it "as built over relative board-pair cells".
+(CHECKPOINT 6), and its buckets live on here for B12, whose register row records it "as
+built over relative board-pair cells" - and in B15 itself, which keeps B6's two per-axis
+tables for the pairs beyond its exact classes (the 2026-11-15 review;
+``NetConfig.disp_far_axis``). B15 computes the same buckets by integer comparisons
+(``displacement.far_time_bucket``, ``far_timeline_bucket`` - no float log2, so that they
+run inside B14's score function), and its tests hold the two equal on every offset
+(``tests/net/test_displacement_far.py``).
 
 A bucket of an offset's size is exact below ``n_exact``, then log2-spaced up to
 ``max_distance``, then clamped: every larger offset shares the last bucket.

@@ -184,7 +184,8 @@ TEST(mcts_fault_every_injected_fault_surfaces) {
     bool ladder;
   };
   for (const Arm& arm : {Arm{TurnSplit::BoardMove, true, false}, Arm{TurnSplit::BoardMove, false, false},
-                         Arm{TurnSplit::Tree, false, false}, Arm{TurnSplit::Flat, true, false},
+                         Arm{TurnSplit::Tree, false, false}, Arm{TurnSplit::Tree, true, false},
+                         Arm{TurnSplit::Flat, true, false},
                          Arm{TurnSplit::Flat, false, false}, Arm{TurnSplit::BoardMove, false, true},
                          Arm{TurnSplit::Flat, false, true}}) {
     SearchParams p = base(arm.split, arm.graph);
@@ -304,6 +305,7 @@ TEST(mcts_fault_a_batch_whose_requests_or_buffers_fail_is_abandoned) {
   for (const Arm& arm : {Arm{TurnSplit::BoardMove, false, "Standard - Two Timelines"},
                          Arm{TurnSplit::BoardMove, true, "Standard - Two Timelines"},
                          Arm{TurnSplit::Tree, false, "Standard - Two Timelines"},
+                         Arm{TurnSplit::Tree, true, "Standard - Two Timelines"},
                          Arm{TurnSplit::Flat, false, "Standard"}, Arm{TurnSplit::Flat, true, "Standard"}}) {
     const SearchParams p = base(arm.split, arm.graph);
     const GameState root = start(arm.variant);
@@ -1115,9 +1117,11 @@ TEST(mcts_a_reroot_under_key_collisions_keeps_the_first_node_in_the_table) {
   // them: of two with one identity - a key collision - the first keeps the
   // entry (review finding M3; the review's P10). Keys cut to 3 bits, a run,
   // two re-roots and runs after each, check_invariants (which reads the table:
-  // every entry the lowest id of its identity) after every step.
+  // every entry the lowest id of its identity) after every step. D2's tree
+  // form too: its path-local nodes are in no table and in no collision, and a
+  // re-root onto one enters it first (§8.5).
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat, TurnSplit::Tree}) {
     SearchParams p = base(split, true);
     p.key_bits = 3;
     Search s(after("Standard - Two Timelines", 1), p);
@@ -1138,7 +1142,11 @@ TEST(mcts_a_reroot_under_key_collisions_keeps_the_first_node_in_the_table) {
 
 // ---- L1: D2's tree form - inherited expansions and a carried root's re-evaluation ---------------
 
-TEST(mcts_fault_a_tree_form_reevaluation_is_whole_or_not_at_all) {
+namespace {
+
+// In a tree, and under graph search (`graph`; §8.5: the carried root was a
+// path-local node, a graph node since the re-root).
+void tree_form_reevaluation_is_whole_or_not_at_all(bool graph) {
   // A carried root the tree form inherited is evaluated by the first batch
   // after the re-root (reevaluate). A fault there left it expanded, evaluated
   // and no longer inherited - never re-evaluated for the rest of the decision,
@@ -1148,7 +1156,7 @@ TEST(mcts_fault_a_tree_form_reevaluation_is_whole_or_not_at_all) {
   // fault-free twin's (H15's digest), or the fault came after a complete
   // re-evaluation and the search is the twin's already.
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
-  const SearchParams p = base(TurnSplit::Tree, false);
+  const SearchParams p = base(TurnSplit::Tree, graph);
   const auto prepared = [&] {
     Search s(start("Standard - Two Timelines"), p);
     s.run(*uniform, Limits{60});
@@ -1199,14 +1207,16 @@ TEST(mcts_fault_a_tree_form_reevaluation_is_whole_or_not_at_all) {
     s.run(*uniform, Limits{10});
     CHECK_NOTHROW(s.check_invariants());
   }
-  std::printf("  tree form, a carried root's re-evaluation: %lld allocations, %zu faults (%zu left it inherited), %zu "
-              "unlike the twin\n",
-              total, faults, inherited, unlike);
+  std::printf("  tree form, %s, a carried root's re-evaluation: %lld allocations, %zu faults (%zu left it inherited), "
+              "%zu unlike the twin\n",
+              graph ? "graph" : "tree", total, faults, inherited, unlike);
   CHECK(inherited > 0);
   CHECK_EQ(unlike, std::size_t{0});
 }
 
-TEST(mcts_fault_a_tree_form_inherited_expansion_is_whole_or_not_at_all) {
+// In a tree, and under graph search (`graph`; §8.5: the gate of the move into
+// a child is judged, allocating, before the child is made).
+void tree_form_inherited_expansion_is_whole_or_not_at_all(bool graph) {
   // inherit set a node's edges and inherited flag before set_priors, which
   // allocates (the asset map's steering included): a fault left the node
   // inherited with edges but not expanded, and a re-root onto it then had it
@@ -1216,7 +1226,7 @@ TEST(mcts_fault_a_tree_form_inherited_expansion_is_whole_or_not_at_all) {
   // and not expanded, and a re-root onto the root child that gather made, then
   // a batch, keeps every invariant.
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
-  SearchParams p = base(TurnSplit::Tree, false);
+  SearchParams p = base(TurnSplit::Tree, graph);
   p.asset_map = true;
   std::size_t faults = 0;
   std::size_t half = 0;
@@ -1259,12 +1269,22 @@ TEST(mcts_fault_a_tree_form_inherited_expansion_is_whole_or_not_at_all) {
       CHECK_NOTHROW(s.check_invariants());
     }
   }
-  std::printf("  tree form, asset map on: %zu faults, %zu nodes left inherited and not expanded, %zu re-roots onto "
+  std::printf("  tree form, %s, asset map on: %zu faults, %zu nodes left inherited and not expanded, %zu re-roots onto "
               "the child the gather made\n",
-              faults, half, rerooted);
+              graph ? "graph" : "tree", faults, half, rerooted);
   CHECK(faults > 0);
   CHECK(rerooted > 0);
   CHECK_EQ(half, std::size_t{0});
+}
+
+}  // namespace
+
+TEST(mcts_fault_a_tree_form_reevaluation_is_whole_or_not_at_all) {
+  for (const bool graph : {false, true}) tree_form_reevaluation_is_whole_or_not_at_all(graph);
+}
+
+TEST(mcts_fault_a_tree_form_inherited_expansion_is_whole_or_not_at_all) {
+  for (const bool graph : {false, true}) tree_form_inherited_expansion_is_whole_or_not_at_all(graph);
 }
 
 // ---- L3: a re-root with the ladder's verdicts waiting -------------------------------------------

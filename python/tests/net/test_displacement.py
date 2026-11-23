@@ -24,6 +24,11 @@ size, 8 x 8 to Global Warming's 1 x 1: ``CONSTRUCTIONS``).
 * **The table**: its size (section 4.1: ~1.6M), one per layer, every layer's read by that
   layer - in the cached path too - and the no-table arm of ablation 2, which is the network
   without the table.
+* **B6's two per-axis tables beyond the exact classes** (the v1 default since the 2026-11-15
+  review) are in the hand-materialised reference (``FarReference``, ``reference_bias``), so every
+  comparison above - the structure's rows, the score function, the CPU paths' gradients - holds
+  with them, with their buckets moved, with them off and under ablation 2's layer-shared arm
+  (``FAR_ARMS``). Their own tests are in ``test_displacement_far.py``.
 """
 
 from __future__ import annotations
@@ -142,26 +147,102 @@ def reference_entries(batch, cfg: NetConfig) -> torch.Tensor:
     return torch.from_numpy(values[inverse.reshape(-1)].reshape(kind.shape[0], kind.shape[1], kind.shape[1]))
 
 
+class FarReference:
+    """B6's two per-axis buckets, which B15 keeps beyond its exact classes (section 4.1, the
+    2026-11-15 review), written out in plain Python from the build log's record of B6 (issue 205):
+    "signed Delta-time buckets exact below 4 half-turns, then 4-7, 8-15, ..., 64-127, 128+ (19), and
+    |Delta-timeline| exact below 4, then 4-7, 8-15, 16-31, 32+ (8)". A pair of board tokens -
+    squares or per-board registers - whose boards lie outside the exact classes takes one scalar
+    of each table; every other pair takes none."""
+
+    def __init__(self, time=(4, 128), timeline=(4, 32)) -> None:
+        self.time, self.timeline = tuple(time), tuple(timeline)
+        self.n_sizes = self.size(10**9, *self.time) + 1  # buckets of |Delta-time|
+        self.n_time, self.n_timeline = 2 * self.n_sizes - 1, self.size(10**9, *self.timeline) + 1
+
+    @staticmethod
+    def size(a: int, n_exact: int, top: int) -> int:
+        """The bucket of an offset's size: itself below ``n_exact``; then [n_exact, 2 n_exact), [2
+        n_exact, 4 n_exact), ... while the bucket starts at or below ``top``; the last holds the rest."""
+        if a < n_exact:
+            return a
+        bucket, low = n_exact, n_exact
+        while 2 * low <= min(a, top):
+            bucket, low = bucket + 1, 2 * low
+        return bucket
+
+    def time_bucket(self, dh: int) -> int:
+        b = self.size(abs(dh), *self.time)
+        return b if dh >= 0 else self.n_sizes - 1 + b  # past and future apart; they share only Delta-time 0
+
+    def timeline_bucket(self, dp: int) -> int:
+        return self.size(abs(dp), *self.timeline)
+
+    def __call__(self, kind_q: int, kind_k: int, dp: int, dh: int) -> tuple[int, int] | None:
+        """``(time bucket, timeline bucket)`` of a pair that takes the per-axis terms, else None."""
+        if kind_q not in (SQ, REG) or kind_k not in (SQ, REG):  # a global register or padding: no board
+            return None
+        if abs(dp) <= 2 and abs(dh) <= 4:  # inside the exact classes
+            return None
+        return self.time_bucket(dh), self.timeline_bucket(dp)
+
+
+def _far_reference_for(cfg: NetConfig) -> FarReference:
+    return FarReference((cfg.disp_far_time_exact, cfg.disp_far_time_max), (cfg.disp_far_timeline_exact, cfg.disp_far_timeline_max))
+
+
+def reference_far(batch, cfg: NetConfig) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Every pair's per-axis buckets from ``FarReference``, from the batch's raw coordinates:
+    ``(takes, time bucket, timeline bucket)``, each ``(B, L, L)`` - ``takes`` bool, the buckets 0
+    where the pair takes no term (each distinct (kinds, board displacement) evaluated once)."""
+    ref = _far_reference_for(cfg)
+    kind = torch.where(batch.valid, batch.kind, torch.full_like(batch.kind, PAD)).numpy().astype(np.int64)
+    c = batch.coords.round().long().numpy()
+    dp, dh = (c[:, None, :, a] - c[:, :, None, a] for a in (2, 3))  # key minus query
+    key = ((kind[:, :, None] * 4 + kind[:, None, :]) * 2**11 + (dp + 2**10)) * 2**15 + (dh + 2**14)
+    distinct, inverse = np.unique(key.reshape(-1), return_inverse=True)
+    values = np.zeros((len(distinct), 3), dtype=np.int64)
+    for i, packed in enumerate(distinct.tolist()):
+        rest, h = divmod(packed, 2**15)
+        kinds, p = divmod(rest, 2**11)
+        buckets = ref(*divmod(kinds, 4), p - 2**10, h - 2**14)
+        if buckets is not None:
+            values[i] = (1, *buckets)
+    out = torch.from_numpy(values[inverse.reshape(-1)].reshape(*key.shape, 3))
+    return out[..., 0].bool(), out[..., 1], out[..., 2]
+
+
 def reference_bias(model, batch, layer: int, entries: torch.Tensor | None = None) -> torch.Tensor:
     """B15's bias at layer ``layer`` materialised by hand: ``(B, H, L, L)``, the layer's table
-    at each pair's reference entry (zero for padding) - differentiable in the table."""
+    at each pair's reference entry (zero for padding), plus - with the per-axis tables
+    (``disp_far_axis``) - the two scalars of each pair ``FarReference`` gives them to: ``main +
+    (time + timeline)``. Differentiable in the tables. Under the layer-shared arm
+    (``disp_layer_shared``) every layer reads the one table."""
     entries = reference_entries(batch, model.cfg) if entries is None else entries
-    table = model.displacement.table[layer].float()
+    disp = model.displacement
+    row = 0 if model.cfg.disp_layer_shared else layer
+    table = disp.table[row].float()
     table = torch.cat([table, table.new_zeros(table.shape[0], 1)], dim=1)
-    return table[:, entries].transpose(0, 1)
+    bias = table[:, entries].transpose(0, 1)
+    if model.cfg.disp_far_axis:
+        takes, t, tl = reference_far(batch, model.cfg)
+        far = disp.far_time[row].float()[:, t] + disp.far_timeline[row].float()[:, tl]  # (H, B, L, L)
+        bias = bias + torch.where(takes, far, far.new_zeros(())).transpose(0, 1)
+    return bias
 
 
 # --- constructions -------------------------------------------------------------------------------
 
 
-def far_state(seed: int, size: int = 8, regs: int = 2, globals_: int = 16) -> PositionState:
+def far_state(seed: int, size: int = 8, regs: int = 2, globals_: int = 16, boards=None) -> PositionState:
     """A lattice with boards far apart: every far bin, both signs of Delta-time, odd Delta-times,
     lines of every board direction with k = 3 .. 9 and beyond the clamp, and timelines with
-    gaps - (timeline, half-turn) of each board below; contents, edges and candidate moves from a
-    synthetic state of the same layout (plausible as lists of tokens, not as geometry). At
-    ``size=1`` the boards are Global Warming's (rulebook V3): one empty square, no edges and no
-    moves."""
-    boards = [(0, 0), (0, 6), (0, 14), (3, 0), (3, 6), (-4, 8), (7, 1), (-9, 18), (12, 30), (5, 9)]
+    gaps - (timeline, half-turn) of each board below (or ``boards``, a list of them); contents,
+    edges and candidate moves from a synthetic state of the same layout (plausible as lists of
+    tokens, not as geometry). At ``size=1`` the boards are Global Warming's (rulebook V3): one
+    empty square, no edges and no moves."""
+    default = [(0, 0), (0, 6), (0, 14), (3, 0), (3, 6), (-4, 8), (7, 1), (-9, 18), (12, 30), (5, 9)]
+    boards = default if boards is None else list(boards)
     timeline = np.array([p for p, _ in boards])
     half_turn = np.array([h for _, h in boards])
     is_head = np.array([h == half_turn[timeline == p].max() for p, h in boards])
@@ -214,6 +295,15 @@ GEOMETRIES = {
     "default": dict(),
     "four_bins_short_lines_shared": dict(disp_far_edges=(3, 4, 7, 13), disp_line_max=5, disp_register_pairs="shared"),
     "one_bin_long_lines": dict(disp_far_edges=(3,), disp_line_max=12),
+}
+
+#: The arms of B15's per-axis far tables (register B6, B15; the 2026-11-15 review) beside the
+#: default, which has them: B6's buckets moved, the tables off (B15 as built before the review),
+#: and ablation 2's layer-shared arm. The classes do not depend on them; the bias does.
+FAR_ARMS = {
+    "far_buckets_moved": dict(disp_far_time_exact=2, disp_far_time_max=16, disp_far_timeline_exact=1, disp_far_timeline_max=8),
+    "far_axis_off": dict(disp_far_axis=False),
+    "layer_shared": dict(disp_layer_shared=True),
 }
 
 
@@ -305,16 +395,19 @@ def test_spot_checks():
 def test_the_tables_size():
     """Section 4.1: "about 1.6M parameters - ~7% of the network": 54 classes x 225 + 368 line
     entries + 162 register entries + 1 global = 12,681 per head per layer; x 8 x 16 = 1,623,168,
-    7.07% of the v1's 22,973,907. Three of each head's entries are never indexed: the (0, 0)
-    cell of the same-time far classes, whose displacements are all board-axis lines."""
+    7.07% of the v1's 22,969,139 - "before the per-axis terms", which are counted apart (19 + 8
+    per head per layer, 3,456; ``test_displacement_far.py``). Three of each head's entries are
+    never indexed: the (0, 0) cell of the same-time far classes, whose displacements are all
+    board-axis lines."""
     geom = DisplacementGeometry()
     assert (geom.n_board_classes, geom.lines_offset, geom.n_entries) == (54, 54 * 225, 12_681)
     assert geom.registers_offset - geom.lines_offset == 64 * 5 + 8 * 6
     counts = parameter_breakdown(build_model(NetConfig()))
     assert counts["attn.displacement"] == 16 * 8 * 12_681 == 1_623_168
+    assert counts["attn.displacement_far"] == 16 * 8 * (19 + 8) == 3_456
     assert abs(counts["attn.displacement"] / counts["total"] - 0.07) < 0.005
     f2 = parameter_breakdown(build_model(NetConfig.preset("L24-ff12")))
-    assert f2["attn.displacement"] == 24 * 8 * 12_681
+    assert f2["attn.displacement"] == 24 * 8 * 12_681 and f2["attn.displacement_far"] == 24 * 8 * 27
     shared = DisplacementGeometry.from_config(NetConfig(disp_register_pairs="shared"))
     assert shared.n_entries == 12_681 - 2 * 54
     # Every entry but those three is reached by some displacement and token kinds.
@@ -332,11 +425,12 @@ def test_the_tables_size():
 def test_every_pair_of_the_constructions(construction):
     """The structure's rows - every row at once, query blocks of any span over every key or
     over a key selection, and arbitrary rows - are the bias materialised from
-    ``Reference``, bit for bit, at two layers, under each placeholder setting."""
+    ``Reference`` (and, for the per-axis far terms, ``FarReference``), bit for bit, at two
+    layers, under each placeholder setting and each arm of the far tables."""
     batch = collate(CONSTRUCTIONS[construction](3))
     length = batch.n_tokens
     gen = torch.Generator().manual_seed(3)
-    for name, flags in GEOMETRIES.items():
+    for name, flags in (GEOMETRIES | FAR_ARMS).items():
         model = _model(seed=3, regs_per_board=batch.regs_per_board, global_regs=batch.global_regs, **flags)
         ctx = model.make_context(batch)
         entries = reference_entries(batch, model.cfg)
@@ -421,8 +515,9 @@ def test_score_function_equals_the_bias_materialised(construction):
 
 
 def _outputs_and_grads(attend, model, batch, qkv, w, materialised: bool):
-    """One path's output and the gradients of Q, K, V and B15's table - B15 from the structure,
-    or (``materialised``) taken out of it and passed as the hand-materialised dense bias."""
+    """One path's output and the gradients of Q, K, V and B15's tables - the main table, then the
+    two per-axis far tables - with B15 from the structure, or (``materialised``) taken out of it
+    and passed as the hand-materialised dense bias."""
     model.zero_grad(set_to_none=True)
     ctx = model.make_context(batch).for_layer(None, 0)
     if materialised:
@@ -430,7 +525,8 @@ def _outputs_and_grads(attend, model, batch, qkv, w, materialised: bool):
     leaves = [t.clone().requires_grad_(True) for t in qkv]
     out = attend(*leaves, ctx)
     (out * w).sum().backward()
-    return out.detach(), [t.grad for t in leaves] + [model.displacement.table.grad]
+    disp = model.displacement
+    return out.detach(), [t.grad for t in leaves] + [disp.table.grad, disp.far_time.grad, disp.far_timeline.grad]
 
 
 #: The CPU paths, as test_chunked.py runs them.
@@ -454,8 +550,9 @@ CPU_PATHS = {
 @pytest.mark.parametrize("construction", ["far", "small_boards_mixed", "registers_4_0", "far_variant_sizes"])
 def test_cpu_paths_equal_the_bias_materialised(construction, flags):
     """The CPU paths build B15's rows from the lookup, one query block (or key selection, or
-    set of free rows) at a time: their outputs and gradients - Q, K, V and the table - equal
-    attention with the bias materialised by hand (test_chunked.py's tolerances); two seeds."""
+    set of free rows) at a time: their outputs and gradients - Q, K, V, the table and the two
+    per-axis far tables (every construction here holds boards far apart) - equal attention with
+    the bias materialised by hand (test_chunked.py's tolerances); two seeds."""
     for seed in (0, 1):
         batch = collate(CONSTRUCTIONS[construction](20 + seed))
         model = _model(seed=seed, layers=1, regs_per_board=batch.regs_per_board, global_regs=batch.global_regs, disp_init_std=1.0, **flags)
@@ -473,7 +570,7 @@ def test_cpu_paths_equal_the_bias_materialised(construction, flags):
             for i, (ga, gb) in enumerate(zip(grads_r, grads, strict=True)):
                 tol = 1e-4 + 1e-5 * float(ga.abs().max())
                 assert torch.allclose(ga, gb, atol=tol, rtol=0.0), (name, i, float((ga - gb).abs().max()))
-            assert grads[-1].abs().sum() > 0, "the table receives gradient"
+            assert all(g.abs().sum() > 0 for g in grads[3:]), "the table and both per-axis far tables receive gradient"
 
 
 @pytest.mark.parametrize(
@@ -613,36 +710,47 @@ def test_the_cached_path_reads_each_layers_table():
 
 
 def test_the_no_table_arm_is_the_network_without_the_table():
-    """``displacement_bias=False`` (ablation 2's no-table arm): no table, every other weight the
-    v1's bit for bit (B15 draws from a generator of its own), no bias in the structure under
-    B9's default - and the v1 with its table at zero computes the same function."""
+    """``displacement_bias=False`` (ablation 2's no-table arm): no table - neither the main one
+    nor the two per-axis far tables - every other weight the v1's bit for bit (B15 draws from
+    generators of its own), no bias in the structure under B9's default - and the v1 with its
+    tables at zero computes the same function."""
     on, off = _model(seed=11, layers=3).eval(), _model(seed=11, layers=3, displacement_bias=False).eval()
     p_on, p_off = dict(on.named_parameters()), dict(off.named_parameters())
-    assert set(p_on) - set(p_off) == {"displacement.table"}
+    assert set(p_on) - set(p_off) == {"displacement.table", "displacement.far_time", "displacement.far_timeline"}
     assert all(torch.equal(p, p_on[name]) for name, p in p_off.items())
     batch = collate([far_state(11), synthetic_state(12, 4)])
     st = off.make_context(batch).structure
     assert st.disp is None and not st.has_bias and not st.layer_dependent
     with torch.no_grad():
-        on.displacement.table.zero_()
+        for table in on.displacement.parameters():
+            table.zero_()
     a, b = on(batch, return_trunk=True), off(batch, return_trunk=True)
     assert torch.allclose(a.trunk, b.trunk, atol=1e-6) and torch.allclose(a.value_logits, b.value_logits, atol=1e-6)
     assert counts_differ_by_the_table(on, off)
 
 
 def counts_differ_by_the_table(on, off) -> bool:
+    """The no-table arm lacks exactly B15's parameters: the main table and the per-axis far tables,
+    each under its own key of the breakdown."""
     a, b = parameter_breakdown(on), parameter_breakdown(off)
-    return a["total"] - b["total"] == a["attn.displacement"] == on.displacement.table.numel() and b["attn.displacement"] == 0
+    disp = on.displacement
+    main, far = disp.table.numel(), disp.far_time.numel() + disp.far_timeline.numel()
+    counted = (a["attn.displacement"], a["attn.displacement_far"]) == (main, far)
+    return counted and a["total"] - b["total"] == main + far and b["attn.displacement"] == b["attn.displacement_far"] == 0
 
 
 def test_no_flag_changes_the_table():
     """B15's table is drawn from its own generator, after everything else: the flags of other
-    items never change it, and the seed does."""
+    items never change it, and the seed does. Nor do B15's own later arms: the per-axis far
+    tables (the 2026-11-15 review) draw from a second generator, so the table is the one drawn
+    before they existed (``disp_far_axis=False``)."""
     base = _model(seed=13, layers=1).displacement.table
     for flags in (
         dict(typed_edge_bias=True, board_pair_smolgen=True, routing_table=True),
         dict(norm_placement="post"),
         dict(qkv_bias=True),
+        dict(disp_far_axis=False),
+        dict(disp_far_time_max=16, disp_far_timeline_exact=1),
     ):
         assert torch.equal(_model(seed=13, layers=1, **flags).displacement.table, base), flags
     assert not torch.equal(_model(seed=14, layers=1).displacement.table, base)
