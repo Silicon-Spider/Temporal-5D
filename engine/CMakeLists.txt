@@ -317,6 +317,23 @@ endif()
 # Stage E6a: t5d-play, the engine against itself, printing the game's 5dpgn
 # record; test_play_exe.cpp runs it and replays the record with t5d-gate.
 target_sources(t5d_tools PRIVATE tools/play_record.cpp)
+# Register H41's cross-checks (§15.4): the search's solver read back and held
+# to df-pn (the tests, t5d-solver-check), its proof lines as records.
+target_sources(t5d_tools PRIVATE tools/solver_proofs.cpp)
+add_executable(t5d-solver-check tools/t5d_solver_check.cpp)
+target_link_libraries(t5d-solver-check PRIVATE t5d_tools)
+if(MINGW)
+  target_link_options(t5d-solver-check PRIVATE -static)
+endif()
+add_executable(t5d-proof-records tools/t5d_proof_records.cpp)
+target_link_libraries(t5d-proof-records PRIVATE t5d_tools)
+if(MINGW)
+  target_link_options(t5d-proof-records PRIVATE -static)
+endif()
+target_sources(t5d-tests PRIVATE tests/test_proof_tools.cpp)
+add_dependencies(t5d-tests t5d-solver-check t5d-proof-records)
+target_compile_definitions(t5d-tests PRIVATE "T5D_SOLVER_CHECK_EXE=\"$<TARGET_FILE:t5d-solver-check>\""
+  "T5D_PROOF_RECORDS_EXE=\"$<TARGET_FILE:t5d-proof-records>\"")
 add_executable(t5d-play tools/t5d_play.cpp)
 target_link_libraries(t5d-play PRIVATE t5d_tools)
 add_dependencies(t5d-tests t5d-play)
@@ -351,6 +368,17 @@ target_link_libraries(t5d-tree-count PRIVATE t5d_tools)
 if(MINGW)
   target_link_options(t5d-tree-count PRIVATE -static)
 endif()
+
+# Build-log issue 406: what exact move legality costs, position by position
+# (engine/testdata/legality-cost), and the deadlines that reach it.
+add_executable(t5d-legality-cost tools/t5d_legality_cost.cpp)
+target_link_libraries(t5d-legality-cost PRIVATE t5d_tools)
+if(MINGW)
+  target_link_options(t5d-legality-cost PRIVATE -static)
+endif()
+target_sources(t5d-tests PRIVATE tests/test_legality_cost.cpp)
+add_dependencies(t5d-tests t5d-legality-cost)
+target_compile_definitions(t5d-tests PRIVATE "T5D_LEGALITY_COST_EXE=\"$<TARGET_FILE:t5d-legality-cost>\"")
 
 # ---- MinGW: no dependence on the toolchain's runtime DLLs --------------------------
 #

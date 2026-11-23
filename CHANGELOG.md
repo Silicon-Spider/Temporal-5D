@@ -10,6 +10,662 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-23 - Build log: the current state at the engine lane's merge
+
+`docs/BUILD_LOG.md`: `lane/engine`'s line under "Now" says what merged and what comes next (decision 13,
+handed over from the review's code round), and the Lazy SMP log gains the merge battery's row.
+
+Spec: no part of the spec describes the build log's bookkeeping.
+
+### 2026-11-23 - main 4e9267e merged into `lane/engine`; the flat form's re-listing under the pull's rollback (issue 412)
+
+Main's 23 commits since af0c19b (issue 535's exception safety for the search, the spec review
+of 2026-11-15, the review's code round, the cited commit ids after the history rewrite of
+2026-11-16, CI fixes) merged into `lane/engine`. Conflicts in `CHANGELOG.md`,
+`docs/BUILD_LOG.md` and `engine/README.md` only, kept from both sides (the build log's session
+entry says how). One change met another without a conflict: issue 535 made `pull_turns`
+strongly exception-safe, and this lane's M1 (issue 410) had given it a branch - listing again
+a flat node whose fallback listing the deadline cut - that ran ahead of the rollback, so a
+`std::bad_alloc` there left the node's turn tables part-built, or the node with no turn and no
+longer to be listed, stuck for good. Fixed in the merge (`engine/src/mcts.cpp`;
+`engine/README.md`'s paragraph on the deadline): the re-listing runs inside the rollback, its
+flag restored with the rest, no generator counted dropped. Test
+`mcts_fault_a_failed_relisting_leaves_the_root_to_be_listed`
+(`engine/tests/test_mcts_faults.cpp`). On the merge unfixed the test fails: of the gather's
+929 allocations, the 557 failed in turn gave 468 wrong outcomes (a root stuck, or never listed
+again) and 18 invariant failures (the root's memory count stale); with the fix none (the same
+557 faults, 476 of them leaving the root unlisted, each listed by the later playout; 18 s).
+Checks on the merged tree, the fix in: engine 773 of 773 (`--werror`; 22 minutes, other lanes'
+jobs loading the machine to 99% for part of it); ruff clean (check; format, 134 files); pytest
+test_decision_log.py, test_netplay.py and test_search_api.py, 159 passed
+(T5D_REQUIRE_ENGINE=1); verify ok; gate commit ok (SMOKE TEST - PASSED, baseline 41 compared,
+0 declined; proof channel DISABLED). No truth source changed (main changed none since af0c19b,
+and `mcts.cpp` is not one) and nothing here touches the scanner, so neither the nightly gate
+nor the Lazy SMP test is owed.
+
+Spec: none - no part of the spec describes exception safety (issue 535's entry) or the
+deadline's re-listing (issue 410; §8.6 and register E7 unchanged); register D2's flat form is
+unchanged in what it says. The merge brings main's spec and register as main has them. No
+truth source changed (`T5D_TRUTH_SOURCES`; `mcts.cpp` is not one, and main changed none since
+af0c19b), so the nightly gate run on e79ea70 stands for this tree's code signature.
+
+### 2026-11-23 - The review of 0e7d2ed..d86f363, verified: the survivors re-run, the probes re-run, the round's final checks
+
+The review round (build-log issue 410) closed with its verification, recorded in
+`docs/BUILD_LOG.md` (issue 410, the session log), and one test added for M09,
+`search_deadline_does_not_reach_a_re_root` (`engine/tests/test_mcts.cpp`; `engine/README.md`'s
+list of the deadline's tests). The probes behind the findings, re-run on the final tree
+(e79ea70; the reviewers' sources compiled against it, 2026-11-23): H1 - vf_search after,
+before2, single, repeat, dup, dup8 and ctrl: 0 of 429 searches threw in each (before the fix
+137, 95, 8, 87, 51, 1 and 0); vf_play 0 of 520 games with the ladder off and 0 of 156 with it
+on (15 and 11 before); 120 `t5d-play --max-seconds` runs, every one exit 0 with its record (6
+exited 1 before). H2 - at P0 the literal-class prover answers unknown at depth 3 and stores
+nothing at R'' (win 3 proven and loss 2 stored before); at R the checker decides neither the
+false Loss(2) nor the true Draw (an agreement and a spurious contradiction before); at
+mutation-F7's position the literal prover answers unknown. M1 - f2probe P2: the cut root stops
+Deadline, not stuck, and a later run lists 51 turns, after which choose() works (stuck,
+Finished for good, both choices throwing before); P3, P5 and P6: every play_game ends
+time_limit (threw before). M2 - probe_f3: Search::run and play_game at 9.25e9 s, 1e10 s and
+infinity give the same as no limit (every classification cut before); the Python probe the
+same; its conversion and wrap sections reproduce the old arithmetic in their own code, which
+the engine no longer runs. (H2 is issue 411, its own commit.) The survivors re-run with the
+reviewers' runner against a fresh copy of the final tree (two test workers; re-anchored where
+the fixes moved their code - M02, M11, S06, S08): KILLED - L03
+(legality_cost_exe_reports_each_fixture, legality_deadline_cuts_one_long_search,
+ply_lazy_verification_deadline), L04 and L05
+(legality_deadline_with_time_to_spare_settles_everything, search_far_deadline_changes_nothing,
+play_fallback_after_a_cut_verification_plays_a_child_known_legal), M02, M04 and M05
+(search_turn_start_checks_take_the_deadline; M02 and M05 also
+flat_root_emptied_by_a_cut_listing_is_listed_by_a_later_run), M06
+(tree_form_inherited_expansions_take_the_deadline), M07
+(search_deadline_cuts_the_roots_classification, search_cache_keeps_a_cut_candidate_list_apart,
+play_flat_with_exact_legality_ends_on_its_stop), M08 (ply_lazy_verification_deadline,
+tree_form_inherited_expansions_take_the_deadline), M09
+(search_deadline_does_not_reach_a_re_root - added at the re-run: the adopted test no longer
+killed it, since run() sets its deadline at its start, but a re-root between runs builds a
+node and its turn-start check outside run()), M11
+(deadline_from_1e9_seconds_or_infinite_is_none, search_far_deadline_changes_nothing,
+play_totals_count_a_timed_out_decision, play_deadline_reaches_a_turn_start_verdict), S04
+(play_no_move_is_played_after_the_deadline), S05 and S06
+(play_no_child_known_legal_at_the_deadline_ends_time_limit,
+play_no_move_is_played_after_the_deadline, play_totals_count_a_timed_out_decision), S08
+(play_late_verdict_gets_the_time_left), K05 (both default MT-01 tests' inner-claim caps), C01
+and C14 (mcts_solver_derives_the_least_win_after_verify), T02, T03, T04, T07 and T08
+(legality_cost_exe_reports_each_fixture). Not killed, optional in the findings: S02 (a memory
+stop after the deadline within one 64-node window - the review accepted it as not reliably
+constructible) and S09 (Guard's re-search timing out - guard_final with the proof channel on,
+experiments only; not written). Final checks on e79ea70 and this commit: engine 736 of 736
+(`--werror`, the M09 test included); long_detectors 2 of 2 (7 minutes); the long MT-01 twin
+(52.8 minutes) and the long churn twin (18 minutes), run on the same engine code; the Lazy SMP
+test x3 (1 thread 293 / 293 / 293, 5 threads 318 / 317 / 318, load 26% then 18%); ruff clean
+(check, format); pytest test_decision_log.py, test_netplay.py and test_search_api.py, 143
+passed (T5D_REQUIRE_ENGINE=1, the executables beside the library); verify ok; gate commit ok;
+gate nightly ok (oracle layer ok; engine differential PASSED, Half Reflected and Reversed
+Royalty gated as before; proof channel DISABLED; 15 minutes) - the nightly owed for issue
+406's and issue 411's truth sources, run on the lane's final tree.
+
+Spec: none - the round's edits 304 and 305 stand as proposed; the proof channel stays off (H41).
+
+### 2026-11-23 - The review of 0e7d2ed..d86f363, the rest: the truth sources recorded, C01 and C14 killed, "beyond" an overflow only, the long MT-01 twin floored, the solver check's per-rule counts shown (M5, L1, L3, L4, L8)
+
+The review's remaining findings (build-log issue 410), fixed as the main loop decided - resumed
+after the account's weekly limit stopped the round on 2026-11-09 (the history rewrite of
+2026-11-16 renumbered every commit; the review's range is 65c14a4..e8cbfa3 in the new ids):
+
+- **M5 - the record.** The build log said issue 406 touched no truth source. legal.hpp,
+  legal.cpp, prover.hpp, prover.cpp - and with issue 411 certificate.cpp - are truth sources
+  (`T5D_TRUTH_SOURCES`): the code signature moved with issue 406, the MT review fixes and issue
+  411, and the nightly gate is owed before the lane merges into main (run on its final tree).
+  `engine/README.md`'s count of the truth's changes since M17 brought up to six.
+- **L1 - C01 and C14 are not equivalent.** `Search::verify` clears an edge's unknown flag
+  without re-deriving its parent, and MCGS with an unknown edge can solve a shared child through
+  another parent: a solved Win node can hold winners at two distances.
+  `mcts_solver_derives_the_least_win_after_verify` (the review's position, its four unknown mates
+  in one verified) holds the derivation's least (win 1, where C01 said win 3) and the winning
+  edge's line as long as its claim (C14's led to a Win(3)); `win_spread` held at 0 in the two
+  default MT-01 tests (their workloads meet neither route); the equivalence claims relabelled
+  (the MT review-fixes entry below, `engine/README.md`, issue 409, the session log).
+- **L3 - "beyond" is the game tree's overflow alone.** `check_store` counted every Unknown as
+  beyond its budget, so a false Win or Loss distance whose refutation the tree saw whole could
+  never fail; now an Unknown without overflow fails. The bounds from the measured counts with a
+  stated margin: the default churn 1% (28 of 4,290), the churn-effect workload 9% (28 of 466),
+  the long twin 18% (1,532 of 10,464, re-run). Hunt's message counts the confirmed certificates apart (42 of 42); issue 402
+  scoped to what the test holds (a sample of each store).
+- **L4 - the long MT-01 twin floored.** M5's floors per rule, on distinct df-pn searches and
+  on inner claims, and an unknown ceiling, at about 70% of its baseline; the default tests'
+  inner claims capped at 1.3x (terminal turn starts are not inner claims - the review's K05).
+  Run once (52.8 minutes, 2026-11-23): 29,128 decided, 839 unknown, 7,980 searched, 24,460
+  inner claims; per rule 24,123 / 1,457 / 3,540 / 4 / 4 - every floor held (the baseline's
+  29,219 decided and 748 unknown predate issue 411).
+- **L8 - t5d-solver-check's per-rule counts shown.** Its RANGE lines print the merged tally's
+  per-rule counts and inner claims (`rules_summary`), and
+  `solver_check_exe_finds_no_contradiction_on_records_of_random_play` holds them to sum to the
+  decided and unknown totals (the merge was dead code - the review's K02).
+- `engine/tests/test_mcts.cpp`, `test_prover.cpp`, `test_hunt.cpp`, `test_proof_tools.cpp`,
+  `engine/tools/t5d_solver_check.cpp`; `engine/README.md`; `docs/BUILD_LOG.md` (issues 402, 409,
+  410; the issue-406 session entry corrected; the session log).
+- Checks: engine 735 of 735 (`--werror`); the long twins once -
+  `long_mcts_solver_agrees_with_df_pn` (L4's floors, 52.8 minutes) and
+  `long_prover_proofs_survive_tt_churn_h19` (L3's bound, 18 minutes), each passed; verify ok
+  (exit 0); gate commit ok (engine differential smoke test passed, baseline 41 compared, 0
+  declined; proof channel DISABLED). Tests and a tool only: the Lazy SMP test and the nightly
+  gate run on the round's final tree.
+
+Spec: §15.4 and register H41 (the solver's cross-check) and §13.1 6f, register H19 (the export
+invariant's checks) - nothing proposed: the tests now hold what edits 300 and 301 say. M5 bears
+on the build's own rule (the nightly when a truth source changes), no spec text. The proof
+channel stays off (H41).
+
+### 2026-11-09 - The review of 0e7d2ed..d86f363, the deadline's tests: each place the deadline reaches held where the call would run long (M3, M4, L6)
+
+The review (build-log issue 410) found the deadline's places barely tested: the search test's
+root classified in 240 nodes, so its deadline never met a costly classification; the play test
+allowed 20 s for a 1 s stop and verified no chosen move (the flat form never does); the legality
+test could not see one search overrun; `t5d-legality-cost`'s outputs behind MEASUREMENTS' rows
+went unchecked. Adopted and added, as the main loop decided - each wall-clock bound at least 5x
+the time measured unmutated and below the mutant's, both numbers in the test:
+
+- **M3** (`engine/tests/test_legality_cost.cpp`, adopted from the review):
+  `search_deadline_cuts_the_roots_classification` (the 18-board node's exact root, 0.5 s:
+  under 8 s - 0.8 s measured, 16 s untimed), `legality_deadline_cuts_one_long_search` (the
+  192-board move's 600-second search, Unknown at 0.5 s), `legality_deadline_with_time_to_spare_
+  settles_everything`, `search_turn_start_checks_take_the_deadline` (3.8 s against 30; over 180
+  s untimed), `ply_lazy_verification_deadline` (2.0 s against 30), `search_far_deadline_changes_
+  nothing` (16 playouts, 100,000-node verifications: the review's 40 and 400,000 took 31 s),
+  `tree_form_inherited_expansions_take_the_deadline` (re-set after H1's fix so that the deadline
+  falls among inherited expansions: 1.25 s against 7; 9.5 s untimed); `test_mcts.cpp`:
+  `search_deadline_does_not_outlive_its_run`. The flat play test's bound 10 s (1.0 s measured;
+  19.8 s with the leaves untimed).
+- **M4**: `play_no_child_known_legal_at_the_deadline_ends_time_limit`,
+  `play_no_move_is_played_after_the_deadline` (1.0 s against 1.3; 1.47 s with the verification
+  untimed) and `play_late_verdict_gets_the_time_left` (6.01 s against 6.2; 7.31 s with each
+  verdict given max_seconds), adopted and re-set for the play loop that chooses nothing after
+  the deadline: an evaluator steers the choice onto a move whose exact proof takes some 0.8 s and
+  sleeps through the search's first batch, so the verification begins before the deadline and is
+  cut; `play_fallback_after_a_cut_verification_plays_a_child_known_legal` (lazy verifications on:
+  the most visited child known legal played instead, at three stops - 3 of 3 here); the flat play
+  test renamed `play_flat_with_exact_legality_ends_on_its_stop` (it verifies no chosen move).
+- **L6** (`engine/tools/t5d_legality_cost.cpp`, `legality_cost_exe_reports_each_fixture`): the
+  search line prints what the search applied - its legality, the lazy verifications' budget, the
+  deadline - not the options asked for; asserted: the root settles at the first budget and stops
+  ("...: 2000" then a line end, CR stripped), tiers 0-2 count what they settled (q3-root: 15),
+  `--mate --time-limit` reaches E4 (the 191-board fixture: Unknown, 0.2 s - the tool now runs
+  every fixture), a flat search with `--search-legality exact --search-seconds 0.5` stops by its
+  deadline.
+- Docs: `engine/README.md` (Stage E5a's tests, said as they assert); the issue-406 entry below (a
+  correction note); `docs/BUILD_LOG.md` (issue 410, the session log).
+- Checks: engine 734 of 734 (`--werror`, 19.6 minutes - re-run in full on 2026-11-23, the
+  2026-11-09 run cut off by the account's limit); verify ok (exit 0); gate commit ok (engine
+  differential smoke test passed, baseline 41 compared, 0 declined; proof channel DISABLED).
+  No Lazy SMP run: no search or prover code changed.
+
+Spec: no spec text describes these tests; they hold issue 406's deadline (§8.6 and register E7
+bear on it, unchanged - L7) and MEASUREMENTS' rows. The proof channel stays off (H41).
+
+### 2026-11-09 - The review of 0e7d2ed..d86f363, H2: under Q3 no verdict from E4's listing of action keys - the prover, check_certificate, loss_confirmed and MT-01's checker
+
+Under Q3's play activation two orders of one set of moves can reach two states under one action
+key, and E4's listing keeps one. The review of 2026-11-09 (H2; build-log issue 411, crediting
+A-H1, issue 169, for the search's half) found the verification layer taking it for every
+successor: at its position P0 a literal-class prover proved a false Win(3), stored a false
+Loss(2) at R'' and `check_certificate` CONFIRMED the Win(3); at probe J df-pn disproved a true
+mate in one and exported the disproof; MT-03's `loss_confirmed` and MT-01's checker trusted the
+listing too. Fixed in this lane, truth sources included, as the main loop decided - soundness
+first, by the route the search already takes:
+
+- **The prover** (`engine/src/prover.cpp`, `list_children`): its listed children are not
+  complete under play activation, for the attacker and the defender alike - no proof (AND) and
+  no disproof (OR) drawn from a listing that may miss a successor. Under Q3 the prover now proves
+  only what needs no listed defender (a mate in one) and disproves no attacker turn it listed.
+- **The certificate check** (`engine/src/certificate.cpp`): under play activation a defender's
+  listing whose distinct results fall short of `count_legal_successors`, or that cannot be
+  counted within its budget, is Undecided - never a pass.
+- **MT-03's `loss_confirmed`** (`engine/tests/test_prover.cpp`): the root's successors from the
+  brute-force reference (every move order), not E4's listing.
+- **MT-01's checker** (`engine/tools/solver_proofs.cpp`): under play activation a Loss or Draw
+  node's listing short of `count_legal_successors` decides nothing (`listing_undecided`); its
+  literal-class contradiction rule kept - with the prover fixed, a contradiction there is a
+  real defect.
+- **No result changes at a default ruleset** (play activation is Q3's alone):
+  `prover_every_ruleset_proves_only_mates`'s census per ruleset (52 rows, its own seeds) differs
+  in its two Q3 rows only - 9/27/3 and 9/29/2 proven/disproven/unknown before, 5/12/22 and
+  5/13/22 after, the whole change in its totals; of the verification layer's 60 default tests
+  the 54 that do not sum over Q3 print the same figures. Not done, as decided: successors
+  (`Unit::Successors`) for full proving power under Q3.
+- Tests: `prover_under_q3_draws_no_verdict_from_a_listing_of_action_keys` (probe J at depths 1-3,
+  never disproven, nothing exported; P0 at the default TT and a 1-entry one, no Win(3), no Loss
+  at R''), `certificate_under_q3_holds_every_defence_or_is_undecided` (P0's false Win(3), its
+  certificate built by hand: Undecided; a Q3 mate in one still confirmed),
+  `loss_confirmed_takes_every_successor_under_q3` (R'' at 2 and 4, the review's mutation-F7
+  position) - `test_prover.cpp`; `mcts_df_pn_checker_under_q3_holds_the_listing_to_every_successor`
+  (A-H1's position, R's false Loss and true Draw, probe J's solved root under the ply split and
+  the flat form) - `test_mcts.cpp`.
+- Docs: edit 301 corrected to what holds; `engine/README.md` (the prover's undecomposed turns;
+  MT-03's checks and figures; MT-01's every-ruleset figures); the MT review-fixes entry below
+  (a correction note); `docs/BUILD_LOG.md` (issue 411, edit 301, the session log).
+- Checks: engine 722 of 722 (`--werror`, 17 minutes); the Lazy SMP test x3 (prover.cpp
+  changed: 1 thread 293 / 292 / 291, 5 threads 311 / 311 / 312, load 53-87%); verify ok (exit
+  0); gate commit ok (engine differential smoke test passed, baseline 41 compared, 0 declined;
+  proof channel DISABLED). The nightly gate is owed (truth sources changed) and runs at the
+  end of the round.
+
+Spec: §11.1, §11.3, §13.1 6f and register H19, H37, H41 - edit 301 corrected (under Q3 the prover
+draws no verdict from E4's listing; a certificate whose defender listing cannot be shown
+complete is undecided); no spec text describes E4's listing under Q3, which t5d/search.hpp's
+COUNTING does. prover.cpp and certificate.cpp are truth sources (engine/CMakeLists.txt): the
+code signature moves and the nightly gate is owed at the merge into main. The proof channel
+stays off (H41).
+
+### 2026-11-09 - The review of 0e7d2ed..d86f363, the deadline's path: a cut candidate list kept apart by the cache and the batch, a cut fallback listing re-listable, 1e9 s or more no deadline
+
+The review of `lane/engine` 0e7d2ed..d86f363 (2026-11-09; build-log issue 410) found the
+deadlines issue 406 sent into the rules engine's calls could crash timed searches and games.
+Fixed as the main loop decided - H1, M1, M2 and the play loop's L2, L5 and L7:
+
+- **H1 - the evaluation cache and the batch match the candidate list.** A deadline made a
+  leaf's candidate list depend on the clock (a classification it cut keeps moves an uncut one
+  proves illegal), while `EvalCache::find` and the batch's de-duplication matched on the state,
+  the moves made and the epoch alone: a cached evaluation, or a duplicate's shared request, met
+  an expansion with another number of candidates and `check_evaluation` threw "an evaluation
+  has N logits for M candidate moves" (15 of 520 timed games, 6 of 120 `t5d-play --max-seconds`
+  runs, in the review). Now `candidate_digest` (the expansion's moves in order and each one's
+  legality, 64 bits, the count mixed in) is stored with every cache entry and every batch
+  request and compared - a mismatch is a miss, or a request of its own. The deadline stays in
+  the in-batch calls. `EvalCache::find`/`insert` take the digest (`t5d/mcts.hpp`).
+- **M1 - a fallback listing the deadline cut leaves its node re-listable.** A flat node whose
+  generator stopped before its first turn and whose fallback listing the deadline then cut was
+  marked stuck; a stuck root made `run()` stop Finished for good and the play loop threw "the
+  root has no visited child to choose". Now such a node is not stuck (`FlatNode::relist`): the
+  next widening outside a deadline lists it again. And the play loop ends `TimeLimit` when no
+  child has a visit and the deadline has passed, and runs no search and makes no choice after
+  the deadline (`choose_now`).
+- **M2 - one place for the deadline, and 1e9 s or more is none.** A limit of about 9.22e9 s or
+  more, +infinity included, overflowed the conversion to the clock's ticks into a deadline 292
+  years past: every classification and verification cut. Now every limit goes through
+  `deadline_after` ("THE DEADLINE" in `t5d/mcts.hpp`): none for 0 and for `kNoDeadlineSeconds`
+  (1e9) or more, NaN and negatives refused; `time_left` for every subtraction. `t5d-play
+  --max-seconds`, `t5d_search_limits.seconds` and Python's `run_limits` document it.
+- **L2 - the play loop's deadline, everywhere it applies.** Each search's `Limits::seconds` is
+  the time left, recomputed before every run - choose_now's re-run included (it got the first
+  run's); a fresh search's constructor-time root check counts in the game's totals; what the
+  deadline does not reach is documented (`selfplay.hpp`, the README): the flat generator - its
+  overshoot measured by the review at about 1.3 s past a 0.5 s stop at the 18-board Q3 node and
+  1.5-1.9 s at 155 boards - the proof channel's paths, `t5d_search_verify` and the step calls.
+  Issue 408 and edit 304 scoped to the C++ play loop.
+- **L5 - a timed-out decision's work counts.** The decision's search totals are added before
+  every timeout break, as Guard's path did.
+- **L7 - citations and `t5d-play`'s header** (below; the issue-406 entry carries a correction
+  note).
+- Tests (`engine/tests/test_legality_cost.cpp`): `search_cache_keeps_a_cut_candidate_list_apart`
+  (the premise deterministic; untimed then timed, and timed then untimed, on one cache),
+  `cache_shared_across_a_deadline` and `play_cache_across_decisions_with_a_stop` (adopted from
+  the review; the second at stops it reaches mid-game), `search_batch_keeps_a_cut_candidate_
+  list_apart` (cache off, batch 512, 144 runs), `play_with_a_stop_from_sparse_starts_and_small_
+  variants_never_throws`, `flat_play_fallback_cut_by_the_deadline` (adopted),
+  `flat_play_at_issue_406s_node_ends_time_limit_when_the_fallback_is_cut`,
+  `flat_root_emptied_by_a_cut_listing_is_listed_by_a_later_run`, `deadline_from_1e9_seconds_or_
+  infinite_is_none`, `play_from_1e9_seconds_or_infinite_plays_as_with_no_limit`,
+  `play_totals_count_a_timed_out_decision`; `test_play_exe.cpp`: `play_exe_max_seconds_ends_with_
+  its_record` (exit 0 with the record; 1e10 the same record as none); `test_capi_search.cpp`
+  (NaN refused, 1e10 and infinity the same search as 0); `test_mcts.cpp` (another candidate list
+  is a miss, stored beside the first). The comment that "a later run without one is exact again"
+  made accurate.
+- `engine/include/t5d/mcts.hpp`, `engine/src/mcts.cpp`, `engine/include/t5d/selfplay.hpp`,
+  `engine/src/selfplay.cpp`, `engine/include/t5d/capi_search.h`, `engine/tools/t5d_play.cpp`,
+  `python/t5d/engine/search.py` (docstrings); the tests above and `test_ladder.cpp`'s cache
+  lookups; `engine/README.md` (Stage E5a's deadlines, Stage E6a's cache and `run`, `t5d-play`);
+  `docs/BUILD_LOG.md` (issue 410; issue 408 scoped; edits 304, 305; the session log).
+- Checks: engine 718 of 718 (`--werror`, 17 minutes); the Lazy SMP test x3 (mcts.cpp changed:
+  1 thread 293 / 293 / 293, 5 threads 316 / 314 / 315, load 12-14%); ruff clean on the Python
+  docstrings (check, format); verify ok (exit 0); gate commit ok (engine differential smoke
+  test passed, baseline 41 compared, 0 declined; proof channel DISABLED). The long twins, the
+  nightly gate and the engine-driving pytest files run at the end of the round, as the main
+  loop's checks list them.
+
+Spec: §8.5, §8.7, §15.2's purity row and register C14 - proposed edit 305 (the cache matches the
+network's whole input, the candidate list included; "one network input" made exact). §8.6 ("the
+hard bound is inviolable") and register E7 bear on the deadline, unchanged: it is a safety stop,
+not E7's tight hard bound, and the flat generator stands outside it. §13 and issue 408 - edit
+304 scoped to the C++ play loop. H37 unchanged: what a deadline stops is Unknown, never a
+verdict. The proof channel stays off (H41).
+
+### 2026-11-02 - MT-01/02/03 review fixes: the checker held to seeded faults, MT-03's export checks made strict, churn that carries weight, the derivation exercised, coverage floors, each line as long as its claim
+
+The mutation review of MT-01/02/03 (2026-11-01; 47 mutants and 3 combinations on a copy)
+found no bug in the engine code under test and real power, but no seeded-fault test of the
+checking code and one helper vacuous. Every finding fixed, as the main loop decided (build-log
+issue 409):
+
+- **H1** - `mcts_df_pn_checker_flags_each_false_claim`: the checker fed one false claim per
+  rule (a Win(k) df-pn disproves; a df-pn proof at a node called Loss or Draw; a Loss whose
+  successor escapes the opponent's mate; a Draw after every action of which the opponent mates)
+  - each a contradiction - and three true claims, none; `mcts_df_pn_checker_memo_keys_on_depth`.
+- **H2** - MT-03's helpers made strict (`engine/tests/test_prover.cpp`): a disproven root's
+  disproof must be in the disproof store at the search's class and depth, or its stored game
+  fact checked - a Loss the game tree confirms after each of E4's listed actions (successor by
+  successor: the long twin met two wide roots, under Q6 and Q17, that one tree over the root
+  could not decide), a stalemate by E4's verdict (any entry but a Win used to stand in); a
+  stored Draw must be E4's stalemate (it was judged by the game tree at depth 0, which answers
+  Unknown wherever a legal action exists - so a false Draw counted "beyond"); "beyond" bounded
+  (1% here; 20% in the long twin, 1,526 of 10,478 measured; 10% in the new workload). (Review
+  correction, 2026-11-09: under Q3's play activation E4's listing keeps one state per action
+  key, so "after each of E4's listed actions" could miss the escape - a false Loss(2) passed;
+  the helper now takes every successor from the brute-force reference, H2, issue 411. And
+  "beyond" counted every Unknown, so it could not fail a false Win or Loss distance whose
+  refutation the game tree saw whole - now the tree's overflow alone, L3.)
+- **M3** - the TT's structural half stated and tested: `EstimateTT` refuses a proven or
+  disproven entry (behaviour-preserving: the prover never offered one) and
+  `t5d::detail::estimate_tt_read_back` (`t5d/prover.hpp`, tests only) lets
+  `prover_tt_keeps_estimates_never_facts` read it; workloads where churn carries weight:
+  `prover_churn_takes_effect_where_the_tt_carries_weight` (depth 5, three-turn games: the
+  1-entry TT's expansions differ at 63 of 248 roots, statuses never; exports and stores
+  checked) and `hunt_churn_takes_effect_where_the_tt_carries_weight` (13 of 54).
+- **M4** - seven constructed positions (`engine/tests/test_solver_refs.hpp`): four losses whose
+  defences lose at different speeds (two Loss(4), two Loss(6)) and three draws, found by a
+  seeded random search over 4x4 set-ups with the search's solver, each claim the same under
+  five arms and both Q4 readings and held by df-pn; all fourteen roots now solved and held to
+  their claims; 50 solved losses with children at more than one distance (0 before).
+- **M5** - `DfpnTally` counts each rule's decided and undecided comparisons and the claims
+  inside the proofs (`rules_summary`); both MT-01 tests floor them and the distinct df-pn
+  searches, and ceil the undecided (from the baseline, with margin).
+- **M6** - every proof record's line as long as its claim ("win k": k actions after
+  `ProofRoot`'s).
+- **L1** - every proof re-asked two half-turns shallower gives no proof beyond that depth (424).
+- **L2** - `mcts_verify_prunes_a_root_edge_whose_child_was_searched`: Search::verify pruning a
+  root edge whose child was searched (verify_unknown off) is not a defect - the edge keeps the
+  statistics already backed up through it, every reader skips it.
+- **L3** - `t5d-proof-records` reports a root whose search or claims fail (ERROR, status 3) and
+  goes on, `FILES.tsv` written; `--ladder` (a diagnostic: E10's ladder on, synchronous)
+  exercises it in the test.
+- **The survivors re-run against the fixed tree** (the reviewer's runner; C03-C06 re-anchored,
+  C14 and P09 built without `-Werror`): KILLED - C02, C03, C04, C05, C06, C13, P05, P07, P09,
+  H02; EQUIVALENT - C01 and C14 (no solved Win node holds more than one winning child: none in
+  5,819 searches - the default tests' 1,769 and the long twin's 4,050 - MCGS arms included)
+  and C07 (the memo's slot key already hashes the depth). (Review correction, 2026-11-09, L1:
+  C01 and C14 are survivors of the suite's workloads, not equivalents - Search::verify and
+  MCGS with an unknown edge can leave a solved Win node with winners at two distances; a
+  verify-route test kills both since. C07 stands.)
+- Docs corrected - edit 301, the H19 and H17 rows, `engine/README.md` (step 2), and the
+  MT entries below ("Review correction" notes where their claims change).
+- Linux: `DfpnChecker::ask`'s memo key multiplied by an unsigned long long literal beside a
+  `std::uint64_t` cast from the signed depth - the pattern Linux g++ 13/14 report under
+  `-Wsign-conversion` (main's b5ab406, 2cb107d) - now a `std::uint64_t{...}` literal, its value
+  unchanged; the new test's key the same form.
+- `engine/include/t5d/prover.hpp`, `engine/src/prover.cpp`, `engine/tools/solver_proofs.{hpp,cpp}`,
+  `engine/tools/t5d_proof_records.cpp`, `engine/tests/test_mcts.cpp`, `test_solver_refs.hpp`,
+  `test_prover.cpp`, `test_hunt.cpp`, `test_proof_tools.cpp`; `engine/README.md`;
+  `docs/BUILD_LOG.md` (issue 409; H17, H19; edit 301; the Lazy SMP log; the session log).
+- Checks: engine 701 of 701 (`--werror`, the final tree); the long twins touched, once -
+  `long_prover_proofs_survive_tt_churn_h19`, `long_prover_threads_survive_tt_churn`,
+  `long_mcts_solver_agrees_with_df_pn` - 3 of 3 in 79 minutes; the Lazy SMP test x3
+  (prover.cpp changed: 1 thread 292 / 291 / 289, 5 threads 301 / 299 / 304, load 100%); verify
+  ok; gate commit ok (engine differential smoke test passed, proof channel DISABLED); no
+  pytest - nothing Python-visible changed (no C API change).
+
+Spec: §13.1 6f, §11.3 and register H19, H17 - edit 301 corrected (the structural half by
+construction and test; churn that carries weight; the fact behind a disproof checked);
+§15.4, §11.1 and register H41 - edits 300 and 302 unchanged (the cross-checks' terms as
+built), their tests' coverage now asserted. The proof channel stays off; no proof enters a
+store (H23, H41).
+
+### 2026-11-02 - The engine's flat-form docs brought in line with D2's flat head: the network gives every board's leave logit
+
+Since D2's flat head (main, issue 241) the network's evaluators deliver a "leave it" logit for
+every board, but the engine's documentation still read as if the network gave none (issue
+241(g), the net review's A-L5). Comments and documents only, no code:
+
+- `engine/include/t5d/capi_search.h`: the FLAT FORM paragraph, `t5d_evaluations.board_logits`
+  and `t5d_search_params.leave_share` - the network's flat head gives every board's (Python's
+  `NetworkEvaluator`, the cached path alike), so a flat search it evaluates never falls back;
+  NaN or NULL, and `leave_share`, serve an evaluator that gives none.
+- `engine/include/t5d/mcts.hpp`: the flat form's header paragraph, `SearchParams::leave_share`
+  and `Evaluation::board_logits` the same; `engine/src/mcts_evaluators.cpp`'s header (the
+  built-in evaluators give them as the network's head does, no longer "until the network's
+  per-board head exists").
+- `engine/README.md` (the flat form); `docs/BUILD_LOG.md` (issue 241(g) closed out; the session
+  log).
+
+Spec: §8.2 ("Flat form") and register D2 describe the head; nothing in them changes (edit 187,
+the head's terms, already proposed with issue 241).
+
+### 2026-11-01 - Issue 406: exact legality's cost characterised (t5d-legality-cost, four fixtures); deadlines now reach the detector
+
+Issue 406 (the search's exact move legality running for many minutes) characterised, and the
+one defect found fixed. **The defect: no deadline reached the rules engine's calls.** A
+search's `Limits::seconds` was read between batches only, and a game's
+`PlayParams::max_seconds` never reached its turn-start verdict or the exact verification of a
+chosen move - `t5d-play --max-seconds 900` on a default-rules Very Small - Open game ran 40
+minutes and was killed, inside one verdict. Now:
+
+- **`LegalityOptions::deadline`** (none by default; `t5d/legal.hpp`): each of tier 3's
+  searches is given the time left (`SearchBudget::max_time`), and none starts once it has
+  passed - the moves they would have settled are Unknown, never misclassified.
+- **The search**: `Limits::seconds` also reaches, inside a batch, the leaves' legality
+  classifications, the turn-start checks, the flat form's fallback listing and the lazy
+  verifications (c); not the flat form's turn generator (it lives across decisions; its node
+  budget bounds it). What it stops is Unknown, never a verdict - and so it stays in a tree
+  carried to the next decision.
+- **The play loop**: `max_seconds` is the deadline of each turn start's verdict (stopped:
+  `TimeLimit` at that turn start, not `Unknown`) and of a chosen move's exact verification
+  (stopped with no root child known legal: `TimeLimit`, the action under way not recorded).
+  Without a deadline - training self-play - both stay exact with no limit but memory (H37),
+  as documented (issue 408). (Review correction, 2026-11-09: the deadline also made a leaf's
+  candidate list depend on the clock while the evaluation cache and the batch matched the
+  state alone - timed searches and games threw, H1; a cut fallback listing left a flat root
+  stuck and the loop threw, M1; 9.22e9 s or more overflowed into a passed deadline, M2; a
+  choose_now re-run got a later deadline than the game's, L2 - all fixed, issue 410. It
+  reaches the C++ play loop's steps, not Python's: `t5d_search_verify` takes none.)
+- Measured after the fix: the same game with `--max-seconds 120` ends at 120.0 s
+  (`TimeLimit`, 26 actions; verifications 63 s, terminal checks 46 s, expansions 11 s).
+
+**The characterisation** (docs/MEASUREMENTS.md, "Exact move legality's cost"; issue 407):
+`t5d-legality-cost` - the classification and E4's detector under ascending budgets (and a
+`--time-limit`), and one search's time split, at a record's last position, at the position a
+`LegalityPath` header reaches inside an action, or at every K-th turn start - and four
+fixtures in `engine/testdata/legality-cost/`: issue 406's Q3 root and the costliest turn start
+below it (18 boards: 11.9 million nodes, 19 s exact, 43 moves proved illegal one exhaustive
+search each), and two positions of the default-rules game (192 boards: one move's exact
+verification past 600 s; 191 boards: E4's verdict unknown at 200 million nodes, 346 s, nearly
+every judged point unrealisable and nearly every abstract check given up). Every budget is
+honoured (1.5-3.5 µs a node throughout); what remains is algorithmic (issue 407) or a
+decision the documents have made exact (issue 408).
+
+- `engine/include/t5d/legal.hpp`, `engine/src/legal.cpp`, `engine/src/mcts.cpp`,
+  `engine/src/selfplay.cpp`, `engine/include/t5d/mcts.hpp` (`Limits::seconds`),
+  `engine/include/t5d/selfplay.hpp` (`max_seconds`), `engine/include/t5d/capi_search.h`
+  (`t5d_search_limits`); `engine/tools/t5d_legality_cost.cpp`, `engine/CMakeLists.txt`;
+  `engine/tests/test_legality_cost.cpp` (the deadline leaves moves unknown and never
+  misclassifies; issue 406's root stops at a 0.5 s search deadline; a game with exact legality
+  and a 1 s stop ends on time with legal actions; the 191-board verdict ends a game with a 2 s
+  stop in about 2 s; the tool on every fixture - review correction, 2026-11-09, M3, M4 and L6:
+  the search test's root classified in 240 nodes, so its deadline never met a costly
+  classification; the play test allowed 20 s for a 1 s stop, and its TimeLimit came from a
+  turn start's verdict - the flat form verifies no chosen move; the legality test could not
+  see one search overrun; the tool never ran the 191-board fixture and its search line printed
+  the options asked for; each now held where the call would run long, issue 410);
+  `engine/testdata/legality-cost/` (4 records);
+  `engine/README.md` (Stage E5a's cost and deadlines, Stage E6a's `run` and `t5d-play`, the
+  targets table); `docs/MEASUREMENTS.md`; `docs/BUILD_LOG.md` (issue 406 closed out, issues
+  407-408, edits 303-304, the Lazy SMP log, the session log).
+
+Spec: §13 ("Legality classification may dominate self-play in big games") and §15.3's
+legality row - edits 303-304 (exact's measured tail, M4); §8.1 and H37 (unknown moves verified
+lazily; a verdict only from an exhaustive search) - unchanged, the deadline yields Unknown;
+§15.5 ("an engine that plays legal 5D chess end to end") - issue 408 for the user. No register
+row changes. (Review correction, 2026-11-09, L7: the deadline also bears on §8.6 ("the hard
+bound is inviolable", "held tight at high N") and register E7, unchanged - it is a safety
+stop, not E7's hard bound, and the flat generator stands outside it; and, through the cache,
+on §8.5, §8.7 and C14 - edit 305, issue 410.)
+
+### 2026-11-01 - main (7483103) merged into lane/engine: the step-2 solver searches with E10's ladder off
+
+Main since 710921a (D2's flat head and the flat form's policy target, MT-04, G9's AMD attempt,
+the upstream design documents and CHECKPOINT 9's plan, E10: verification v3 wired into the
+search and H44's audit-lane tooling) merged into `lane/engine` (M23: merged, never rebased).
+Conflicts in three documents only, each resolved keeping both sides: `CHANGELOG.md` (the
+lane's entries above main's), `engine/README.md` (main's E10 section beside the lane's
+step-2 section), `docs/BUILD_LOG.md` (both sides everywhere; the register-status rows H13,
+H14, H43 and H44 main's - E10 wired them - with the lane's 6f note kept on H43 and the lane's
+H41 row; "Current state" main's).
+
+One interaction the suite caught (4 of 690 tests): E10 turns its ladder on by default, and
+with the proof channel on Hunt's mates and the settling scans' verdicts enter the tree as
+injected proofs that no solved subtree supports, so MT-01's claim derivation refused them
+("no child supports node N's bound"), and the asset map's boosts changed the searches the
+step-2 figures were taken with. MT-01's df-pn cross-check (`solver_against_dfpn`, its long
+twin), `t5d-solver-check` and `t5d-proof-records` now search with Hunt, the settling scans
+and the asset map off - the solver's own proofs are what they check (main's own solver tests
+turn Hunt and the settling scans off the same way); the tools' CONDITIONS lines say
+`ladder=off`. The proof-records test's `t5d-play` game is played with the ladder off
+(`--no-hunt --no-settling --no-assets`: the ladder's asynchronous jobs would make the game
+depend on timing) - move for move the game it was measured on: the step-2 figures reproduce
+exactly (33 records, 15 from the named variant, 20 defender turn starts; MT-01's 170 and
+3,683 comparisons).
+
+- `engine/tests/test_mcts.cpp`, `engine/tests/test_proof_tools.cpp`,
+  `engine/tools/t5d_solver_check.cpp`, `engine/tools/t5d_proof_records.cpp`; `engine/README.md`
+  (step 2: the ladder off); `docs/BUILD_LOG.md` (issue 402: E10 is now on the lane; the
+  session log).
+
+Spec: no part of the spec describes the merge itself. §15.4 and register H41 (the solver's
+cross-checks, edit 300): their searches run with E10's ladder off - a condition of the tests
+and tools below anything the spec or edit 300 states (no edit); §13.1 6f, register H19 -
+issue 402's part 5 (6f through E10's settling wrapper) is no longer blocked by E10's absence,
+not yet written.
+
+### 2026-10-23 - MT-02's engine side: the solver's proof lines as 5dpgn records (t5d-proof-records), replayed through the gate adapter
+
+H41's cross-check against the oracles' mate verdicts can reach the solver only through the
+gate (engine -> records -> harness, never back). The engine side, built:
+
+- **`proof_tree`** (`engine/tools/solver_proofs.{hpp,cpp}`): under a root the search proved
+  won, the winning action at each attacker turn (through the mid-action nodes, or the flat
+  form's whole turn) and every defence at each defender turn - distinct by successor,
+  checked against E4's exhaustive listing (the same set) - as root-to-mate lines, each
+  replayed through the state machine to E4's checkmate; any failure an error.
+- **`t5d-proof-records`** (`engine/tools/t5d_proof_records.cpp`): at the turn starts of the
+  engine's own records (constructed positions as custom set-ups, `t5d-play` games), the
+  search offline with the proof channel on and no store; one record per proof line through
+  `play_record` from the input's start (custom set-up or named variant) and its actions
+  before the root, headers `ProofLine`, `ProofRoot`, `ProofClaim`, `ProofSplit`,
+  `ProofDefences`, `ProofRules`, `ProofFrom` (a content id, never a path); `FILES.tsv` with
+  each record's SHA-256 and size. Reads nothing but its arguments; writes to `--out` only.
+- **`--legality-nodes N`** on it and on `t5d-solver-check`: the search's move legality exact
+  within a node budget (a move left unknown proves nothing) - exact legality alone took
+  minutes a search on a played game's roots (build-log issue 406).
+- **Test** (`engine/tests/test_proof_tools.cpp`,
+  `proof_records_exe_lines_replay_through_the_gate_to_their_mates`): the constructed mates
+  and a random game under all three D2 arms, a `t5d-play` game of Very Small - Open under the
+  ply split: 33 records (15 from the named variant), each in `FILES.tsv` with its size and
+  SHA-256, each replayed by `t5d-gate` to its checkmate with no earlier game end; at the 20
+  defender turn starts, the proof tree's defences are E4's distinct successors and the
+  gate's `legal_actions` E4's count. (Review correction, 2026-11-01: a line's length was never
+  compared with its claim, and a failure inside a root's search aborted the tool without
+  `FILES.tsv`; both fixed.)
+- Not done here, by the brief: adding the records to `oracles/corpus/`, `verify` and
+  re-recording the golden files (the harness side, a separate reviewed change on a quiet
+  machine); whether engine-generated lines may enter the pinned corpus is put to the user
+  (build-log issue 405).
+- `engine/README.md` ("t5d-proof-records"; the targets table); `docs/BUILD_LOG.md` (H41;
+  issues 404, 405; edit 302; the Lazy SMP timing test log).
+- Checks on the final tree (2026-10-24, a shared machine at 94-100% load): `py engine/build.py
+  --werror --test` "t5d-tests: 649 passed, 0 failed, 649 run"; the Lazy SMP timing test x3
+  (1 thread 291/292/292, 5 threads 304/302/310: pass); from `python/` `ruff check .` "All
+  checks passed!", `ruff format --check .` "100 files already formatted",
+  `T5D_REQUIRE_ENGINE=1 python -m pytest -q` "1558 passed, 1 skipped"; `py oracles/harness.py
+  verify` every check ok (17 `proof-channel-vacuous` notes, H48's, unchanged); `gate --tier
+  commit` "engine differential: SMOKE TEST - PASSED" (baseline: 41 records compared, 0
+  declined), "proof channel: DISABLED".
+
+Spec: §11.1 (the cross-check against the oracles' mate verdicts) and register H41 - proposed
+edit 302; H23, H27, H33, H48 (the corpus and the gate) - issue 405, put to the user. The
+proof channel stays off; no proof enters a store (H23, H41).
+
+### 2026-10-23 - MT-03: the proof-export invariant under TT churn (6f, H19) for the prover, its threads and Hunt
+
+§13.1's 6f asks for H19's invariant - proofs export at once, the TT never holds the sole copy
+(§11.3) - verified under TT churn for Hunt and the settling scans; only the retired scanner had
+such a test. New tests, each with a `long_` twin:
+
+- `prover_proofs_survive_tt_churn_h19` (`engine/tests/test_prover.cpp`): settling as the scans
+  run it - full df-pn over external stores, one thread, by nodes - with `tt_entries` 1 and 2
+  against the default, on the constructed mates and random play under every ruleset (both Q4
+  readings, both classes): 3,966 roots decided both ways, no difference; every proven root's
+  Win in the solved store, every disproof in the disproof store with class and depth (or the
+  root's loss or stalemate in the solved store - 7 roots, each a Loss(2) the game tree
+  confirms); 4,278 stored entries confirmed by the game tree (12 beyond its budget). (Review
+  correction, 2026-11-01: the test did not hold the disproof - any solved-store entry but a
+  Win stood in for it unchecked, and the 7 Loss(2) roots were observed, not asserted; a stored
+  Draw was judged by the game tree at depth 0, which counts it "beyond", so a false Draw could
+  not fail. Since the review fixes the fact is checked - a Loss the game tree confirms after
+  each of E4's listed actions, a stalemate by E4 - and "beyond" bounded. And the churn barely
+  moved these searches: a 1-entry TT changed the expansions at 66 of 2,034 random roots, never
+  a status; the TT keeps estimates only by construction - now tested - and workloads where
+  churn carries weight were added.) A fresh prover over the stores answers 3,966 roots with no
+  expansion; 424 proof continuations and 951 roots of shared-store sequences answered from the
+  stores alone.
+- `prover_threads_survive_tt_churn`: five threads sharing a 1-entry TT, by nodes and by the
+  clock: no false proof (74 confirmed), 36 certificates confirmed by E4 alone. (Review
+  correction, 2026-11-01: clock-budgeted - 73 and 35 to 74 and 36 between runs; every
+  certificate found is confirmed.)
+- `hunt_finds_its_mates_under_tt_churn` (`engine/tests/test_hunt.cpp`): Hunt with a 1-entry
+  TT at 1 and 5 threads finds the constructed mates at their distances, lines complete and
+  certified; driven through `hunt_prover_options` over test stores its prover exports the
+  proof and never writes a disproof; random play: 15 mates, all verified and certified; the
+  export switch still refused.
+- Long twins: 9,228 roots compared, 68 certificates at five threads, 22 Hunt mates - all
+  clean.
+- No settling wrapper is on main (E10, `lane/search`): its run follows E10's merge (build-log
+  issue 402). Hunt exposes no store: observed through `hunt_prover_options` (issue 403).
+- `engine/README.md` ("H19 under TT churn"); `docs/BUILD_LOG.md` (H19, H17, H43; issues 402,
+  403; edit 301; the Lazy SMP timing test log).
+
+Spec: §13.1 6f and §11.3 (the proof-export invariant), register H19, H17, H43 - proposed edit
+301; §11.4's settling scans - issue 402 (after E10); H43's store - issue 403. No proof enters a
+permanent store; the proof channel stays off (H23, H41).
+
+### 2026-10-23 - MT-01: the search's solver against df-pn (H41), in tests and an offline tool
+
+Register H41 has the search's solver "cross-checked against df-pn and oracle mate verdicts"
+(spec §11.1, §15.4); nothing compared it with the prover. Now:
+
+- **`engine/tools/solver_proofs.{hpp,cpp}`** (the `t5d_tools` library): `solver_claims`
+  derives each solved node's claim from the solved subtree - the search keeps bounds, not
+  distances: Win(k) the least over the children proven lost for it, Loss(k) the greatest
+  over its children (all proven lost), a submission or a whole turn adding a half-turn, a
+  mid-action child none; a solved node its children do not support throws. `DfpnChecker`
+  holds every solved turn start to df-pn in the literal class (seeds All, completion Every),
+  one thread, a node budget, its own stores: a Win(k) never disproven at k; a Loss(k)'s every
+  successor (E4's listing) never disproven at k - 1, and no df-pn proof at the node; a Draw
+  with no df-pn proof at the node and not every successor proven lost (depth 3, a
+  placeholder); every df-pn proof certified by `check_certificate` (E4 alone); Unknown
+  counted, never a verdict.
+- **Tests** (`engine/tests/test_mcts.cpp`; positions and arms in the new
+  `engine/tests/test_solver_refs.hpp`), the proof channel on in the tests only, no store:
+  `mcts_solver_agrees_with_df_pn_on_constructed_mates` (the seven constructed positions,
+  both Q4 readings, five arms: 170 comparisons decided, all agreeing; 18 df-pn proofs, all
+  certified - review correction, 2026-11-01: three of the seven roots were held to their
+  claims, no solved node had children at more than one distance, so the derivation's least
+  and greatest were never exercised, and the checker's rules had no seeded-fault test;
+  fourteen positions now, every root held, each rule fed false claims), `mcts_solver_agrees_with_df_pn_under_every_ruleset` (two-board positions under
+  both Q4 readings and sparse positions under all 27 rulesets, the ply split, the tree form
+  and the flat form: 3,662 comparisons decided, all agreeing, 21 unknown; 1,477 df-pn
+  proofs, all certified; about 75 s) and `long_mcts_solver_agrees_with_df_pn`
+  (five arms, the search's legality exact within a node budget - issue 406: 29,219
+  comparisons decided, all agreeing; 7,234 df-pn proofs, all certified; 48 minutes). No contradiction found.
+- **`t5d-solver-check`** (`engine/tools/t5d_solver_check.cpp`), the offline mode: 6b's roots
+  construction over the records given, a search per arm, the comparison per board-count
+  range; tested on records of random play the test writes (`engine/tests/
+  test_proof_tools.cpp`). Not run over 6b's 805 roots: their records are only under
+  `oracles/` (build-log issue 401, put to the main loop).
+- `engine/README.md` ("Step 2: H41's cross-checks and 6f's TT churn"; the targets table);
+  `docs/BUILD_LOG.md` (H41's row, issues 400-401, edit 300; the block 400-449 / 300-329
+  assigned by the main loop).
+
+Spec: §15.4 (the solver's cross-check against df-pn), §11.1 item 2 and register H41 -
+proposed edit 300 (the cross-check's terms as built); §11.4 (above 100 boards) - issue 401
+(the offline run over 6b's roots not made). The proof channel stays off (H23, H41).
+
 ### 2026-11-23 - CI on main after the code round: a fingerprint's tolerance fitted to a small set, and the engine job's time limit
 
 The first CI on the review's code (main 032db11) passed the oracle gate's commit tier and failed

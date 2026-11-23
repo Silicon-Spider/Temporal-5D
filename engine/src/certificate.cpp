@@ -122,6 +122,34 @@ struct Checker {
       // E4's detector said a legal action exists: its listing must hold one.
       return fail(CertificateVerdict::Refuted, "E4's listing and its detector disagree");
     }
+    // Under Q3's play activation the listing keeps one successor state per
+    // action key - two orders of one set of moves can reach two (t5d/search.hpp's
+    // COUNTING) - so it holds every defence only if its distinct results are
+    // every distinct successor (count_legal_successors, within the listing's
+    // budget); short, or uncounted: Undecided, never a pass. (Elsewhere an
+    // exhaustive listing of action keys reaches every successor, one per key.)
+    // Without it a false Win(3) was confirmed through a defender whose omitted
+    // order stalemates (the review of 2026-11-09, H2; build-log issue 411).
+    if (t.rules().play_activates) {
+      std::vector<const GameState*> distinct;
+      for (const LegalAction& a : l.actions) {
+        bool seen_before = false;
+        for (const GameState* x : distinct) {
+          if (x->zobrist() == a.result.zobrist() && same_position(*x, a.result)) {
+            seen_before = true;
+            break;
+          }
+        }
+        if (!seen_before) distinct.push_back(&a.result);
+      }
+      const ActionCount c =
+          count_legal_successors(t, distinct.size() + 1, Detector::Hypercuboid, budget(o.listing_nodes));
+      if (!c.known() || c.count != distinct.size()) {
+        return fail(CertificateVerdict::Undecided,
+                    "under Q3's play activation E4's listing of a defender's actions may miss a successor state "
+                    "(its distinct results short of count_legal_successors, or uncounted)");
+      }
+    }
     for (const LegalAction& a : l.actions) {
       ++r.defender_actions;
       const CertificateVerdict v = attacker(a.result, d - 1);

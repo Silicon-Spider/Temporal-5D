@@ -36,6 +36,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "t5d/certificate.hpp"
 #include "t5d/check.hpp"
 #include "t5d/fen.hpp"
 #include "t5d/movegen.hpp"
@@ -646,4 +647,655 @@ TEST(long_prover_threads_agree_with_the_references) {
   }
   tally.print("threads 2-8");
   CHECK(tally.proven > 4);
+}
+
+// ---- H19 under TT churn (6f; §11.3): proofs never live only in the TT ---------------------
+//
+// §13.1 6f: "verify the proof-export invariant under TT churn for Hunt and the
+// settling scans (§11.3)". The TT is a lossy cache of estimates; with 1 or 2
+// entries it keeps nothing, so every fact a search relies on must be in the
+// stores - proofs in the solved store, disproofs (class-relative) in the
+// disproof store, the moment they are found. The settling scans are full
+// df-pn (prove_only off) over external stores; their wrapper (E10's) is not
+// on main, so these tests drive the prover as it would (build-log issue 402).
+
+namespace {
+
+// E4's verdict at a position: the stalemate a Draw entry must be.
+bool stalemate_now(const GameState& s) {
+  SearchBudget b = SearchBudget::nodes(2'000'000);
+  return detect_mate(s, Detector::Hypercuboid, b).verdict == Outcome::Stalemate;
+}
+
+// Every entry of a solved store: a Win(k) mates within k and a Loss(k) is
+// mated within k by the brute-force game tree, a Draw is a stalemate now by
+// E4's verdict (at most `most` entries; the game tree's budgets are small, so
+// a Win or Loss it cannot reach - the tree overflowed - is counted "beyond",
+// not failed, and the tests bound that count). An Unknown WITHOUT overflow is
+// a refutation: the tree saw every line within the distance and found no such
+// result - a failure (the review of 2026-11-09, L3: every Unknown counted
+// "beyond", so a false Win or Loss distance whose refutation the tree explored
+// completely never failed). (MT-03's review, 2026-11-01: a Draw was judged by
+// the game tree at depth 0, which answers Unknown wherever a legal action
+// exists, so a false Draw counted "beyond", never failed.)
+struct StoreCheck {
+  int entries = 0;
+  int confirmed = 0;
+  int beyond = 0;
+};
+void check_store(const MemorySolvedStore& proofs, std::size_t most, StoreCheck& c) {
+  std::size_t n = 0;
+  for (const MemorySolvedStore::Entry& e : proofs.entries()) {
+    if (n++ >= most) break;
+    ++c.entries;
+    // A proof, never an estimate or a disproof: a Win, a Loss, or a Draw - a
+    // stalemate now (distance 0), which the prover records as a game fact.
+    if (e.proof.kind == Proof::Kind::None || (e.proof.kind == Proof::Kind::Draw && e.proof.distance != 0)) {
+      std::fprintf(stderr, "  the solved store holds %s at %s\n", to_string(e.proof).c_str(),
+                   describe_position(e.position).c_str());
+      CHECK(false);
+      continue;
+    }
+    if (e.proof.kind == Proof::Kind::Draw) {
+      if (stalemate_now(e.position)) {
+        ++c.confirmed;
+      } else {
+        std::fprintf(stderr, "  stored draw, E4 finds no stalemate at %s\n", describe_position(e.position).c_str());
+        CHECK(false);
+      }
+      continue;
+    }
+    GameTree tree(5000, 20000, 40000);
+    const GameValue v = tree.solve(e.position, e.proof.distance);
+    if (v.kind == GameValue::Kind::Unknown) {
+      if (tree.overflowed()) {
+        ++c.beyond;
+      } else {
+        std::fprintf(stderr, "  the solved store holds %s, which the game tree refutes within its distance at %s\n",
+                     to_string(e.proof).c_str(), describe_position(e.position).c_str());
+        CHECK(false);
+      }
+      continue;
+    }
+    const GameValue::Kind want = e.proof.kind == Proof::Kind::Win ? GameValue::Kind::Win : GameValue::Kind::Loss;
+    if (v.kind == want && v.distance <= e.proof.distance) {
+      ++c.confirmed;
+    } else {
+      std::fprintf(stderr, "  stored %s, the game tree %s %d at %s\n", to_string(e.proof).c_str(),
+                   t5d_test::name_of(v.kind), v.distance, describe_position(e.position).c_str());
+      CHECK(false);
+    }
+  }
+}
+
+// A stored Loss(k) of the side to move, checked: a checkmate now for k 0
+// (E4's verdict); else the side to move has legal successors - every one, by
+// the brute-force reference (every move order: under Q3's play activation E4's
+// listing keeps one state per action key and could miss the escape - the
+// review of 2026-11-09, H2) - and after each the opponent mates within k - 1
+// by the game tree, asked successor by successor with a tree of its own, so
+// that a wide root does not exhaust one tree's budget (a Q6 root of 4 boards
+// and 8 actions did, in the long twin: every successor Win(1), the whole root
+// Unknown). Too many sequences to enumerate: unconfirmed.
+bool loss_confirmed(const GameState& s, int k) {
+  if (k == 0) {
+    SearchBudget b = SearchBudget::nodes(2'000'000);
+    return detect_mate(s, Detector::Hypercuboid, b).verdict == Outcome::Checkmate;
+  }
+  if (k < 2) return false;  // the opponent needs an action of its own
+  const t5d_test::Reference ref = t5d_test::reference_actions(s, 2'000'000);
+  if (ref.overflow || ref.successors.empty()) return false;
+  for (const GameState& next : ref.successors) {
+    GameTree tree(200'000, 2'000'000, 20'000'000);
+    const GameValue v = tree.solve(next, k - 1);
+    if (v.kind != GameValue::Kind::Win || v.distance > k - 1) return false;
+  }
+  return true;
+}
+
+DisproofClass root_class(const ProverOptions& o) {
+  return DisproofClass{true, o.seeds, o.completion, disproof_shape(o)};
+}
+
+// H19 at the root after a search over external stores: a proof is in the
+// solved store, a disproof in the disproof store with its class and depth -
+// or, where the root was found lost or stalemated outright, that fact in the
+// solved store, checked: a Loss the game tree confirms after each of E4's
+// listed actions (loss_confirmed), a stalemate by E4's verdict - and never a
+// Win for a disproven root. (MT-03's review, 2026-11-01: any solved-store
+// entry other than a Win used to stand in for the disproof unchecked.)
+// `facts` counts the roots that relied on a fact.
+void exports_hold(const ProveResult& r, const GameState& s, const ProverOptions& o, const MemorySolvedStore& proofs,
+                  const DisproofStore& disproofs, int* facts = nullptr) {
+  if (r.status == ProofStatus::Proven) {
+    CHECK(r.stats.proofs_exported >= 1 || r.stats.store_hits >= 1);
+    const std::optional<Proof> p = proofs.find(s);
+    REQUIRE(p.has_value());
+    CHECK(p->kind == Proof::Kind::Win);
+    CHECK(p->distance <= r.proof.distance);
+  } else if (r.status == ProofStatus::Disproven) {
+    const std::optional<Proof> p = proofs.find(s);
+    CHECK(!p.has_value() || p->kind != Proof::Kind::Win);
+    // Either the class-relative disproof at the search's depth, or a game fact
+    // that implies it: the side to move proven lost (or stalemated) in the
+    // solved store - found when the search met the root as the defender's and
+    // read back at the root (make_turn's "the other side wins: no mate for A").
+    if (disproofs.find(s, root_class(o)) >= o.depth) return;
+    bool fact = false;
+    if (p && p->kind == Proof::Kind::Loss) {
+      fact = loss_confirmed(s, p->distance);
+    } else if (p && p->kind == Proof::Kind::Draw) {
+      fact = stalemate_now(s);
+    }
+    if (fact) {
+      if (facts != nullptr) ++*facts;
+      return;
+    }
+    std::fprintf(stderr, "  disproven, no disproof recorded and no confirmed fact; the solved store holds %s at %s\n",
+                 p ? to_string(*p).c_str() : "nothing", describe_position(s).c_str());
+    CHECK(false);
+  }
+}
+
+struct Churn {
+  Tally tally;
+  StoreCheck store;
+  int roots = 0;
+  int compared = 0;   // decided under churn and with the default TT
+  int answered = 0;   // re-asked of a fresh prover over the stores
+  int related = 0;    // a proof's continuation, answered from the stores
+  int sequences = 0;  // positions re-asked after a sequence shared the stores
+  int shallow = 0;    // proven roots re-asked two half-turns shallower
+  int facts = 0;      // disproven roots whose stored game fact stood in for the disproof
+};
+
+// One position under the TT's churn: tt_entries 1 and 2 against the default.
+void churn_position(const GameState& s, const ProverOptions& base, std::uint64_t nodes, Churn& c) {
+  MemorySolvedStore p0;
+  DisproofStore d0;
+  Prover reference(base, &p0, &d0);
+  const ProveResult r0 = reference.prove(s, ProveBudget::nodes(nodes));
+  for (const std::size_t tt : {std::size_t{1}, std::size_t{2}}) {
+    ProverOptions o = base;
+    o.tt_entries = tt;
+    MemorySolvedStore proofs;
+    DisproofStore disproofs;
+    Prover p(o, &proofs, &disproofs);
+    const ProveResult r = p.prove(s, ProveBudget::nodes(nodes));
+    ++c.roots;
+    if (!c.tally.add(r, s, o)) CHECK(false);
+    if (r.status != ProofStatus::Unknown && r0.status != ProofStatus::Unknown) {
+      ++c.compared;
+      if (r.status != r0.status) {
+        std::fprintf(stderr, "  tt %zu: %s, the default TT %s at %s\n", tt, proof_status_name(r.status),
+                     proof_status_name(r0.status), describe_position(s).c_str());
+        CHECK(false);
+      }
+    }
+    exports_hold(r, s, o, proofs, disproofs, &c.facts);
+    check_store(proofs, 6, c.store);
+    if (r.status == ProofStatus::Unknown) continue;
+    // A fresh prover over the same stores (its TT empty) answers at once.
+    Prover fresh(o, &proofs, &disproofs);
+    const ProveResult again = fresh.prove(s, ProveBudget::nodes(nodes));
+    ++c.answered;
+    CHECK(again.status == r.status);
+    CHECK(again.stats.store_hits >= 1);
+    CHECK_EQ(again.stats.expansions, std::uint64_t{0});
+    if (r.status == ProofStatus::Proven) CHECK(again.proof.distance <= r.proof.distance);
+    // A stored proof is read only where its distance fits the depth: asked
+    // again two half-turns shallower, the stores give no proof longer than
+    // that depth (MT-03's review, 2026-11-01).
+    if (r.status == ProofStatus::Proven && r.proof.distance >= 3) {
+      Prover shallow(o, &proofs, &disproofs);
+      const int depth = r.proof.distance - 2;
+      const ProveResult rs = shallow.prove(s, ProveBudget::nodes(nodes), depth);
+      ++c.shallow;
+      if (rs.status == ProofStatus::Proven && rs.proof.distance > depth) {
+        std::fprintf(stderr, "  a stored %s read at depth %d at %s\n", to_string(rs.proof).c_str(), depth,
+                     describe_position(s).c_str());
+        CHECK(false);
+      }
+    }
+    // A related root ("on PV changes"): the proof's continuation - the
+    // attacker to move again after its action and the longest defence - is
+    // answered from the stores too.
+    if (r.status == ProofStatus::Proven && r.line_complete && r.line.size() >= 3) {
+      GameState t = s;
+      bool ok = true;
+      for (std::size_t i = 0; i < 2 && ok; ++i) {
+        for (const Move& m : r.line[i]) t.apply(m);
+        ok = t.obligations_met() && royals_safe(t);
+        if (ok) t.submit();
+      }
+      REQUIRE(ok);
+      Prover next(o, &proofs, &disproofs);
+      const ProveResult rn = next.prove(t, ProveBudget::nodes(nodes), r.proof.distance - 2);
+      ++c.related;
+      CHECK(rn.status == ProofStatus::Proven);
+      CHECK(rn.stats.store_hits >= 1);
+      CHECK_EQ(rn.stats.expansions, std::uint64_t{0});
+    }
+  }
+}
+
+// A sequence of related roots - consecutive turn starts of random games -
+// sharing one pair of stores under a 1-entry TT; then every root it decided,
+// re-asked of a fresh prover, is answered from the stores alone.
+void churn_sequence(const std::vector<GameState>& positions, const ProverOptions& base, std::uint64_t nodes,
+                    Churn& c) {
+  ProverOptions o = base;
+  o.tt_entries = 1;
+  MemorySolvedStore proofs;
+  DisproofStore disproofs;
+  std::vector<std::pair<const GameState*, ProveResult>> decided;
+  for (const GameState& s : positions) {
+    Prover p(o, &proofs, &disproofs);
+    const ProveResult r = p.prove(s, ProveBudget::nodes(nodes));
+    if (!c.tally.add(r, s, o)) CHECK(false);
+    exports_hold(r, s, o, proofs, disproofs, &c.facts);
+    if (r.status != ProofStatus::Unknown) decided.emplace_back(&s, r);
+  }
+  for (const auto& [s, r] : decided) {
+    Prover fresh(o, &proofs, &disproofs);
+    const ProveResult again = fresh.prove(*s, ProveBudget::nodes(nodes));
+    ++c.sequences;
+    CHECK(again.status == r.status);
+    CHECK_EQ(again.stats.expansions, std::uint64_t{0});
+  }
+  check_store(proofs, 20, c.store);
+}
+
+void churn_property(int turns, std::uint64_t nodes, Churn& c) {
+  c.tally.work_cap = nodes;
+  ProverOptions dflt;
+  dflt.depth = 3;
+  ProverOptions lit = literal();
+  lit.depth = 1;
+  // The constructed mates, both Q4 readings, both classes, at depth 3.
+  for (const RuleOptions& rules : {guide_literal_q4(), shift_rules()}) {
+    for (const GameState& s : {mate_in_one(rules), cross_board_mate(rules), stale_checkmate_in_one(rules),
+                               history_royal_mate(rules), mate_in_two(rules)}) {
+      for (ProverOptions o : {ProverOptions{}, literal()}) {
+        o.depth = 3;
+        churn_position(s, o, 2'000'000, c);
+      }
+    }
+  }
+  // Random play under every ruleset (both Q4 readings).
+  std::uint64_t seed = 7300;
+  for (const RuleOptions& base : t5d_test::every_ruleset()) {
+    if (base.moves_after_shift != RuleOptions{}.moves_after_shift) continue;  // both below
+    for (const bool shift : {false, true}) {
+      RuleOptions rules = base;
+      rules.moves_after_shift = shift;
+      const std::vector<GameState> positions = playable(t5d_test::sparse_positions(rules, 1, turns, seed++));
+      for (const GameState& s : positions) {
+        churn_position(s, dflt, nodes, c);
+        churn_position(s, lit, nodes, c);
+      }
+      churn_sequence(positions, dflt, nodes, c);
+    }
+  }
+}
+
+void churn_print(const Churn& c) {
+  c.tally.print("TT churn");
+  std::fprintf(stderr,
+               "  %d roots under churn; %d decided both ways and compared; %d re-asked from the stores, %d "
+               "continuations and %d sequence roots answered from them, %d proofs re-asked shallower; %d "
+               "disproven roots stood for by a confirmed game fact; store entries %d (%d confirmed, %d beyond the "
+               "game tree)\n",
+               c.roots, c.compared, c.answered, c.related, c.sequences, c.shallow, c.facts, c.store.entries,
+               c.store.confirmed, c.store.beyond);
+}
+
+}  // namespace
+
+TEST(prover_proofs_survive_tt_churn_h19) {
+  Churn c;
+  churn_property(2, 10'000, c);
+  churn_print(c);
+  CHECK(c.tally.proven > 20);
+  CHECK(c.tally.disproven > 20);
+  CHECK(c.compared > 50);
+  CHECK(c.related > 2);
+  CHECK(c.sequences > 20);
+  CHECK(c.store.confirmed > 50);
+  CHECK(c.shallow > 100);
+  // At most 1% beyond the game tree's budget - its overflow alone (28 of 4,290 measured since
+  // build-log issue 411, 12 before it; a 1.5x margin).
+  CHECK(c.store.beyond * 100 <= c.store.entries);
+}
+
+TEST(long_prover_proofs_survive_tt_churn_h19) {
+  Churn c;
+  churn_property(5, 60'000, c);
+  churn_print(c);
+  CHECK(c.tally.proven > 60);
+  CHECK(c.tally.disproven > 60);
+  CHECK(c.compared > 200);
+  CHECK(c.related > 4);
+  CHECK(c.sequences > 60);
+  CHECK(c.store.confirmed > 200);
+  CHECK(c.shallow > 200);
+  // At most 18% beyond the game tree's budget - its overflow alone (1,532 of 10,464 measured on
+  // 2026-11-23, 14.6%; a 1.2x margin: deterministic, run by hand).
+  CHECK(c.store.beyond * 100 <= c.store.entries * 18);
+}
+
+TEST(prover_tt_keeps_estimates_never_facts) {
+  // H19's structural half (spec 11.3, "the TT never holds the sole copy";
+  // MT-03's review, 2026-11-01): the prover's transposition table refuses a
+  // proven (pn 0) or disproven (dn 0) entry and gives back estimates only -
+  // and the prover never offers it a solved node (export_solved puts those in
+  // the stores at once). So no fact can live only in the TT, whatever its
+  // size: the churn tests check the consequence, this the cause.
+  using t5d::detail::estimate_tt_read_back;
+  const std::uint64_t key{0x5D5D'1234'ABCD'0001};
+  CHECK(!estimate_tt_read_back(key, 0, 7).has_value());  // proven
+  CHECK(!estimate_tt_read_back(key, 7, 0).has_value());  // disproven
+  CHECK(!estimate_tt_read_back(key, 0, std::uint64_t{1} << 40).has_value());
+  CHECK(!estimate_tt_read_back(key, std::uint64_t{1} << 40, 0).has_value());
+  const auto open = estimate_tt_read_back(key, 3, 9);
+  REQUIRE(open.has_value());
+  CHECK_EQ(open->first, std::uint64_t{3});
+  CHECK_EQ(open->second, std::uint64_t{9});
+  const auto capped = estimate_tt_read_back(key, std::uint64_t{1} << 40, std::uint64_t{1} << 40);
+  REQUIRE(capped.has_value());
+  CHECK_EQ(capped->first, std::uint64_t{0x7FFFFFFF});
+  CHECK_EQ(capped->second, std::uint64_t{0x7FFFFFFF});
+}
+
+TEST(prover_churn_takes_effect_where_the_tt_carries_weight) {
+  // The churn tests above barely move the searches they churn (MT-03's
+  // review, 2026-11-01: a 1-entry TT changed the expansions at 66 of 2,034
+  // random roots and never a status). Here a workload where the default TT
+  // carries weight - three-turn games' positions, depth 5 - the 1-entry TT
+  // over external stores against the default: the searches differ, the
+  // statuses never, every export holds and the store's entries check.
+  ProverOptions dflt;
+  dflt.depth = 5;
+  ProverOptions lit = literal();
+  lit.depth = 5;
+  int roots = 0;
+  int differ = 0;
+  int hits = 0;
+  int decided = 0;
+  int facts = 0;
+  StoreCheck store;
+  std::uint64_t seed = 9100;
+  for (const RuleOptions& rules : {shift_rules(), guide_literal_q4()}) {
+    std::vector<GameState> positions{mate_in_two(rules), cross_board_mate(rules), history_royal_mate(rules)};
+    for (const GameState& s : playable(t5d_test::sparse_positions(rules, 2, 3, seed++))) positions.push_back(s);
+    for (const GameState& s : positions) {
+      for (const ProverOptions& o : {dflt, lit}) {
+        Prover reference(o);
+        const ProveResult r0 = reference.prove(s, ProveBudget::nodes(20'000));
+        ProverOptions one = o;
+        one.tt_entries = 1;
+        MemorySolvedStore proofs;
+        DisproofStore disproofs;
+        Prover churned(one, &proofs, &disproofs);
+        const ProveResult r = churned.prove(s, ProveBudget::nodes(20'000));
+        ++roots;
+        if (r0.stats.tt_hits > 0) ++hits;
+        if (r0.stats.expansions != r.stats.expansions) ++differ;
+        if (r0.status != ProofStatus::Unknown && r.status != ProofStatus::Unknown) {
+          ++decided;
+          CHECK(r.status == r0.status);
+        }
+        exports_hold(r, s, one, proofs, disproofs, &facts);
+        check_store(proofs, 6, store);
+      }
+    }
+  }
+  std::fprintf(stderr,
+               "  %d roots: the default TT hit at %d, the 1-entry TT's expansions differ at %d; %d decided both "
+               "ways, statuses equal; %d disproven roots stood for by a confirmed fact; store entries %d (%d "
+               "confirmed, %d beyond the game tree)\n",
+               roots, hits, differ, decided, facts, store.entries, store.confirmed, store.beyond);
+  CHECK(differ >= 40);
+  CHECK(decided >= 120);
+  // At most 9% beyond the game tree's budget - its overflow alone (28 of 466 measured, 6%; a 1.5x
+  // margin).
+  CHECK(store.beyond * 100 <= store.entries * 9);
+}
+
+namespace {
+
+// M13's 5 threads sharing a 1-entry TT, by nodes and by the clock: no false
+// proof (the references), every proof in the solved store, and every proof's
+// certificate confirmed by E4 alone (fresh stores per search: a proof read
+// from another prover's store could not be certified).
+void threads_churn(int turns, std::uint64_t seed, std::uint64_t nodes, Tally& tally, int& certified) {
+  std::vector<GameState> positions{mate_in_one(shift_rules()), mate_in_two(shift_rules()),
+                                   cross_board_mate(shift_rules())};
+  for (const GameState& s : playable(t5d_test::sparse_positions(shift_rules(), 1, turns, seed))) positions.push_back(s);
+  for (const ProverOptions& base : {ProverOptions{}, literal()}) {
+    ProverOptions o = base;
+    o.threads = 5;
+    o.tt_entries = 1;
+    o.depth = 3;
+    o.record_certificate = true;
+    for (const GameState& s : positions) {
+      for (const bool by_clock : {false, true}) {
+        MemorySolvedStore proofs;
+        DisproofStore disproofs;
+        Prover p(o, &proofs, &disproofs);
+        const ProveResult r = by_clock ? p.prove(s, ProveBudget::time(std::chrono::milliseconds(20)))
+                                       : p.prove(s, ProveBudget::nodes(nodes));
+        if (!tally.add(r, s, o)) CHECK(false);
+        exports_hold(r, s, o, proofs, disproofs);
+        if (r.status != ProofStatus::Proven) continue;
+        REQUIRE(r.certificate != nullptr);
+        CertificateCheckOptions co;
+        co.max_positions = 20000;
+        const CertificateCheck cc = check_certificate(*r.certificate, s, r.proof.distance, co);
+        if (cc.verdict == CertificateVerdict::Confirmed) {
+          ++certified;
+        } else if (cc.verdict != CertificateVerdict::Undecided) {
+          std::fprintf(stderr, "  certificate %s (%s) at %s\n", certificate_verdict_name(cc.verdict), cc.why.c_str(),
+                       describe_position(s).c_str());
+          CHECK(false);
+        }
+      }
+    }
+  }
+}
+
+}  // namespace
+
+TEST(prover_threads_survive_tt_churn) {
+  Tally tally;
+  tally.work_cap = 10'000;  // every proof checked; disproofs within this budget
+  int certified = 0;
+  threads_churn(2, 7400, 30'000, tally, certified);
+  tally.print("5 threads, 1-entry TT");
+  std::fprintf(stderr, "  %d certificates confirmed by E4\n", certified);
+  CHECK(tally.proven > 6);
+  CHECK(certified > 6);
+}
+
+TEST(long_prover_threads_survive_tt_churn) {
+  Tally tally;
+  tally.work_cap = 50'000;
+  int certified = 0;
+  threads_churn(4, 7500, 100'000, tally, certified);
+  tally.print("5 threads, 1-entry TT");
+  std::fprintf(stderr, "  %d certificates confirmed by E4\n", certified);
+  CHECK(tally.proven > 12);
+  CHECK(certified > 12);
+}
+
+// ---- The review of 2026-11-09, H2: Q3's listing of action keys -----------------------------
+// Under Q3's play activation two orders of one set of moves can reach two states under one
+// action key, and E4's listing keeps one: the prover's listed children, check_certificate's
+// defender listing, loss_confirmed and MT-01's checker treated it as every successor (build-log
+// issue 411; the search's half was A-H1, issue 169).
+
+namespace {
+
+RuleOptions q3_rules() {
+  RuleOptions r;
+  r.play_activates = true;
+  return r;
+}
+
+// The review's P0 (Black to move, Q3, 2x1 boards): Black's (0T1)Bb1(+1T1)a1 reaches R'' - White
+// to move with one action key whose two orders reach two states: E4's listing keeps the one
+// after which Black mates in one; the other stalemates Black at once. No mate within 3 for Black
+// at P0 by the game tree; a literal-class prover proved Win(3) and stored Loss(2) at R''.
+GameState review_p0() {
+  return game_from_fen({"[1N:0:1:w]", "[Bb:0:1:b]", "[2:-1:2:w]", "[2:-1:2:b]", "[2:-2:2:b]", "[K1:-3:2:w]",
+                        "[r1:-4:1:b]", "[2:+1:1:b]", "[1N:+1:2:w]", "[2:+1:2:b]"},
+                       BoardSize{2, 1}, Parity::Odd, q3_rules());
+}
+
+LegalAction review_bb1(const GameState& p0) {
+  for (const LegalAction& a : list_legal_actions(p0, 1000, Detector::Hypercuboid).actions) {
+    if (action_text(a.moves, p0.multiverse().even()) == "(0T1)Bb1(+1T1)a1") return a;
+  }
+  throw std::logic_error("P0: no action (0T1)Bb1(+1T1)a1");
+}
+
+// The review's probe J (21 1x1 boards; Q1 Consecutive, Q3, Q5 AllActive, Q20 off; Black to move):
+// a mate in one by the game tree whose four checkmating successors E4's listing drops - their
+// action keys listed with stalemate states.
+GameState review_probe_j() {
+  RuleOptions r;
+  r.activation = ActivationRule::Consecutive;
+  r.play_activates = true;
+  r.mandatory = MandatoryBoards::AllActive;
+  r.inactive_history_is_destination = false;
+  return game_from_fen({"[Q:-0:1:w]", "[1:-0:1:b]", "[R:-0:2:w]", "[q:-0:2:b]", "[K:+0:1:w]", "[1:+0:1:b]",
+                        "[1:+0:2:w]", "[1:+0:2:b]", "[k:+0:3:w]", "[b:+1:1:b]", "[B:+1:2:w]", "[k:+1:2:b]",
+                        "[1:+2:1:w]", "[k:+2:1:b]", "[1:+2:2:w]", "[k:+2:2:b]", "[1:+3:2:w]", "[1:+3:2:b]",
+                        "[1:+4:2:w]", "[K:+4:2:b]", "[B:+4:3:w]"},
+                       BoardSize{1, 1}, Parity::Even, r);
+}
+
+// The review's mutation-F7 position (Q3, R8, 2x1 boards, Black to move): 3 actions listed, 4
+// successors - no Loss(2) by the game tree over every successor.
+GameState review_f7() {
+  return game_from_fen({"[K1:0:1:w]", "[2:0:1:b]", "[2:0:2:w]", "[2:0:2:b]", "[k1:+1:2:w]", "[2:+1:2:b]",
+                        "[2:+1:3:w]", "[Br:+1:3:b]", "[1K:+2:1:w]", "[1r:+2:1:b]", "[K1:+3:1:w]"},
+                       BoardSize{2, 1}, Parity::Odd, q3_rules());
+}
+
+std::size_t distinct_results(const ActionList& l) {
+  std::vector<const GameState*> d;
+  for (const LegalAction& a : l.actions) {
+    if (std::none_of(d.begin(), d.end(), [&](const GameState* x) { return same_position(*x, a.result); })) {
+      d.push_back(&a.result);
+    }
+  }
+  return d.size();
+}
+
+}  // namespace
+
+TEST(prover_under_q3_draws_no_verdict_from_a_listing_of_action_keys) {
+  // The premises: at probe J E4's listing misses successors and the game tree finds a mate in
+  // one; at R'' it reaches 1 of 2.
+  const GameState j = review_probe_j();
+  const ActionList jl = list_legal_actions(j, 100'000, Detector::Hypercuboid, SearchBudget::nodes(5'000'000));
+  REQUIRE(jl.stats.exhaustive);
+  const ActionCount jc = count_legal_successors(j, SIZE_MAX, Detector::Naive);
+  std::fprintf(stderr, "  probe J: %zu actions, %zu distinct results, %zu successors\n", jl.actions.size(),
+               distinct_results(jl), jc.count);
+  REQUIRE(distinct_results(jl) < jc.count);
+  {
+    GameTree tree(200'000, 2'000'000, 20'000'000);
+    const GameValue v = tree.solve(j, 1);
+    REQUIRE(v.kind == GameValue::Kind::Win);
+  }
+  // The literal class answers "mate within depth" exactly (prover.hpp): never a disproof here -
+  // and none exported to an external disproof store (H19). Before the fix: disproven at 1, 2, 3.
+  ProverOptions lit;
+  lit.seeds = SeedClass::All;
+  lit.completion = CompletionClass::Every;
+  for (int depth = 1; depth <= 3; ++depth) {
+    ProverOptions o = lit;
+    o.depth = depth;
+    MemorySolvedStore proofs;
+    DisproofStore disproofs;
+    Prover prover(o, &proofs, &disproofs);
+    const ProveResult r = prover.prove(j, ProveBudget::nodes(1'000'000));
+    std::fprintf(stderr, "  probe J, literal class, depth %d: %s\n", depth, proof_status_name(r.status));
+    CHECK(r.status != ProofStatus::Disproven);
+    CHECK(disproofs.find(j, root_class(o)) < 1);
+    exports_hold(r, j, o, proofs, disproofs);
+  }
+  // P0: no Win(3), no Loss stored at R'' - at the default TT and a 1-entry one. Before the fix:
+  // Win(3), certified by check_certificate, and Loss(2) stored at R''.
+  const GameState p0 = review_p0();
+  const LegalAction bb1 = review_bb1(p0);
+  const GameState& rpp = bb1.result;
+  const ActionList rl = list_legal_actions(rpp, 1000, Detector::Hypercuboid);
+  REQUIRE_EQ(distinct_results(rl), std::size_t{1});
+  REQUIRE_EQ(count_legal_successors(rpp, SIZE_MAX, Detector::Naive).count, std::size_t{2});
+  for (const std::size_t tt : {std::size_t{0}, std::size_t{1}}) {
+    ProverOptions o = lit;
+    o.depth = 3;
+    o.record_certificate = true;
+    if (tt != 0) o.tt_entries = tt;
+    MemorySolvedStore proofs;
+    DisproofStore disproofs;
+    Prover prover(o, &proofs, &disproofs);
+    const ProveResult r = prover.prove(p0, ProveBudget::nodes(2'000'000));
+    std::fprintf(stderr, "  P0, literal class, depth 3, tt %zu: %s %s\n", tt, proof_status_name(r.status),
+                 to_string(r.proof).c_str());
+    CHECK(r.status != ProofStatus::Proven);
+    const std::optional<Proof> at = proofs.find(rpp);
+    CHECK(!at.has_value() || at->kind != Proof::Kind::Loss);
+    exports_hold(r, p0, o, proofs, disproofs);
+  }
+}
+
+TEST(certificate_under_q3_holds_every_defence_or_is_undecided) {
+  // P0's false Win(3), its certificate built by hand: Black's (0T1)Bb1(+1T1)a1, then at R'' a
+  // mating reply after each of White's listed actions. E4's listing at R'' holds 1 of its 2
+  // successors - the omitted order stalemates Black - so the certificate is Undecided. Before the
+  // fix check_certificate confirmed it.
+  const GameState p0 = review_p0();
+  const LegalAction bb1 = review_bb1(p0);
+  ProofCertificate cert;
+  cert.add(p0, bb1.moves, 3);
+  std::size_t replies = 0;
+  for (const LegalAction& w : list_legal_actions(bb1.result, 1000, Detector::Hypercuboid).actions) {
+    for (const LegalAction& b : list_legal_actions(w.result, 1000, Detector::Hypercuboid).actions) {
+      if (detect_mate(b.result, Detector::Hypercuboid, SearchBudget::nodes(2'000'000)).verdict ==
+          Outcome::Checkmate) {
+        cert.add(w.result, b.moves, 1);
+        ++replies;
+        break;
+      }
+    }
+  }
+  REQUIRE_EQ(replies, std::size_t{1});
+  const CertificateCheck c = check_certificate(cert, p0, 3);
+  std::fprintf(stderr, "  P0's certificate: %s (%s)\n", certificate_verdict_name(c.verdict), c.why.c_str());
+  CHECK(c.verdict == CertificateVerdict::Undecided);
+  // Under Q3 a certificate is still confirmed where no defender is listed: a mate in one (the
+  // defender mated at once, E4's verdict).
+  const GameState after = list_legal_actions(bb1.result, 1000, Detector::Hypercuboid).actions.front().result;
+  const CertificateStep* mate = cert.find(after);
+  REQUIRE(mate != nullptr);
+  CHECK(check_certificate(cert, after, 1).verdict == CertificateVerdict::Confirmed);
+}
+
+TEST(loss_confirmed_takes_every_successor_under_q3) {
+  // R'' and the review's mutation-F7 position: a Loss the listing's successors suggest and the
+  // game tree over every successor refutes. Before the fix loss_confirmed took E4's listing and
+  // confirmed both.
+  const GameState p0 = review_p0();
+  const GameState rpp = review_bb1(p0).result;
+  CHECK(!loss_confirmed(rpp, 2));
+  CHECK(!loss_confirmed(rpp, 4));
+  const GameState f7 = review_f7();
+  const ActionList fl = list_legal_actions(f7, 1000, Detector::Hypercuboid);
+  std::fprintf(stderr, "  mutation-F7: %zu actions listed, %zu successors\n", fl.actions.size(),
+               count_legal_successors(f7, SIZE_MAX, Detector::Naive).count);
+  CHECK(!loss_confirmed(f7, 2));
 }
