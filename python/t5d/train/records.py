@@ -60,6 +60,19 @@ configuration that ``prior_to_target_kl`` was measured under - the builder's def
 generator was given none). A synthetic record (``trainer.synthetic_record``, never the
 generator's) also says ``synthetic``: the only rows the untrained build steps on.
 
+A **seeded game** (register I22, section 12: a game begun from a stored position;
+``selfplay.SeededStartConfig``, off by default) also carries ``seeded_start`` - an optional key, as
+``synthetic`` is, present in no other record, so the version stays 2: ``source``, ``kind``
+(``"pgn"``: the start is the 5dpgn ``pgn`` with ``actions`` of its actions replayed under the
+ruleset encoding ``rules``, set up by the engine's reader - the header's ``variant`` is then
+``"seeded"``, no engine variant, and ``start_fen`` None; ``"fen"``: the start is ``start_fen``, the
+lossy form), ``turn`` (the source's turn count at the start, in actions - ``GameRecord.start_turn``;
+the temperature schedules read it plus the game's own actions), ``fingerprint`` and ``n_boards``
+(the start as the engine set it up) and ``pool`` (the draw: ``size``, ``index``). Its decisions
+count ``action`` from its own start, and its ``pgn`` is the continuation from the start's 5DFEN
+boards - as lossy as 5DFEN is; ``selfplay.replay_positions`` sets the exact start up from
+``seeded_start``.
+
 Decision ``d_proof_ref`` is -1 throughout for the same reason. Another version is refused on
 reading (``RecordVersionError``) - version 1 (before the flat form's fields) among them: no
 archive of it exists outside tests, and reading it would need every flat field defaulted (spec
@@ -365,6 +378,18 @@ class GameRecord:
     @property
     def n_actions(self) -> int:
         return int(self.header["result"]["actions"])
+
+    @property
+    def seeded_start(self) -> dict | None:
+        """The stored position the game began from (register I22; module docstring), or None."""
+        return self.header.get("seeded_start")
+
+    @property
+    def start_turn(self) -> int:
+        """The source's turn count at the game's start, in actions (issue 305): a seeded game's
+        (I22: it keeps its source's turn count), 0 for every other game."""
+        seeded = self.seeded_start
+        return int(seeded["turn"]) if seeded else 0
 
 
 # --- conditions ------------------------------------------------------------------------------------

@@ -159,10 +159,14 @@ const std::vector<Config> kConfigs = {
     // enumerating whole-turn arm's two configurations).
     {"flat tree, solver", TurnSplit::Flat, false, true, false, false, NodeKey::State, true},
     {"flat graph, E2+E3", TurnSplit::Flat, true, true, true, true, NodeKey::State, false},
-    // D2's tree form (§8.2's interaction gates, the default readings): a tree
-    // only - refused under MCGS (build-log spec issue 301).
+    // D2's tree form (§8.2's interaction gates, the default readings): a tree,
+    // and under MCGS, where only evaluated nodes are graph nodes (§8.5, C11;
+    // the 2026-11-15 review settling build-log spec issue 301).
     {"tree form, solver", TurnSplit::Tree, false, true, false, false, NodeKey::State, true},
     {"tree form, no widening, E2+E3", TurnSplit::Tree, false, false, true, true, NodeKey::StateAndOrigins, false},
+    {"tree form graph, solver", TurnSplit::Tree, true, true, false, false, NodeKey::State, true},
+    {"tree form graph origins, no widening, E2+E3", TurnSplit::Tree, true, false, true, true, NodeKey::StateAndOrigins,
+     false},
 };
 
 SearchParams params_of(const Config& c) {
@@ -3947,54 +3951,61 @@ TEST(mcts_flat_form_no_node_with_turns_still_to_generate_is_proven_lost) {
 }
 
 TEST(mcts_tree_form_dead_ends_have_no_legal_completion_in_random_searches) {
-  // mcts_graph_invariants_hold_in_random_searches for D2's tree form (a tree
-  // only, issue 301): random two-board positions under both Q4 readings, the
+  // mcts_graph_invariants_hold_in_random_searches for D2's tree form, in a
+  // tree and under MCGS (§8.5, C11: only evaluated nodes are graph nodes -
+  // the 2026-11-15 review settling issue 301): random two-board positions
+  // under both Q4 readings, the
   // pseudo-legal seam on and off, the interaction gates as built and none, the
   // solver on (test-only, H41) - check_invariants holds, and no node marked a
   // dead end has a legal completion (the brute-force reference). The tree
   // form's own dead-end test checks the structure, not against the reference
   // (the gate lane's done-means audit, 2026-10-24).
-  std::size_t searches = 0;
-  std::size_t checked = 0;
-  std::size_t inherited = 0;
-  for (const bool after_shift : {true, false}) {
-    RuleOptions rules;
-    rules.moves_after_shift = after_shift;
-    const std::vector<GameState> positions = two_board_positions(rules, 6, after_shift ? 271 : 273);
-    for (std::size_t i = 0; i < positions.size(); ++i) {
-      for (const bool seam : {false, true}) {
-        SearchParams p = fast();
-        p.split = TurnSplit::Tree;
-        if (i % 3 == 2) p.tree_gates = 0;  // inheritance throughout the turn
-        p.proof_channel = true;
-        p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
-        p.legal_moves_only = !seam;
-        p.legality = i % 2 == 0 ? LegalityOptions::budgeted(0, 0) : LegalityOptions::exact();
-        p.turn_cap.boards = static_cast<int>(positions[i].multiverse().board_count()) + 3;
-        const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 200 + i);
-        Search search(positions[i], p);
-        search.run(*ev, Limits{400});
-        CHECK_NOTHROW(search.check_invariants());
-        ++searches;
-        for (NodeId id = 0; id < search.node_count(); ++id) {
-          const NodeView n = search.node(id);
-          inherited += n.inherited ? 1 : 0;
-          if (!n.dead_end) continue;
-          const t5d_test::Reference ref = t5d_test::reference_actions(*n.state, 200000);
-          if (ref.overflow) continue;
-          ++checked;
-          CHECK(ref.successors.empty());
+  for (const bool graph : {false, true}) {
+    std::size_t searches = 0;
+    std::size_t checked = 0;
+    std::size_t inherited = 0;
+    for (const bool after_shift : {true, false}) {
+      RuleOptions rules;
+      rules.moves_after_shift = after_shift;
+      const std::vector<GameState> positions = two_board_positions(rules, 6, after_shift ? 271 : 273);
+      for (std::size_t i = 0; i < positions.size(); ++i) {
+        for (const bool seam : {false, true}) {
+          SearchParams p = fast();
+          p.split = TurnSplit::Tree;
+          p.graph = graph;
+          if (i % 3 == 2) p.tree_gates = 0;  // inheritance throughout the turn
+          p.proof_channel = true;
+          p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
+          p.legal_moves_only = !seam;
+          p.legality = i % 2 == 0 ? LegalityOptions::budgeted(0, 0) : LegalityOptions::exact();
+          p.turn_cap.boards = static_cast<int>(positions[i].multiverse().board_count()) + 3;
+          const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 200 + i);
+          Search search(positions[i], p);
+          search.run(*ev, Limits{400});
+          CHECK_NOTHROW(search.check_invariants());
+          ++searches;
+          for (NodeId id = 0; id < search.node_count(); ++id) {
+            const NodeView n = search.node(id);
+            inherited += n.inherited ? 1 : 0;
+            if (!n.dead_end) continue;
+            const t5d_test::Reference ref = t5d_test::reference_actions(*n.state, 200000);
+            if (ref.overflow) continue;
+            ++checked;
+            CHECK(ref.successors.empty());
+          }
         }
       }
     }
+    std::printf("  tree-form searches, %s: %zu, dead ends checked: %zu, inherited nodes: %zu\n",
+                graph ? "graph" : "tree", searches, checked, inherited);
+    // What the searches met when written (deterministic): in a tree 24
+    // searches, 1,451 dead ends checked against the reference, 312 inherited
+    // nodes; in a graph 24, 1,442 and 292; the floors about a third of that,
+    // for each arm.
+    CHECK(searches >= 20);
+    CHECK(checked > 400);
+    CHECK(inherited > 100);
   }
-  std::printf("  tree-form searches: %zu, dead ends checked: %zu, inherited nodes: %zu\n", searches, checked, inherited);
-  // What the searches met when written (deterministic): 24 searches, 1,451 dead
-  // ends checked against the reference, 312 inherited nodes; the floors about a
-  // third of that.
-  CHECK(searches >= 20);
-  CHECK(checked > 400);
-  CHECK(inherited > 100);
 }
 
 // ---- What the mutation runs found unchecked (review C) ------------------------------------

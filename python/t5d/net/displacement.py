@@ -35,10 +35,34 @@ has no whole-turn ``dT`` (its boards have different colours to move).
   clamped, as B6's buckets were - crossed with the sign of ``dh`` (past, same time, future;
   B6 kept Delta-time signed): 3 x 3 = 9 far classes. 54 classes in all, each with its
   15 x 15 slice. The edges are the setting; the form (one distance, ``dh``'s sign) is fixed
-  here. Under it B6 is not B15's special case, as section 4.1 says it is: each far class
-  mixes B6's Delta-time and Delta-timeline buckets, so beyond the exact box the far classes
-  hold a B6 bias only where it depends on nothing but ``dh``'s sign - its clamped
-  extrapolation survives, its per-axis buckets do not (issue 205).
+  here. Each far class mixes B6's Delta-time and Delta-timeline buckets, so the far classes
+  alone hold a B6 bias only where it depends on nothing but ``dh``'s sign (issue 205) - the
+  per-axis tables, next, are what keeps the rest.
+
+**B6's two per-axis tables beyond the exact classes** (register B6 and B15; section 4.1, the
+2026-11-15 review, decision 1: "a far pair ... adds B6's two clamped log-bucket scalars, one for
+Delta-time and one for Delta-timeline"; ``NetConfig.disp_far_axis``, on - the v1 default;
+``FarAxes``, ``far_cell``, ``pair_far_cell``). The far slice alone cannot tell boards apart that
+one distance ``D`` merges - a board 20 half-turns back on the query's own timeline and one 2
+half-turns back 10 timelines over share a class and, off the lines, every entry. So every pair
+of board tokens (squares or per-board registers; a pair on a line included) whose boards lie
+outside the exact classes adds two learned scalars per head per layer to its entry: one by the
+bucket of its signed ``dh`` - B6's, exact below 4 half-turns, then 4-7, 8-15, ..., 64-127, 128+,
+past and future apart: 19 - and one by the bucket of ``|dp|`` - exact below 4, then 4-7, 8-15,
+16-31, 32+: 8 (``disp_far_time_*``, ``disp_far_timeline_*``; issue 205 records B6's buckets).
+A pair inside the exact classes, a pair with a global register, and padding add nothing. With
+the main table constant on file and rank and zero beyond the exact classes, the bias is B6's:
+"B6 is exactly its special case that ignores file and rank" (section 4.1). The readings built
+where section 4.1 does not say: the terms go on every pair of board tokens on far boards, not
+on far-slice cells only (B6 biased by board pair whatever the token), and the tables are per
+head per layer (section 4.1's 3,456 = (19 + 8) x 8 x 16).
+
+**The layer-shared arm** (ablation 2; section 4.1 and 10.2, the 2026-11-15 review;
+``NetConfig.disp_layer_shared``, off): one main table and one pair of per-axis tables per head,
+read by every layer - "a sixteenth of the parameters and a bias that can be assembled once per
+forward". The structure then needs no layer (``AttnStructure.layer_dependent``), and at
+inference it assembles each selection of the bias once per forward and every layer reads it
+(register G11; ``AttnStructure.disp_rows``, within ``structure.DISP_ONCE_BYTES``).
 
 **Line classes** (``line_entry``): beyond the exact classes, a pair of squares whose
 displacement ``(dx, dy, dp, dT)`` in whole turns (``dh`` even) has every non-zero component of
@@ -64,7 +88,9 @@ zero, not a parameter.
 **Size** (defaults): 54 x 225 slices + 320 + 48 lines + 54 x 3 register entries + 1 global =
 12,681 entries per head per layer; x 8 heads x 16 layers = 1,623,168 parameters. Three entries
 per head and layer are never indexed: the (0, 0) cell of the three same-time far slices, whose
-displacements are all board-axis lines.
+displacements are all board-axis lines. The per-axis tables add 19 + 8 = 27 scalars per head per
+layer, 3,456: B15 is 1,626,624 parameters in the v1 (2,439,936 in F2's 24 layers). Under the
+layer-shared arm it is 8 x (12,681 + 27) = 101,664, a sixteenth.
 
 **Two implementations of one function**, compared by the tests and by section 15.2's B15 row:
 
@@ -77,9 +103,17 @@ displacements are all board-axis lines.
   static ``class_map`` ``(tiles, 65, 65)``, built once from ``pair_entry``; then the layer's
   table. A tile stands for every board pair beyond ``tile_cap`` steps along its direction.
 
+The per-axis terms have the same two: ``pair_far_cell`` by arithmetic inside the score function,
+and for the CPU paths a per-batch ``(Nb + 2, Nb + 2)`` matrix of far cells by board slot
+(``DisplacementIndex.far_cells``), through which the layer's far table - the two tables summed
+per (time bucket, timeline bucket) cell, a zero cell last - is gathered by the two tokens'
+slots. Both add ``main + (time + timeline)`` in that order, so they agree bit for bit.
+
 **Initialisation** (placeholder, ``NetConfig.disp_init_std``; spec issue 208): ``N(0, 0.1)``,
 drawn from a generator of B15's own seeded from the model's seed (``model.b15_seed``, as D8's
-are), never from the global stream - so the no-table arm has every other weight of the v1.
+are), never from the global stream - so the no-table arm has every other weight of the v1. The
+two per-axis tables are drawn the same way from a second generator (``model.b15_far_seed``),
+after the main table: adding them moved no parameter's draw, the main table's included.
 """
 
 from __future__ import annotations
@@ -234,6 +268,72 @@ class DisplacementGeometry:
         return self.n_tiles + 1
 
 
+def _log_edges(n_exact: int, max_distance: int) -> tuple[int, ...]:
+    """The lower edges of the log2-spaced buckets above the exact ones: ``n_exact 2^j`` for ``j =
+    1, 2, ...`` up to ``max_distance`` (the bucket ``[n_exact, 2 n_exact)`` needs none)."""
+    edges, edge = [], 2 * n_exact
+    while edge <= max_distance:
+        edges.append(edge)
+        edge *= 2
+    return tuple(edges)
+
+
+@dataclass(frozen=True)
+class FarAxes:
+    """The buckets of B6's two per-axis tables, which B15 keeps beyond its exact classes (the
+    module docstring; register B6, B15; section 4.1, the 2026-11-15 review). An offset's size has
+    its own bucket below ``*_exact``, then log2-spaced buckets up to ``*_max``, the last clamped.
+    Delta-time (half-turns) is signed - bucket ``b`` of ``|dh|`` for ``dh >= 0``, ``n - 1 + b``
+    for ``dh < 0`` (``n`` sizes; the signs share bucket 0 only): 19 by default; Delta-timeline is
+    not: 8. A far board pair's *cell* is ``time bucket x n_timeline + timeline bucket``."""
+
+    time_exact: int = 4
+    time_max: int = 128
+    timeline_exact: int = 4
+    timeline_max: int = 32
+
+    @classmethod
+    def from_config(cls, cfg: NetConfig) -> FarAxes:
+        time, timeline = (cfg.disp_far_time_exact, cfg.disp_far_time_max), (cfg.disp_far_timeline_exact, cfg.disp_far_timeline_max)
+        return cls(int(time[0]), int(time[1]), int(timeline[0]), int(timeline[1]))
+
+    @property
+    def time_edges(self) -> tuple[int, ...]:
+        """``(8, 16, 32, 64, 128)`` by default."""
+        return _log_edges(self.time_exact, self.time_max)
+
+    @property
+    def timeline_edges(self) -> tuple[int, ...]:
+        """``(8, 16, 32)`` by default."""
+        return _log_edges(self.timeline_exact, self.timeline_max)
+
+    @property
+    def n_time_sizes(self) -> int:
+        """Buckets of ``|dh|``: the exact ones, ``[exact, 2 exact)``, and one per edge (10)."""
+        return self.time_exact + 1 + len(self.time_edges)
+
+    @property
+    def n_time(self) -> int:
+        """Signed Delta-time buckets (19 by default): the time table's entries per head per layer."""
+        return 2 * self.n_time_sizes - 1
+
+    @property
+    def n_timeline(self) -> int:
+        """|Delta-timeline| buckets (8 by default): the timeline table's entries per head per layer."""
+        return self.timeline_exact + 1 + len(self.timeline_edges)
+
+    @property
+    def n_cells(self) -> int:
+        """(time bucket, timeline bucket) cells (152 by default)."""
+        return self.n_time * self.n_timeline
+
+    @property
+    def zero_cell(self) -> int:
+        """The index of the zero appended to a layer's far table: a pair that takes no per-axis term
+        (inside the exact classes, a global register, padding; not a parameter)."""
+        return self.n_cells
+
+
 # --- the class of a pair, by arithmetic (elementwise; also inside B14's score function) -----------
 #
 # Every function takes integer tensors that broadcast together and uses only elementwise torch
@@ -317,6 +417,46 @@ def pair_entry(kind_q, kind_k, dx, dy, dp, dh, geom: DisplacementGeometry) -> to
     return entry_from_class(bc, line_entry(dx, dy, dp, dh, geom), kind_q, kind_k, dx, dy, geom)
 
 
+def _size_bucket(size: torch.Tensor, n_exact: int, edges: tuple[int, ...]) -> torch.Tensor:
+    """The bucket of a non-negative integer offset size: itself below ``n_exact``, else ``n_exact``
+    plus the number of ``edges`` it has reached (the last bucket holds every larger size). Integer
+    comparisons only - no float log2 - so that it is exact and runs under vmap."""
+    log = torch.full_like(size, n_exact)
+    for edge in edges:
+        log = log + (size >= edge).long()
+    return torch.where(size < n_exact, size, log)
+
+
+def far_time_bucket(dh: torch.Tensor, far: FarAxes) -> torch.Tensor:
+    """B6's signed Delta-time bucket of ``dh`` half-turns (key minus query), in ``[0, n_time)``."""
+    b = _size_bucket(dh.abs(), far.time_exact, far.time_edges)
+    return torch.where(dh >= 0, b, far.n_time_sizes - 1 + b)
+
+
+def far_timeline_bucket(dp: torch.Tensor, far: FarAxes) -> torch.Tensor:
+    """B6's |Delta-timeline| bucket of ``dp`` timelines, in ``[0, n_timeline)``."""
+    return _size_bucket(dp.abs(), far.timeline_exact, far.timeline_edges)
+
+
+def far_cell(dp: torch.Tensor, dh: torch.Tensor, far: FarAxes) -> torch.Tensor:
+    """The per-axis cell of a pair of boards ``dp`` timelines and ``dh`` half-turns apart (key
+    minus query): ``time bucket x n_timeline + timeline bucket`` beyond the exact classes, the zero
+    cell inside them (section 4.1: B6's two scalars are added "beyond the exact classes")."""
+    cell = far_time_bucket(dh, far) * far.n_timeline + far_timeline_bucket(dp, far)
+    return torch.where(beyond_exact(dp, dh), cell, torch.full_like(cell, far.zero_cell))
+
+
+def pair_far_cell(kind_q, kind_k, dp, dh, far: FarAxes) -> torch.Tensor:
+    """The per-axis cell of a pair of tokens from their kinds and their boards' displacement: the
+    boards' ``far_cell`` where both are board tokens - a square or a per-board register, each on
+    its board - and the zero cell for a pair with a global register or padding (neither has a
+    board). A function of the board pair alone: file and rank never enter (B6 had neither)."""
+    on_q = (kind_q == TOKEN_SQUARE) | (kind_q == TOKEN_BOARD_REGISTER)
+    on_k = (kind_k == TOKEN_SQUARE) | (kind_k == TOKEN_BOARD_REGISTER)
+    cell = far_cell(dp, dh, far)
+    return torch.where(on_q & on_k, cell, torch.full_like(cell, far.zero_cell))
+
+
 # --- the CPU paths' lookup ----------------------------------------------------------------------------
 
 
@@ -376,19 +516,63 @@ class DisplacementIndex:
     tiles: torch.Tensor  # (B, Nb + 2, Nb + 2) long: the tile of each (query slot, key slot)
     kind: torch.Tensor  # (B, L) long: token kinds (padding where the batch is padded)
     coords: torch.Tensor  # (B, L, 4) long: raw (file, rank, timeline, half-turn)
+    #: (B, Nb + 2, Nb + 2) long: the per-axis far cell of each (query slot, key slot) - a pair of
+    #: boards beyond the exact classes; the zero cell for every other pair of slots (None: the
+    #: per-axis tables are off, ``NetConfig.disp_far_axis``).
+    far_cells: torch.Tensor | None = None
+
+
+@dataclass
+class PairSides:
+    """What B15's lookups read of a set of query rows and a set of keys - each token's board slot
+    and code, laid out to index a pair: integers that depend on the position and the two sets,
+    never on the layer (register G11, section 10.2: "structure is computed once per forward"), so
+    a caller that asks for the same rows and keys at every layer builds them once
+    (``AttnStructure``'s memo) and each layer gathers its own table through them."""
+
+    slot_q: torch.Tensor  # (B, n) long: the queries' slots
+    slot_k: torch.Tensor  # (B, Lk) long: the keys' slots
+    code_q: torch.Tensor  # (B, n, 1) long: the queries' codes, times ``N_CODES``
+    code_k: torch.Tensor  # (B, 1, Lk) long: the keys' codes
+    b: torch.Tensor  # (B, 1, 1) long: the position, to index a (B, slots, slots) table by pair
+
+    def __post_init__(self) -> None:
+        # The slots as views that index a table by pair - (B, slots, slots), or per head (B, H,
+        # slots, slots) - laid out with the sides so that no lookup lays them out again.
+        self.q3, self.k3 = self.slot_q[:, :, None], self.slot_k[:, None, :]  # (B, n, 1), (B, 1, Lk)
+        self.b4 = self.b[..., None]  # (B, 1, 1, 1)
+        self.q4, self.k4 = self.slot_q[:, None, :, None], self.slot_k[:, None, None, :]  # (B, 1, n, 1), (B, 1, 1, Lk)
+
+
+def pair_sides(
+    index: DisplacementIndex, rows: torch.Tensor | None, cols: torch.Tensor | None = None, span: tuple[int, int] | None = None
+) -> PairSides:
+    """The sides of the queries ``rows`` ``(B, n)`` - or of the row span ``[start, stop)``, read
+    by slicing instead of gathering (the same integers) - and the keys ``cols`` ``(B, K)`` (every
+    key when None)."""
+    if span is not None:
+        slot_q, code_q = index.slot[:, span[0] : span[1]], index.code[:, span[0] : span[1]]
+    else:
+        slot_q, code_q = index.slot.gather(1, rows), index.code.gather(1, rows)
+    slot_k = index.slot if cols is None else index.slot.gather(1, cols)
+    code_k = index.code if cols is None else index.code.gather(1, cols)
+    b = torch.arange(slot_q.shape[0], device=slot_q.device)[:, None, None]
+    return PairSides(slot_q, slot_k, (code_q * N_CODES)[:, :, None], code_k[:, None, :], b)
+
+
+def lookup_sides(index: DisplacementIndex, table_map: torch.Tensor, sides: PairSides) -> torch.Tensor:
+    """``lookup`` for sides already built: ``table_map`` at (the pair's board tile, the query's
+    code, the key's code), ``(B, n, Lk)``."""
+    tile = index.tiles[sides.b, sides.q3, sides.k3]
+    flat = tile * (N_CODES * N_CODES) + sides.code_q + sides.code_k
+    return table_map.view(-1)[flat]
 
 
 def lookup(index: DisplacementIndex, table_map: torch.Tensor, rows: torch.Tensor, cols: torch.Tensor | None = None) -> torch.Tensor:
     """``(B, n, Lk)``: ``table_map`` - a ``(tiles, 65, 65)`` map like ``class_map`` (B15's entries,
     or B17's classes) - at (the pair's board tile, the query's code, the key's code) for the queries
     ``rows`` ``(B, n)`` and the keys ``cols`` ``(B, K)`` (every key when None)."""
-    slot_q, code_q = index.slot.gather(1, rows), index.code.gather(1, rows)
-    slot_k = index.slot if cols is None else index.slot.gather(1, cols)
-    code_k = index.code if cols is None else index.code.gather(1, cols)
-    b = torch.arange(rows.shape[0], device=rows.device)[:, None, None]
-    tile = index.tiles[b, slot_q[:, :, None], slot_k[:, None, :]]
-    flat = tile * (N_CODES * N_CODES) + (code_q * N_CODES)[:, :, None] + code_k[:, None, :]
-    return table_map.view(-1)[flat]
+    return lookup_sides(index, table_map, pair_sides(index, rows, cols))
 
 
 def check_board_sizes(batch: Batch) -> None:
@@ -401,9 +585,10 @@ def check_board_sizes(batch: Batch) -> None:
             )
 
 
-def displacement_index(batch: Batch, geom: DisplacementGeometry) -> DisplacementIndex:
+def displacement_index(batch: Batch, geom: DisplacementGeometry, far: FarAxes | None = None) -> DisplacementIndex:
     """Each token's slot and code, and each board pair's tile, from the batch's raw coordinates
-    (only differences enter, so neither recentring nor a common shift changes anything)."""
+    (only differences enter, so neither recentring nor a common shift changes anything). With
+    ``far`` (the per-axis tables' buckets), each pair of slots' far cell too."""
     check_board_sizes(batch)
     bsz, length = batch.kind.shape
     n_max = batch.board_valid.shape[1]
@@ -421,7 +606,8 @@ def displacement_index(batch: Batch, geom: DisplacementGeometry) -> Displacement
     ph = torch.zeros(bsz, n_max + 2, 2, dtype=torch.long, device=device)
     ph.scatter_(1, slot[..., None].expand(bsz, length, 2), coords[..., 2:4])
     p, h = ph[:, :n_max, 0], ph[:, :n_max, 1]
-    board_tiles = tile_index(p[:, None, :] - p[:, :, None], h[:, None, :] - h[:, :, None], geom)
+    dp, dh = p[:, None, :] - p[:, :, None], h[:, None, :] - h[:, :, None]  # key minus query, (B, Nb, Nb)
+    board_tiles = tile_index(dp, dh, geom)
     tiles = torch.full((bsz, n_max + 2, n_max + 2), geom.zero_tile, dtype=torch.long, device=device)
     valid_boards = batch.board_valid.to(device)
     both = valid_boards[:, :, None] & valid_boards[:, None, :]
@@ -430,26 +616,58 @@ def displacement_index(batch: Batch, geom: DisplacementGeometry) -> Displacement
     glob = torch.full_like(with_global, geom.global_tile, dtype=torch.long)
     tiles[:, : n_max + 1, n_max] = torch.where(with_global, glob, tiles[:, : n_max + 1, n_max])
     tiles[:, n_max, : n_max + 1] = torch.where(with_global, glob, tiles[:, n_max, : n_max + 1])
-    return DisplacementIndex(slot, code, tiles, kind, coords)
+    far_cells = None
+    if far is not None:
+        # The per-axis terms are a function of the board pair alone: two valid boards beyond the
+        # exact classes; the global-register and padding slots take the zero cell.
+        board_cells = far_cell(dp, dh, far)
+        far_cells = torch.full((bsz, n_max + 2, n_max + 2), far.zero_cell, dtype=torch.long, device=device)
+        far_cells[:, :n_max, :n_max] = torch.where(both, board_cells, torch.full_like(board_cells, far.zero_cell))
+    return DisplacementIndex(slot, code, tiles, kind, coords, far_cells)
 
 
 class DisplacementBias(nn.Module):
-    """B15's table, ``(n_layers, n_heads, n_entries)``, and its static class map.
+    """B15's table, ``(layers, n_heads, n_entries)``, its static class map, and - with
+    ``NetConfig.disp_far_axis`` - B6's two per-axis tables for the pairs beyond the exact classes,
+    ``far_time`` ``(layers, n_heads, n_time)`` and ``far_timeline`` ``(layers, n_heads,
+    n_timeline)``. ``layers`` is ``n_layers``, or 1 under ablation 2's layer-shared arm
+    (``NetConfig.disp_layer_shared``: every layer reads the one table - ``per_layer`` False).
 
     Constructed without drawing from any RNG; ``model._init_weights`` draws the table from
-    B15's own generator (``model.b15_seed``)."""
+    B15's own generator (``model.b15_seed``) and the per-axis tables from a second one
+    (``model.b15_far_seed``)."""
 
     def __init__(self, cfg: NetConfig) -> None:
         super().__init__()
         self.geom = DisplacementGeometry.from_config(cfg)
-        self.table = nn.Parameter(torch.empty(cfg.n_layers, cfg.n_heads, self.geom.n_entries))
+        self.per_layer = not cfg.disp_layer_shared
+        layers = cfg.n_layers if self.per_layer else 1
+        self.table = nn.Parameter(torch.empty(layers, cfg.n_heads, self.geom.n_entries))
+        self.far = FarAxes.from_config(cfg) if cfg.disp_far_axis else None
+        if self.far is not None:
+            self.far_time = nn.Parameter(torch.empty(layers, cfg.n_heads, self.far.n_time))
+            self.far_timeline = nn.Parameter(torch.empty(layers, cfg.n_heads, self.far.n_timeline))
+        else:  # B15 as built before the 2026-11-15 review: no per-axis table, no parameter
+            self.register_parameter("far_time", None)
+            self.register_parameter("far_timeline", None)
         self.register_buffer("class_map", _shared_class_map(self.geom), persistent=False)
 
     def layer_table(self, layer: int) -> torch.Tensor:
-        """``(n_heads, n_entries + 1)``: layer ``layer``'s scalars, FP32, with the zero entry
-        (padding) appended."""
-        t = self.table[layer].float()
+        """``(n_heads, n_entries + 1)``: layer ``layer``'s scalars (the shared table's, whatever the
+        layer, under the layer-shared arm), FP32, with the zero entry (padding) appended."""
+        t = self.table[layer if self.per_layer else 0].float()
         return torch.cat([t, t.new_zeros(t.shape[0], 1)], dim=1)
+
+    def layer_far_table(self, layer: int) -> torch.Tensor | None:
+        """``(n_heads, n_cells + 1)``: layer ``layer``'s per-axis term of every far cell - the time
+        table's scalar plus the timeline table's, ``far_time[t] + far_timeline[l]`` at cell ``t x
+        n_timeline + l`` - FP32, with the zero cell appended; None without the per-axis tables."""
+        if self.far is None:
+            return None
+        i = layer if self.per_layer else 0
+        cells = self.far_time[i].float()[:, :, None] + self.far_timeline[i].float()[:, None, :]
+        cells = cells.reshape(cells.shape[0], self.far.n_cells)
+        return torch.cat([cells, cells.new_zeros(cells.shape[0], 1)], dim=1)
 
 
 __all__ = [
@@ -457,13 +675,21 @@ __all__ = [
     "DisplacementBias",
     "DisplacementGeometry",
     "DisplacementIndex",
+    "FarAxes",
+    "PairSides",
     "SPATIAL_DIRECTIONS",
     "board_class",
     "class_map",
     "displacement_index",
     "entry_from_class",
+    "far_cell",
+    "far_time_bucket",
+    "far_timeline_bucket",
     "line_entry",
     "lookup",
+    "lookup_sides",
     "pair_entry",
+    "pair_far_cell",
+    "pair_sides",
     "tile_index",
 ]

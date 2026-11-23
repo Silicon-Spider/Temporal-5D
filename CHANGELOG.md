@@ -10,6 +10,38 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-23 - main 4e9267e merged into `lane/engine`; the flat form's re-listing under the pull's rollback (issue 412)
+
+Main's 23 commits since af0c19b (issue 535's exception safety for the search, the spec review
+of 2026-11-15, the review's code round, the cited commit ids after the history rewrite of
+2026-11-16, CI fixes) merged into `lane/engine`. Conflicts in `CHANGELOG.md`,
+`docs/BUILD_LOG.md` and `engine/README.md` only, kept from both sides (the build log's session
+entry says how). One change met another without a conflict: issue 535 made `pull_turns`
+strongly exception-safe, and this lane's M1 (issue 410) had given it a branch - listing again
+a flat node whose fallback listing the deadline cut - that ran ahead of the rollback, so a
+`std::bad_alloc` there left the node's turn tables part-built, or the node with no turn and no
+longer to be listed, stuck for good. Fixed in the merge (`engine/src/mcts.cpp`;
+`engine/README.md`'s paragraph on the deadline): the re-listing runs inside the rollback, its
+flag restored with the rest, no generator counted dropped. Test
+`mcts_fault_a_failed_relisting_leaves_the_root_to_be_listed`
+(`engine/tests/test_mcts_faults.cpp`). On the merge unfixed the test fails: of the gather's
+929 allocations, the 557 failed in turn gave 468 wrong outcomes (a root stuck, or never listed
+again) and 18 invariant failures (the root's memory count stale); with the fix none (the same
+557 faults, 476 of them leaving the root unlisted, each listed by the later playout; 18 s).
+Checks on the merged tree, the fix in: engine 773 of 773 (`--werror`; 22 minutes, other lanes'
+jobs loading the machine to 99% for part of it); ruff clean (check; format, 134 files); pytest
+test_decision_log.py, test_netplay.py and test_search_api.py, 159 passed
+(T5D_REQUIRE_ENGINE=1); verify ok; gate commit ok (SMOKE TEST - PASSED, baseline 41 compared,
+0 declined; proof channel DISABLED). No truth source changed (main changed none since af0c19b,
+and `mcts.cpp` is not one) and nothing here touches the scanner, so neither the nightly gate
+nor the Lazy SMP test is owed.
+
+Spec: none - no part of the spec describes exception safety (issue 535's entry) or the
+deadline's re-listing (issue 410; §8.6 and register E7 unchanged); register D2's flat form is
+unchanged in what it says. The merge brings main's spec and register as main has them. No
+truth source changed (`T5D_TRUTH_SOURCES`; `mcts.cpp` is not one, and main changed none since
+af0c19b), so the nightly gate run on e79ea70 stands for this tree's code signature.
+
 ### 2026-11-23 - The review of 0e7d2ed..d86f363, verified: the survivors re-run, the probes re-run, the round's final checks
 
 The review round (build-log issue 410) closed with its verification, recorded in
@@ -627,10 +659,555 @@ Spec: §15.4 (the solver's cross-check against df-pn), §11.1 item 2 and registe
 proposed edit 300 (the cross-check's terms as built); §11.4 (above 100 boards) - issue 401
 (the offline run over 6b's roots not made). The proof channel stays off (H23, H41).
 
+### 2026-11-23 - CI on main after the code round: a fingerprint's tolerance fitted to a small set, and the engine job's time limit
+
+The first CI on the review's code (main 032db11) passed the oracle gate's commit tier and failed
+in two places (`docs/BUILD_LOG.md`, issue 735).
+
+- **One Linux-only test failure** (network job, 1 of 2,291): the fingerprint of B15's two far
+  tables differed from the development machine's by 2.0e-9 relative in its absolute sum, past the
+  1e-9 that `_same` (`python/tests/net/test_params.py`) allows. That bound was set on large
+  parameter sets, whose per-value last-bit differences average out; the far tables are 108 values.
+  `_same` takes the number of values summed (`values=`) and fits the bound to it - 1e-7 over their
+  square root, never under 1e-9 - and `python/tests/net/test_displacement_far.py` passes it. No
+  recorded fingerprint changed, and every other caller keeps 1e-9.
+- **The engine job ran out of time on a slow runner**: `build-and-test (g++-14)` was cancelled at
+  its 30-minute limit with 655 of 724 tests run, while `(g++-13)` passed in 23 minutes on the same
+  commit. The suite is 23 to 24 minutes on a runner since today's merges (issue 535's fault
+  sweeps, with the tree form's arms under graph search now inside them, are about 8 of them; the
+  tree form's own tests about half a minute). `.github/workflows/engine.yml`: `timeout-minutes` 30
+  -> 60. No test was trimmed.
+
+**Checks**: `tests/net/test_params.py` and `tests/net/test_displacement_far.py`: 48 passed; `ruff
+check` and `ruff format --check` clean on both. The workflow's change is one value and a comment
+above it at the same indentation; it was not parsed here (no YAML parser on this machine). The
+fixes are proven only by the next CI run on Linux.
+
+Spec: no part of the spec describes this - a test's tolerance and a CI job's time limit.
+
+### 2026-11-23 - Four answers from the user on the code round's questions: the padding's default, the human games, the two token budgets, register E12
+
+The user answered four of the questions the code round put to them (`docs/BUILD_LOG.md`, "Where
+things stand", "The user's answers"). No behaviour changes: comments and docstrings in the code,
+and the record.
+
+- **The padding's default stays 1, and the compiled GPU kernel path sets 8** (spec issue 732). The
+  note for the GPU session is at the field, `NetConfig.attn_pad_multiple`
+  (`python/t5d/net/config.py` and its module docstring), in the field's refusal message, and in
+  `tests/net/test_kernel_pad.py`'s docstring. The user wrote "pad to 89"; it is read as 8, review
+  decision 15's value.
+- **The human games are not training data** (spec issue 734): the user's rule, applied to seeded
+  starts as well as to targets, since a seeded game's start position becomes a training input.
+  `python/t5d/train/seeded.py` says so; nothing read `data/t0database`, so nothing else changes.
+- **Section 7.8's two examples are two budgets** (spec issue 724; the choice left to this
+  session): inference's and training's, both in padded tokens - as built. The constants' comments
+  in `python/t5d/engine/pool.py` and `python/t5d/train/recipe.py` say which example each honours.
+- **Register E10 becomes E12** (spec issue 730; the choice left to this session): the build log's
+  status row is renamed; the register and the spec follow when edit 412 is applied.
+
+**Checks**: `ruff check` and `ruff format --check` clean on the five Python files;
+`tests/net/test_kernel_pad.py`, `tests/train/test_recipe.py` and `tests/engine/test_pool.py`: 67
+passed; `python oracles/harness.py verify` ok. The only executable change is one error message's
+wording, which no test pins.
+
+Spec: sections 7.8, 10.2, 12, 12.8, 14.4, 15.7 and 16; register E10, G11, G12, I22, I23, I24. Not
+edited here: proposed edits 412 (ruled: E12), 414 (the padding's default), 415 (the human games)
+and 416 (the two budgets) in `docs/BUILD_LOG.md`, with spec issues 724, 730, 732 and 734.
+
+### 2026-11-17 - Cited commit ids follow the history rewrite of 2026-11-16
+
+On 2026-11-16 the user had the history of `main` and of every lane rewritten and pushed again, so
+every commit of this repository has a new id. No commit's files, dates or message text changed
+(ids cited inside commit messages were updated in the same pass). The documents went on citing
+the old ids. Each id of this repository cited in `CHANGELOG.md`, `docs/BUILD_LOG.md`,
+`docs/MEASUREMENTS.md` and `engine/README.md` is now the new id of the same commit, at the length
+it was written with; nothing else in those files changes. The same edit is made, with this entry,
+on `main` and on each lane that holds work `main` lacks, once it is free of uncommitted work; a
+lane with nothing of its own takes it from `main`.
+
+Still the old ids: those in code and test comments (`engine/tests/`, `python/tests/`,
+`oracles/tests/test_lineage.py`), and the engine id recorded in `engine/testdata/hunt-truth/`,
+which is a pinned recording and is not edited by hand (that commit is now `b1d0ca9`). Ids of the
+upstream design documents and of the oracles' pins belong to other repositories and are
+untouched. The rewrite was the user's own decision; the brief's rule against rewriting pushed
+history stands.
+
+On `main` (2026-11-23, by the main loop): made once `main` was free of uncommitted work - after
+the `lane/fix535` merge, the 2026-11-15 spec review and its code round were committed. The old
+ids were mapped to the new by tree and author date from the reflogs (346 commits), and checked
+against `lane/net`'s replacements (121 shared ids, all equal). Five lines that quote an old id
+on purpose, as "before the rewrite", keep it.
+
+Spec: none - commit ids cited in documents; no part of the spec describes it.
+
+### 2026-11-23 - The review's code: B15's far tables, the completed-Q arm, board-count coverage, the pilot's trainer, the self-play pool, G11's count, G11's padding and once-per-forward structure, and the tree form under graph search
+
+After the spec review (next entry) the user asked this session to "make the changes to code" it
+left. The work was planned item by item, built by one agent per item in this working tree, and
+each result checked before the next. Every new behaviour is behind a flag whose default is the
+as-built behaviour, except B15's per-axis far tables, whose ruling (review decision 1) changes the
+default network: **the v1 is now 22,969,139 parameters** (F2's arm 46,900,275), and
+`disp_far_axis=False` gives the earlier network bit for bit. The spec and the register were not
+edited: the edits they need are proposed in `docs/BUILD_LOG.md` (402-413), whose "Where things
+stand" (top) has the full record, and its findings are spec issues 719-733. Three engine-side
+items went to the main loop's lanes by agreement with that session, because their lanes are
+rewriting the same code: decision 13's game-loop node budget, the H13/H43 match-test switches, and
+Gumbel root search (register E10).
+
+**Network** (`python/t5d/net/`):
+
+- **A8's FFN at 1x**, 6p's second arm: named `6p-layout-ff1` beside `6p-layout-ff8`
+  (`config.PRESETS`, `bench.CONFIGS`); 1,709,824 parameters, 0.29% of the counted forward at 44
+  boards; run through the flag-off, cached = dense and A7-mirror rows.
+- **B15's two per-axis far tables** (decision 1; `NetConfig.disp_far_axis`, on): every pair of
+  board tokens beyond the exact classes adds B6's signed Delta-time (19 buckets) and absolute
+  Delta-timeline (8) scalars per head per layer - 3,456 parameters from a generator of their own,
+  so no other draw moved; on every attention path through the structure, with no change to
+  `cache.py`. **Ablation 2's layer-shared arm** (`disp_layer_shared`, off): 101,664 parameters.
+  New `tests/net/test_displacement_far.py`; the pinned totals in `test_params.py` and
+  `test_layout.py` move by +3,456 (F2 +5,184).
+- **G11's count** (`net/opcount.py`, `python -m t5d.net.opcount`): the operators and
+  attention-kernel calls one eager forward dispatches on the CPU graph, with constancy checks. As
+  built the default block-sparse path dispatches 76,443 operators (44,128 compute) in 46 kernel
+  calls a layer at 44 boards, growing with the board count; the one-block path 7,812 and 2 a layer
+  at every size.
+- **G11's widths and structure**: `NetConfig.attn_pad_multiple` (default 1; decision 15's 8 an
+  arm, spec issue 732) zero-pads the kernel's query, key and value widths (45/33 -> 48/40), the
+  forward bit for bit; and what no layer changes is now built once per forward (`attention.py`,
+  `structure.py`, `displacement.py`: per-forward memos), with B15's layer-shared bias assembled
+  once per forward at inference - every output bit for bit against the tree before, and at 44
+  boards 76,443 operators a forward -> 50,071 on the default path, 7,812 -> 6,055 on the one-block
+  path. The count gained call paths (`--sites`); new `tests/net/test_kernel_pad.py` and
+  `test_once_per_forward.py`; `bench.CONFIGS` names for B15's arms and the padding.
+
+**Training and self-play** (`python/t5d/train/`, `python/t5d/engine/pool.py`):
+
+- **The completed-Q target in the builder** (register I21): `TargetConfig.completed_q` ("off";
+  "full", "cheap", "all"), stored and batched beside the policy target; its loss on the main
+  policy head (weight 0; `losses.completed_q_arm` moves the policy's weight onto it); `python -m
+  t5d.train.smoke --completed-q`; `train/target_arms.py` - the target arms, the record-level
+  comparison (`python -m t5d.train.target_arms`) and a held-out yardstick. The ranking itself
+  waits for the pilot run.
+- **Board-count coverage** (I22): floors on each range's share of training compute
+  (`SamplerConfig.range_floors`, off; water-filled over the window's per-range pools) and seeded
+  starts (`GeneratorConfig.seeded_starts`, off; `train/seeded.py` - a 5dpgn record and the actions
+  replayed, opened by the engine's own reader; the header's optional `seeded_start`).
+- **The pilot's trainer** (I23; `train/recipe.py`): batches to a budget of padded tokens within
+  the board-count ranges, a linear warm-up, step drops; `PILOT_RECIPE` of placeholders; the
+  default stays the smoke recipe.
+- **The self-play pool** (G12): `engine/pool.py` - a padded-token batch planner, a shared
+  evaluator with one service thread, a pool of game threads - and `train/selfplay_pool.py`
+  (`python -m t5d.train.selfplay_pool`). A pooled game writes the alone game's record byte for
+  byte with an exact evaluator or merging off; under merged forwards of a network, to the
+  batch-equivalence tolerance (measured, MEASUREMENTS).
+- **Decision 13's target side**: a game that ended unscored has no outcome-derived target, so no
+  deblunder blend applies in it; `TargetConfig.unscored_whole_blend` (off) keeps the earlier
+  reading as an arm.
+- `python -m t5d.train.smoke` adds a nine-board position, so B15's far tables take a gradient.
+
+**Engine** (`engine/src/mcts.cpp`): **the tree form under graph search** (decision 10). The
+refusal is gone; only evaluated nodes are graph nodes - a move whose gate fires leads to a graph
+node, one whose gate does not to a path-local inherited node, never merged. With every gate firing
+it is the ply split's graph search bit for bit. No C field or default changed; six tests added
+(t5d-tests 724).
+
+**Not built**: C17 with A5 (after `lane/net`'s cache rewrite); I3's moves-left steering (after the
+moves-left head is trained); the three items handed to the lanes (above); every ranking, tuning
+and GPU figure the new arms exist for.
+
+**Documents**: `docs/MEASUREMENTS.md` gains dated, counted sections - B15's parameters, A8 at 1x,
+G11's operator counts, G12's batch numerics, and G11's widths, operator attribution and
+once-per-forward figures; `engine/README.md` the tree form under MCGS. `docs/BUILD_LOG.md`: the
+round's record, the register status rows (new: G11, G12, I21-I24, register E10, M25-M27), spec
+issues 719-733, proposed edits 402-413, a session entry; and two dated notes in the review's
+section - the merge concluded by the main loop (d33a5c0), and the user's answer, as that session
+reported it, that the review's decisions are rulings the build builds on.
+
+**Checks** (2026-11-23, `dev-r`): on the finished tree, the whole Python suite in four shards with
+the engine required (`T5D_REQUIRE_ENGINE=1`): 2,290 passed, 1 skipped (the opt-in `T5D_RECORDS`
+corpus), none failed - 572 + 572 + 573 + 573; it was 1,990 and 1 before the round. `ruff check`
+and `ruff format --check` clean over the whole Python tree (134 files). The engine up to date
+(`engine/build.py --werror`: no work to do) - no engine source changed after the tree-form agent's
+full `--werror --test` run, t5d-tests 724 of 724 (718 before). `python oracles/harness.py verify`
+ok (the 17 `proof-channel-vacuous` notes of issue 576, as before); `rulebook` ok; `gate --tier
+commit` ok in 62 s - ftxi 8,256 of 8,256 and notation 3,012 of 3,012 required values reproduced,
+SMOKE TEST - PASSED, 41 records compared with the last green run and 0 declined, calibration
+1.21x, proof channel DISABLED. The suite's first run on the finished tree was stopped by Claude
+Code when the machine ran low on memory - the main loop's lanes were testing beside it - with one
+shard finished (572 passed); that shard's result was kept, since no source changed after it, and
+the other three were run again whole. Before it, each agent ran its own files and their
+directories whole on its final code: tests/net 1,588 of 1,588 (six shards, after G11's last edit),
+tests/train 283 of 283 (after I22's and I23's), tests/engine 394 passed and 1 skipped, the tree
+form's Python files 156 and 190 passed; and after decision 13's target side the target-builder
+files 129 of 129. Wall times are of a loaded machine and are not measurements.
+
+Spec: sections 4.1, 7.8, 8.4, 8.5, 9.2, 10.2, 12, 12.2, 12.8, 13.1, 15.2, 15.3, 15.7 and 16;
+register A8, B6, B15, C11, D2, E10, F1, F2, G11, G12, H22, I15, I21, I22, I23, M24, M25, M26, M27.
+Not edited here: proposed edits 402-413 in `docs/BUILD_LOG.md` (B15's built form and section 4.1's
+example; the new totals; G11's counted figure; A8 at 1x; the pool; the completed-Q arm; coverage;
+the pilot's trainer; the tree form under MCGS; decision 13's target side; register E10's name;
+G11's widths and structure), with spec issues 719-733.
+
+### 2026-11-15 - The spec review: the design spec and the register improved in the repository, on the user's instruction
+
+The user asked this session to read the spec and improve it, with full access to change anything.
+`docs/design/5d-chess-transformer-design.md` and `docs/design/5d-chess-decisions.md` were
+therefore edited here - the one departure from the rule above and in `AGENTS.md`, made on that
+instruction and for that request only. The repository's copies are now ahead of upstream's, which
+takes them as its base before its next revision. One module was added and no existing code
+changed; nothing was committed. `docs/BUILD_LOG.md` ("Where things stand", top) carries the full
+record: what was done, the twenty-three decisions the review made for the user to confirm, what it
+left to the user, and the work it leaves each lane.
+
+**Why.** The spec had drifted from what the build knows. 145 edits the build had proposed were
+waiting - a hundred of them as-built details of committed-class decisions - and the documents
+contradicted themselves and the measurements in places: the register's H1 said "Guard at every
+size" and "Guard in no range" in one row; section 1 called 100-600 boards normal against a
+measured median of 44; the cost model, the capacity ladder and the build order were still priced
+at the 240-board premise CHECKPOINT 5 overturned.
+
+**What changed in the spec.**
+
+- **The proposed edits, applied**: 123 from the build log and 22 from the three unmerged lanes'
+  logs (dispositions in the build log, "Proposed spec edits").
+- **The cost model re-based on the measured sizes** (section 9.2: cost by board count from 10 to
+  600, the 44-board position, where the median game ends, as the reference - 0.262 TF by the
+  formula, 0.28-0.32 TF counted on the v1 - and the capacity ladder priced at 44 and at 240
+  boards; sections 7.4, 7.5, 9.1, 10.1, 13.0 and the summary follow).
+- **The inference path's speed as a requirement** (section 10.2): the bounded AMD run measured the
+  eager network at twenty to two hundred times its own card's kernel arithmetic, so the spec now
+  states what the compiled path must do - structure built once per forward, nothing of size T^2
+  outside the kernel, a constant and counted number of launches per layer, kernel widths in
+  multiples of 8 - with a fallback ladder and its trigger.
+- **Batching at the measured sizes** (section 7.8): "batching buys 1.2-1.5x" holds at 240 boards
+  only; where the games are the engine is batch-bound, so self-play runs a pool of concurrent
+  games behind one evaluator.
+- **Two prototype arms for few simulations against many moves** (sections 8.4, 12.2, 12.5): the
+  completed-Q policy target, ranked on stored records with no new self-play, and Gumbel root
+  search with sequential halving. The target does not read visit counts, so steering cannot bias
+  it.
+- **Coverage across board counts** (section 12): seeded starts, and a floor on each board-count
+  range's share of training compute.
+- **The path from "done" to serious self-play** (new section 15.7): five gates in order, the pilot
+  run pre-registered, "node-starved" defined.
+- **As-built forms pinned in a new section 16; retired design text moved to a new Appendix A**:
+  sections 11.1-11.2 now hold what is in force.
+- **Open design questions ruled** - the tree form under graph search, proofs before the sign-off,
+  the game loop's terminal test under a budget, moves-left steering and early endings, A5's
+  decision rule and its tokens under the cache, B15's far classes, and the rest of the build log's
+  list.
+
+**What changed in the register.** About 170 operations: the rows those sections bear on brought in
+line; new rows E10, G11, G12, I21, I22, I23, I24, M25, M26, M27; reversals 34-41; the status
+vocabulary completed; part K's open items for the user, H48's stop (issue 576) among them with a
+proposal and no ruling.
+
+**Reviewed before it was reported.** Three independent read-only passes went over the revision -
+the figures against `docs/MEASUREMENTS.md`, the spec against the register, the spec against
+itself - and what they found was fixed in the same working tree (the build log lists it; spec
+issues 714-718). Among it: "44 boards" is where the median game ends, not the typical position
+(the median position has about 24); the network as built counts 7-23% more FLOPs than the formula
+at 44 boards; a table the review had added to section 15.6 used the formula M16 replaced; two
+in-force prover rules had been left only in the appendix; and four pieces of arithmetic that
+predated the review were wrong (section 3.3's axial figures, the cached ratios, a throughput row,
+the stand-pat rate).
+
+**Code.** `python/t5d/train/completed_q.py` (new): register I21's completed-Q policy target as a
+function of one decision's record - Gumbel AlphaZero's `softmax(logit + sigma(completed q))` over
+the candidate moves and submit, from the raw logits, the root's raw WDL and each root child's
+visits and backed-up value. `python/tests/train/test_completed_q.py` (new, 15 tests): the paper's
+formulas by hand; the target is the raw prior where nothing was visited; it does not change with
+how the visits were allocated, nor with the search's noised and boosted prior or the steered and
+forced counts; it leaves unvisited moves the prior's shape; and it is rebuilt exactly from a
+record read back from disk - the record format (I15) already holds everything it needs. A
+prototype arm: the target builder does not write it, nothing trains on it, and no existing module
+imports it (`python/t5d/train/__init__.py`'s docstring names it).
+
+**Checks.** Every section reference in the two documents resolves to a heading; every table row
+has its header's cell count; no prose line begins with a list or heading marker; `python
+oracles/harness.py verify` ok (the 17 `proof-channel-vacuous` notes of issue 576, as before);
+`rulebook` ok; `ruff check` and `ruff format --check` clean on `python/t5d/train` and the new test
+file; `pytest tests/train/test_completed_q.py tests/train/test_targets.py -k "not generated"`: 59
+passed. The engine, its tests, the gate and the rest of the Python suite were not run - no engine
+code, nothing the gate reads and no existing Python module changed.
+
+Spec: the design spec, sections 0-16, the summary and Appendix A, and the register, parts A-M -
+edited directly, not proposed; `docs/BUILD_LOG.md` lists every decision made for the user to
+confirm, and spec issues 700-713 give the reasons for the review's own edits. The new module
+implements section 12.2's completed-Q target (register I21) as section 16 pins it.
+
+### 2026-11-09 - Build log: the current state at issue 535's merge
+
+`docs/BUILD_LOG.md`, "Current state": `lane/fix535` merged (issue 535 resolved by issue 600,
+with its review round) and idle; the number blocks used since 2026-10-23 recorded (the audit's
+535-539, the gate's 570-579 and edits 400-401, `lane/fix535`'s 600 and 603-609, the main loop's
+601-602, the net lane's edits 380-399); the waiting list gains 600-604, none for the user (603's
+build flag and 604's fix are the main loop's, in the quiet-machine block); "GitHub Actions has
+started no job since 2026-10-17" replaced by what holds now - CI runs again, and main's engine,
+network and commit-tier jobs were all green at faaa64e (05afde5 before the rewrite of 2026-11-16).
+
+Spec: no part of the spec describes the build log's bookkeeping.
+
+### 2026-11-09 - Issue 535's review round: 2982287's findings fixed (M1-M3, L1-L13), two issues found beside them
+
+The review of 2982287 (no HIGH; three MEDIUM, fourteen LOW) and the main loop's decisions
+on it: each finding fixed as decided, one commit per group, each adding its paragraph here
+(L14 was done at the merge of main faaa64e). Most tests are the review's own probes,
+adopted, in the new `engine/tests/test_mcts_faults.cpp`. `docs/BUILD_LOG.md`: issue 600's
+review round, issues 603 and 604, the session log.
+
+- **L8 - a swallowed fault seen.** Every fault loop - the new tests', `test_mcts_memory.cpp`'s
+  and the C API tests' - checks that a fault that fired came out of the call, and
+  `test_alloc.cpp`'s nothrow `operator new` (`std::stable_sort`'s buffer, a failure there
+  absorbed by design) takes no part in the countdown. The review's P7 as a test: every
+  allocation of a gather, a delivery, `advance` and `advance_to` (about 1,500 points at a
+  stride where there are more than 3,000), each on a fresh search, under the ply split (graph
+  and tree), the tree form and the flat form (graph and tree) - 613, 598, 1,135, 5,535 and
+  5,527 faults, each thrown.
+- **L12 - the asset map's allocation failures** (pre-existing; `engine/src/assets.cpp`, its
+  own commit). `assess_board` caught every `std::exception`, `std::bad_alloc` included: the
+  map kept a material-only assessment for the ladder's life and the failure never reached
+  the caller. It rethrows `std::bad_alloc` now, and `lookup` enters the assessment, indexes
+  it (taking the entry back if the index throws) and only then counts it, so
+  `assessments()` stays `boards()`. Tests: every allocation of a refresh of 11 positions'
+  superseded boards, each on a fresh map (`test_assets.cpp`; 1,146 faults, each thrown):
+  `assessments() == boards()` after each, and refreshed again, all 4,826 boards' assets the
+  fault-free map's; P7 with the ladder on as well - Hunt, the settling scans and the asset
+  map, under the ply split and the flat form (614 and 5,535 faults); and every allocation of
+  a delivery after 0 to 8 playouts with the asset map steering the flat form (5,801 faults),
+  each thrown. (H2: the asset map is a prior; no verdict logic changes.)
+- **M1 - a batch whose request list or buffers fail is abandoned.** `gather` filled its
+  request list after its `try`, and `run` sized its evaluation buffers before its own: a
+  failure there (the list grows whenever a gather asks for more leaves than any before it)
+  left the batch waiting - its leaves pending, virtual loss on their paths - and every later
+  `gather` and `run` refused ("a batch is waiting") until `abandon`. Both are inside now.
+  Tests: every allocation of a fresh search's first gather, of its second and of `run(16)`,
+  each on a fresh search - in C++ under the ply split (tree and graph), the tree form and the
+  flat form (tree and graph), 66 to 12,321 allocations a sweep, the search keeping every
+  invariant and the next gather or run going through with no abandon; and through the C API
+  beside a C++ twin given the same fault: `T5D_ERR_MEMORY` exactly where the twin throws, the
+  two bit-identical, then `T5D_OK`. (§15.4: virtual loss released.)
+- **M2, L6, L9, L10 - the review's probes as tests** (no code changes). The review's
+  mutation pass left 24 of its 50 mutants of 2982287's code alive under the lane's tests.
+  Now tested: a failed pull leaves its node as it found it - every node's priors and logits
+  bit for bit against an untouched twin (P3; 2,738 faults, 84,521 node comparisons), the
+  root's side tables too (P3b), the pull that runs out of turns while adding some (P3c: tree
+  and graph, the default widening, 3-9 playouts, every complete node against a full
+  listing; 6,185 faults) - and an undone expansion leaves a fresh leaf (P6); the counts the
+  rollbacks restore (P1: classify's counts recounted from the nodes held; P2:
+  `generated_turns` the sum of the nodes' turns, a dropped generator always a pull that
+  threw; P9: key collisions; P13: `asset_boosted_edges`, and `suggestion_edges` with
+  `hunt_suggest` on, raised by no more than the turns a failed pull kept); a root hook that
+  throws after the re-root (P4); a failed re-root with the synchronous ladder on, against a
+  search that never re-rooted (P5). `check_flat_nodes` checks what its comment says - each
+  node's priors the softmax of its turn scores (a sum alone let new turns keep a prior of 0).
+  Found writing P13: issues 603 and 604 (below). (§15.4; H37 for P3c.)
+- **M3 - the graph's table after a re-root.** P8 and P10 as tests: the graph after two
+  re-roots finds its nodes again (no node duplicated), and under 3-bit keys a re-root keeps
+  the first node of an identity in the table. `check_invariants` checks the table - every
+  entry in range, its node's identity, the lowest id of that identity, every node's identity
+  entered, none in a tree - and the re-root test ends its sweep on the re-root that goes
+  through, checking the search that re-rooted. (Register C11, C12.)
+- **L1 - D2's tree form: inherited expansions and a carried root's re-evaluation.**
+  `inherit` set a node's edges and inherited flag before `set_priors`, which allocates; it
+  now puts the node back on a throw, and `expand_node` clears `inherited`. `reevaluate`
+  keeps the node aside (its edges, evaluation, flags and counts, and a root's side tables)
+  and puts it back if setting the priors throws - still inherited, so its next visit
+  evaluates it again; before, it was left evaluated on the inherited priors, never
+  re-evaluated. Tests: every allocation of a carried root's re-evaluation (59 faults: 56
+  leave it inherited, and the next batch makes the search the fault-free twin's; the rest
+  come after a whole re-evaluation, the twin's already); and with the asset map on, every
+  allocation of a gather after one to three playouts, then a re-root onto the child that
+  gather made (2,575 faults, 1,691 re-roots; no node left inherited and not expanded).
+  (Register D2.)
+- **L2 - the principal line's change under a failure.** `backup` counted a simulation's
+  path, then recorded the root's change of most visited child (`note_root_visit`, which
+  allocates) before counting the playout: a failure left `root_visits` ahead of `playouts`
+  for good, the change unrecorded. The playout - and `complete_residual`'s steered count - is
+  counted first now, and `note_root_visit` enters its record (`push_back`, strongly
+  exception-safe) before it sets anything. Test, through the C API: every allocation of a
+  delivery that sets the root's most visited child (Hashed's varied answers on a fresh
+  search; the ply split's 93, the flat form's 2,851): `root_visits` and `playouts` never
+  apart, before and after the next run. (§15.4: visit counts consistent through
+  backup; register D4.)
+- **L3 - a decision's verdicts at a re-root.** `VerificationLadder::take` moved the verdicts
+  out one at a time: an allocation failure destroyed some and left moved-from husks in the
+  ladder, which the search later recorded as proven Hunt verdicts with no first action
+  (pre-existing). It makes room first now (the verdict's move is `noexcept`, asserted).
+  `take_verdicts` records each verdict before its counts and copies; the steps after the take
+  still allocate, and making them non-throwing is not local (it needs the ladder's
+  interface), so the claim is narrowed instead: a failure there loses the verdicts taken and
+  not yet recorded - never a proof, since nothing is offered at a decision's end and the
+  proof channel is off (H41). `t5d/mcts.hpp`, `engine/README.md` and the comments in
+  `reroot` and `advance_to` say so. Test: the synchronous ladder with two verdicts waiting,
+  every allocation of the re-root (16 faults): no husk, every verdict recorded counted, the
+  tree as it was, no proof entered, and the retry goes through (3 of the 16 lose a verdict,
+  as documented). (H23, H41.)
+- **L4, L5 - `advance_action`'s documents, and the counters after an undone expansion.**
+  `advance_action` was documented atomic; under the board-move split and the tree form its
+  re-roots go one decision at a time, so `t5d/capi_search.h`, the Python docstring and
+  `engine/README.md` now give the per-decision caveat and the recovery (read the root back
+  with `t5d_search_root_game` or `root_game()`, and play the rest). `stopped_generators` is
+  put back where the expansion is undone (a first pull); a later pull's stop stays counted
+  (its node keeps the generator's turns), so `fallback_listings <= stopped_generators`, the
+  difference the later pulls' stops - asserted after every fault of the flat form's counting
+  test - and with every generator stopped before its first turn (P2b) both equal the nodes
+  expanded after every fault in the root's first expansion (3,760 allocations; 2,302 faults,
+  dense at both ends). `t5d/mcts.hpp` says `submit_edges`, `illegal_submits`,
+  `unknown_edges` and `uncertainty_missing` count events (a redone expansion counts them
+  again), and the rollback's comment says what it puts back.
+- **L7 - memory accounting and leftover flat state.** `check_invariants` checks each node's
+  memory count, their sum against the search's, and that no unexpanded node holds a flat
+  generator. The ply split's stale count (the edges' room made before the node was counted,
+  so a failure between left it stale) is fixed by counting right after the room is made, and
+  the per-node check holds under every split.
+- **L11 - the flat root's steering tables.** `test_ladder.cpp`'s asset-map checks ported to
+  the flat form (P12): each root child's unsteered prior the plain search's noise-free one,
+  its boost what steering added, only a turn travelling into a board's past boosted, the
+  steered visits the search counts, every visit of a boosted child steered under
+  `SteeredRule::BoostedChild`, none without steering (5 of 10 root children boosted, 169
+  steered visits). (Register I2, I15.)
+- **L13** - the root-noise test sweeps every allocation of the root's first expansion: the
+  flat form's 517, not 528 at a stride past 400 (the 11 the count lost are the nothrow
+  allocations L8 took out of the countdown).
+- **L6, again - the boosted turns recounted.** The survivors' re-run (below) found P13's
+  bound too weak: the review's mutant M28 - the rollback forgetting `asset_boosted_edges` -
+  survived it (the review's own P13 had needed a white-box recount to kill it). A new test
+  recounts through the public interface: with the asset map steering the root alone and
+  every turn generated at once (widening off), the count is exactly the number of root
+  children a boost raised. Every allocation of the delivery that expands a fresh search's
+  root, tree and graph (501 each): count and recount agree after each fault and after
+  searching on (604 disagreements in each under M28).
+- **Found in the round** (`docs/BUILD_LOG.md`): **issue 603** - this machine's compiler,
+  MSYS2's g++ 16.2, assumes by default that `operator new` has no side effects
+  (`-fassume-sane-operators-new-delete`) and merges `std::deque::emplace_back`'s two updates
+  of its end across the chunk allocation that follows a map reallocation: if that allocation
+  throws, the deque's end is left in the freed map (a 40-line reproducer; correct with
+  `-fno-assume-sane-operators-new-delete`; CI's g++ 13 and 14 are unaffected). Found as a heap
+  corruption in the Hunt prover's tree (`~Prover`) when P13's fault fell inside Hunt; the
+  test leaves Hunt's own allocations out, and the build flag is the main loop's to decide.
+  **Issue 604** - a `std::bad_alloc` inside a synchronous ladder job is counted and reported
+  as "a contradiction in the rules code" (`ladder.cpp`); recorded, not changed, since a test
+  of it needs faults inside a job's prover, which risk issue 603's corruption on this machine.
+- **The review's 24 surviving mutants, re-run** on a fresh copy of the fixed tree with the
+  review's runner (its first tier now the round's tests, the expected killer first, stopping
+  at the first kill): all 24 killed, none equivalent. M03 and M04 by P1
+  (`mcts_fault_counts_describe_the_nodes_made`); M05 and M08 by P9
+  (`mcts_fault_key_collisions_count_the_nodes_made` - M05 through `check_invariants`' memory
+  sum, L7); M09 by P7 (`mcts_fault_every_injected_fault_surfaces`); M11, M14, M15 and M16 by P6
+  (`mcts_fault_an_undone_expansion_leaves_a_fresh_leaf` - M11 and M14 through the flat-state and
+  per-node memory checks, L7); M25 by P3c (`..._a_failed_exhausting_pull_leaves_the_node_incomplete`);
+  M26 by P2 (`mcts_fault_flat_turns_counted_and_drops_reported`); M27 by P2b
+  (`mcts_fault_fallback_listings_and_stops_count_the_expansions_kept`); M30 and M31 by P3
+  (`mcts_fault_a_failed_pull_leaves_its_node_as_it_found_it`, through the per-node memory
+  check); M36 and M38 by P12 (`mcts_the_flat_roots_steering_tables`); M41 by P5
+  (`mcts_fault_a_failed_reroot_with_the_ladder_on`); M43, M44 and M47 by P8
+  (`mcts_the_graph_after_a_reroot_finds_its_nodes`, through the table check, M3); M45 by P10
+  (`mcts_a_reroot_under_key_collisions_keeps_the_first_node_in_the_table`); M46 and M50 by P4
+  (`mcts_fault_a_root_hook_that_throws_after_the_reroot`). M28 survived every test of the round
+  as first committed, the groups included (160 of 160), and is killed by the recount test
+  added for it (`mcts_fault_boosted_turns_recounted_at_the_root`). The round's own fixes, each
+  against the lane's pre-round code (`mcts.cpp`, `ladder.cpp` and `assets.cpp` at 8adf90b): the
+  M1 tests (C++ and C API: "checked while a batch is waiting"), both L1 tests (6 searches
+  unlike the twin; "an inherited node evaluated"), the L2 test (4 deliveries with visits and
+  playouts apart), the L3 test (a husk), P2b (2,223 stops off) and the L12 tests (an asset
+  900 where 20,000 is right; faults swallowed) fail there; P8 and P10, regression tests of
+  2982287's re-root, pass there as they should.
+- **The normal path** is bit-identical to 03eca7a's on the review's three twins, run on the
+  fixed tree: the spec pass's probe (1,850 lines), the correctness pass's trace (9,048 lines,
+  `check_invariants` with its new checks included) and the mutation pass's twin (2,137 lines).
+- *Correction to the entry below:* "each part of the fix, taken out alone, fails one" did not
+  hold - 24 of the review's 50 mutants of 2982287 survived the lane's tests (all are killed
+  now, above). Also corrected: the re-root's "whole or not at all" did not cover the ladder's
+  verdicts taken and not recorded (L3), `advance_action` was not atomic past its first re-root
+  (L4), and the tree form was not exception-safe (L1).
+- `engine/README.md`: a line of L3's new text reflowed (it began with "- ", which Markdown
+  reads as a list item).
+- Checks: the engine at `--werror` (MinGW g++ 16.2, no warning), `t5d-tests` 718 of 718; each commit
+  of the round built at `--werror` on a copy and its tests run there before it was committed
+  (M3's and L7's with every round test present); ruff clean (CI's invocation, in `python/`);
+  verify ok; gate --tier commit: oracle layer ok, SMOKE TEST - PASSED (41 records compared, 0
+  declined; ftxi 8256 of 8256 and notation 3012 of 3012 reproduced; calibration 1.23x), proof
+  channel DISABLED. `prover.cpp` and `scanner.cpp` are unchanged: no Lazy SMP run is owed.
+
+Spec: none edited or proposed. No part of the spec describes exception safety, these tests,
+or the ladder's and the asset map's bookkeeping. The round brings the build further in line
+with §15.4's invariants under an allocation failure - visit counts consistent through
+backup (L2), virtual loss released (M1), re-rooting (M3, L3) - for D2's flat and tree forms
+(register D2) and the graph (C11, C12); with H37 for the pull that runs out of turns (P3c);
+and with H23/H41: no proof enters the tree or a record while the proof channel is off (L3).
+The asset map stays a prior (H2): no verdict logic changes.
+
+### 2026-11-08 - Issue 535 fixed: D2's flat form, a node's creation and a re-root exception-safe under an allocation failure
+
+The done-means audit found (build-log issue 535, on `lane/audit`) and the verification
+workflow diagnosed it: after a `std::bad_alloc` inside `gather`, a flat-form search used on
+crashed in its turn generator - an out-of-bounds read: `SearchRun::record` grows four tables
+in separate steps, a throw from `Hyper::judge` left the run's results shorter than its
+actions, and the node kept the generator, whose next `collect()` read past the end. Beside
+the crash: the generator had lost the box it was judging, ran on and reported `exhausted()`,
+so its node was marked complete with successors missing (a bound no proof backs, H37); a
+turn was taken in by six separate steps; the flat expansion was marked done before its
+first pull; and `ensure_child` made a node before it linked it, so a fault in the graph's
+table left a node the root does not reach, in every split's graph.
+
+The fix is `engine/src/mcts.cpp`'s alone - the generator (`src/hypercuboid.cpp`), shared
+with the gated mate detectors, is untouched, and `t5d/turngen.hpp` now says what it promises
+after a throw: only its destruction. Made from the workflow's validated diff, re-read and
+re-made. `pull_turns`, on any exception, truncates every per-node array to its size at entry,
+drops the generator (never asked again: the node keeps the turns it had, its children
+incomplete, as after a budget stop), puts back the counts of what it made and counts the
+drop (new `SearchStats::dropped_generators`); `flat_priors` computes everything before it
+sets anything, so it sits inside that rollback. `expand_flat` builds what can fail before
+it touches the node, and undoes the expansion if the first pull throws - the node's flags,
+`k0`, submit logit and turn arrays, the root's side tables and effort label, and the noise
+flag, now set only with the expansion (the validated diff restored it around the first pull
+only, so a throw while the generator was built still lost the root's noise). `ensure_child`
+takes back a node whose table entry threw, with its memory and the counts `make_node` made
+for it (classify's included); `make_node` uncounts a node it failed to make. Found beside
+it and fixed with it (build-log issue 600): a re-root was not exception-safe - a fault
+re-registering the graph's nodes left the table part-filled and the old root's side tables
+and effort label in place (the effort label then indexing the new root's edges out of
+bounds), and one before the swap left `advance_to`'s fresh node unreachable - so `reroot` now
+builds everything, the graph's new table included, before it changes anything, and
+`advance_to` takes its node back if the re-root did not happen; and the ply split's
+`set_priors` marked the root's noise drawn before the expansion was done, so a throw after
+the draw left the root noise-free for the rest of the search - now marked with the
+expansion.
+
+Tests (`test_mcts_memory.cpp`, `test_capi_search.cpp`; each fails or crashes on d8a54d3's
+search, and each part of the fix, taken out alone, fails one): the audit's flat-form test
+with the widened range (443 gather and 619 deliver faults, 804 generators dropped), after
+every fault no node stuck and every node's priors summing to 1; no node marked complete
+with a turn missing, every complete node checked against a full listing of its turns
+(widening off and on, 20,972 nodes checked); every allocation of a gather swept for a node
+the root does not reach, the counts against the nodes held (the ply split and the flat
+form in a tree and a graph, the tree form in a tree); every allocation of a re-root
+(`advance`, and `advance_to` onto a fresh node), against a search that never re-rooted and
+one whose re-root went through; root noise surviving every fault in the root's first
+expansion (both splits); and through the C API, a search reused after `T5D_ERR_MEMORY`
+(gather, advance) staying bit-identical to a C++ twin that keeps every invariant, and
+searching on after faults in delivery. `t5d/mcts.hpp`, `t5d/capi_search.h` and
+`engine/README.md` say the guarantees. `docs/BUILD_LOG.md`: issue 600, and issue 601 (a
+Python test's aggregate split by main's test-shard hook, found running the suite in two
+shards); the Lazy SMP timing rows; the session log. *(Review correction, 2026-11-09: at the
+merge of main faaa64e the lane's issue 601 gave way to main's own issue 601, which records it
+and its fix, d6cbdb7; issue 535, now on main, is marked resolved by issue 600.)* *(Review
+round, 2026-11-09, the entry above: "each part of the fix, taken out alone, fails one" did
+not hold - 24 of the review's 50 mutants survived; and the re-root's "whole or not at all",
+`advance_action`'s atomicity and "under every split" were narrowed or made true there.)*
+
+Spec: none edited or proposed. The change brings the build in line with §15.4's invariants
+(visit counts consistent through backup, virtual loss released, re-rooting keeping only
+reachable nodes) under an allocation failure - for D2's flat form (register D2), every
+split's graph (C11) and the re-root (C12) - and with H37 (a node's children complete only
+on an exhausted search), which a generator that threw broke; E1's root noise is drawn again
+after a failed expansion. No part of the spec describes exception safety.
+
 ### 2026-11-09 - The network job's three Linux-only failures: t5d-audit built, two tolerances fitted to what they measure
 
 Once sharded (issue 601), the network job ran its whole suite on Linux. It failed the same three
-tests on every run (42469920087 on c8a9c49, 42473372690 on 9bc10fc, 42476803590 on e15f173), and
+tests on every run (42469920087 on 03eca7a, 42473372690 on 7f79f9b, 42476803590 on d6cbdb7), and
 none of them fails on the development machine (issue 602):
 
 - **`tests/engine/test_decision_log.py`** needs `t5d-audit` beside the library, and the job built
@@ -720,7 +1297,7 @@ forbids reporting).
 
 ### 2026-11-08 - Kairos round 2 review fixes: the lineage table fails closed and its wiring is tested; what of Kairos is ftxi's, corrected
 
-The review of 28a102b..203fabd (2026-11-02: no HIGH, 1 MEDIUM, 12 LOW, 5 refuted), every finding
+The review of 01ebbe5..c9d051f (2026-11-02: no HIGH, 1 MEDIUM, 12 LOW, 5 refuted), every finding
 fixed or, for L12, put to the user (`docs/BUILD_LOG.md`, issues 577 and 578):
 - **The lineage table fails closed (M1, as the main loop decided).** `gate.engine_differential`
   requires `lineages` - no default that would count every implementation apart - and refuses a table
@@ -733,7 +1310,7 @@ fixed or, for L12, put to the user (`docs/BUILD_LOG.md`, issues 577 and 578):
   followed by a lineage named with its members (L1); a parse-only source's printed answers settle
   nothing, while its boards still count and its recorded divergences are still looked at (L11). New
   tests: the members a label names (L6), the lock file's three untested lineage checks (L8), the
-  eight combinations against frozen values from 28a102b's gate (L9), one primary source per
+  eight combinations against frozen values from 01ebbe5's gate (L9), one primary source per
   implementation (L5).
 - **What reading the pins found, corrected (L2, L3).** Kairos's exhaustive enumerator and its check
   test's pass set are ftxi's code translated - the pass set from ftxi's later commit f66c4ee - so its
@@ -753,14 +1330,14 @@ fixed or, for L12, put to the user (`docs/BUILD_LOG.md`, issues 577 and 578):
   `kairos:parse` kept (once `judges_actions` and the divergence rule are changed) - in
   `adapters/__init__.py`, `oracles/README.md` and issue 530. The comments that grouped its replay with
   "any move it can place" corrected, and its two stages attributed to CHECKPOINT 9's brief, not H52 (in
-  the adapter, the driver, a test's docstring and this file's entry for 203fabd).
+  the adapter, the driver, a test's docstring and this file's entry for c9d051f).
 - **Wording (L9, L10).** "Lineages" in `Gated.oracles`' comment, the gate's docstring and the README's
-  gated summary; "every verdict and ungated reason" in issue 573 and this file's entry for 0435199; the
+  gated summary; "every verdict and ungated reason" in issue 573 and this file's entry for 6b4f2d3; the
   H47 row's built date (2026-11-02).
 - The Kairos driver's header comments changed with them, so Kairos was rebuilt (no golden file hashes
   its driver). The review's mutation survivors re-run on the fixed tree with its runner: G03, G16,
   G18, G19, L01, L02 and L08 killed; R06 survives, equivalent as the review judged it (no test added);
-  six more mutants of the fixed lines, all killed. Main merged first (73a048f).
+  six more mutants of the fixed lines, all killed. Main merged first (54c7658).
 
 Spec: register H47, H52, H26, H37, H32; §11.0 ("Tiered CI", "Kairos, the fourth oracle", its table
 row) - proposed edit 401 (what of Kairos is its own), edit 400's Chess in 5D clause aligned; issues
@@ -860,7 +1437,7 @@ reading, which was never committed:
 - **The four existing oracles gate as before:** each is its own lineage; the tests give every
   verdict and ungated reason as before - the gated summary says "oracle lineages" (reworded after
   the review of 2026-11-02: this said "every verdict and message", and its test compared the gate
-  with itself; it now holds the values 28a102b gave) - and the nightly tier with the table on and
+  with itself; it now holds the values 01ebbe5 gave) - and the nightly tier with the table on and
   Kairos absent gates exactly Standard - Half Reflected and Standard - Reversed Royalty.
 - `CONTRIBUTING.md`'s "Changing a pin" adds reading the NOTICE, credits and code and updating the
   lineage; `oracles/README.md`'s gating conditions say lineages.
@@ -945,7 +1522,7 @@ test docstring only.
 
 `docs/BUILD_LOG.md` gains a new section, "Done-means audit (2026-10-24; finished
 2026-11-02)", after "Parked, and why". It is the gate lane's step-2 audit, checked against
-main 28a102b's code and design documents (CHECKPOINT 9's rows and CHECKPOINT 10's ruling
+main 01ebbe5's code and design documents (CHECKPOINT 9's rows and CHECKPOINT 10's ruling
 included). It holds:
 
 - **Section 15.2, row by row:** the tests that establish each row, what they assert, at what
@@ -1020,7 +1597,7 @@ of each test's id, and `lane/fix535` found a module whose last case checks what 
 recorded (`tests/engine/test_flat_head.py::test_some_case_leaves_a_board`, issue 601) - split
 across shards it failed, or was skipped and checked nothing. Files now go to shards greedily by
 test count, largest first, ties by path, so every job that collects the same files computes the
-same split. Checked on the suite at main dbf9be8: 1,976 tests as 494 / 494 / 495 / 493 in 13 /
+same split. Checked on the suite at main f668b3e: 1,976 tests as 494 / 494 / 495 / 493 in 13 /
 13 / 14 / 14 files, no file in two shards, union equal to the whole. Unset, every test runs, as
 before.
 
@@ -1034,7 +1611,7 @@ evaluation identity added an `unsigned long long` literal to a `std::uint64_t` c
 signed move count. On Linux `std::uint64_t` is `unsigned long`, and g++ 13 and 14 report the
 promotion under `-Wsign-conversion`, an error under `--werror`; MinGW's `std::uint64_t` is
 `unsigned long long`, so the local builds never saw it. The line came in with A6
-(7bccea6, 2026-10-17), while CI was down. The constant is now a `std::uint64_t`, so the sum
+(94f64b8, 2026-10-17), while CI was down. The constant is now a `std::uint64_t`, so the sum
 stays in one type; the identity's value is unchanged bit for bit (the same sum modulo
 2^64), so no MCGS table, cache key or test moves. With the library building, CI's test build
 showed the same promotion twice more - `engine/tests/test_capi_search.cpp:148` and
@@ -1048,10 +1625,10 @@ Spec: none - a portability fix; no part of the spec describes it.
 
 ### 2026-11-02 - A5 review fixes: the figures re-weighed under CHECKPOINT 9's phase form, no 2x flag left standing; the token set held exact; the survivors killed
 
-Two reviews of A5 (`fd83390`, `f89c79f`, `72e5f96`: one of spec and correctness with probes, one a
+Two reviews of A5 (`5fbeedf`, `bf49a6d`, `6670d9e`: one of spec and correctness with probes, one a
 mutation pass - 48 mutants, 32 killed, 1 equivalent, 15 survivors, no behavioural bug), the main
-loop's decisions binding. Written on 2026-10-24 after main `7483103` was merged in, stopped there by
-the account's usage limit, and committed on 2026-11-02 after main `1c085ac` and `28a102b` were
+loop's decisions binding. Written on 2026-10-24 after main `b73d073` was merged in, stopped there by
+the account's usage limit, and committed on 2026-11-02 after main `cb72413` and `01ebbe5` were
 merged in too (the three entries below).
 
 - **The measurements against CHECKPOINT 9** (`engine/token_counts.py`; `docs/MEASUREMENTS.md`, "A5"
@@ -1071,7 +1648,7 @@ merged in too (the three entries below).
   withdrawn. The measured figures' conditions now say action starts only (the ply split's
   mid-action leaves and deeper nodes not measured); the JSON lines carry each position's decisions
   (written once every record is read), so every pooled figure can be re-computed from them; the
-  tool's commit corrected (`72e5f96`, where `token_counts.py` first exists).
+  tool's commit corrected (`6670d9e`, where `token_counts.py` first exists).
 - **The token set held exact** (`net/state.py`). Validation required the mask to cover the occupied
   cells only, and the conversion kept a piece-centric input's cells by union, so an A5 state whose
   moves were cut kept stale destination tokens (the review's probe: 224 tokens against a fresh 197).
@@ -1123,7 +1700,7 @@ merged in too (the three entries below).
   `test_the_layout_follows_the_mask`, `test_the_bench_takes_piece_centric`).
 - **Checks** (the engine DLL built: "ninja: no work to do."): ruff "All checks passed!" and "111
   files already formatted"; the whole pytest suite with `T5D_REQUIRE_ENGINE=1` in two workers on the
-  fixed tree after main `1c085ac` was merged (`28a102b` brought documents only) - `tests/engine`
+  fixed tree after main `cb72413` was merged (`01ebbe5` brought documents only) - `tests/engine`
   "344 passed, 1 skipped in 791.24s (0:13:11)", `tests/net` and `tests/train` "1589 passed in
   5445.70s (1:30:45)" (a loaded machine); `verify` every check ok but `pins` and the boundary's copy
   check, both "kairos is not checked out" in this worktree - not synced, since `harness.py sync`
@@ -1139,9 +1716,9 @@ proposed edits 196 (amended), 197 and 198 (rewritten), 199 (new: §7.10's N\* un
 the "A5" section and its section 15.3 row (the phase form; the 2x verdicts re-stated; the conditions;
 the commit).
 
-### 2026-11-02 - main (28a102b) merged into lane/net: the CHECKPOINT 10 design documents and their plan
+### 2026-11-02 - main (01ebbe5) merged into lane/net: the CHECKPOINT 10 design documents and their plan
 
-Main since `1c085ac` (the CHECKPOINT 10 design documents from upstream - the user's ruling that ftxi
+Main since `cb72413` (the CHECKPOINT 10 design documents from upstream - the user's ruling that ftxi
 and Kairos are one lineage for H47's two-oracle bar - and the build log's plan for it) merged into
 `lane/net` (M23: merged, never rebased) before A5's review fixes are committed. Documents only:
 nothing under `python/`, `engine/` or `oracles/` changed, and nothing in it touches A5, C26 or G10.
@@ -1151,9 +1728,9 @@ state" main's).
 Spec: no part of the spec describes the merge itself; the merged change's entries name theirs. No
 edit proposed.
 
-### 2026-11-01 - main (1c085ac) merged into lane/net: A5's lane beside Kairos and CHECKPOINT 9's brief
+### 2026-11-01 - main (cb72413) merged into lane/net: A5's lane beside Kairos and CHECKPOINT 9's brief
 
-Main since `7483103` (Kairos pinned and wired as two pending sources, H52, with its review fixes;
+Main since `b73d073` (Kairos pinned and wired as two pending sources, H52, with its review fixes;
 CHECKPOINT 9's brief read into the build log) merged into `lane/net` (M23: merged, never rebased)
 before A5's review fixes are committed. No code conflict: main changed nothing under `python/` or
 `engine/`. CHANGELOG: main's entries, the lane's four entries (the first merge and A5's three) on
@@ -1169,9 +1746,9 @@ changed (the review fixes' commit runs it whole).
 Spec: no part of the spec describes the merge itself; the merged changes' entries name theirs. No
 edit proposed.
 
-### 2026-10-24 - main (7483103) merged into lane/net: A5 beside G9, CHECKPOINT 9 and E10
+### 2026-10-24 - main (b73d073) merged into lane/net: A5 beside G9, CHECKPOINT 9 and E10
 
-Main since `0e37093` (G9's bounded AMD attempt, the upstream design documents with CHECKPOINT 9,
+Main since `40a1f1c` (G9's bounded AMD attempt, the upstream design documents with CHECKPOINT 9,
 the build log's CHECKPOINT 9 plan, E10's verification v3 in the search and H44's audit-lane
 tooling) merged into `lane/net` (M23: merged, never rebased) before A5's review fixes. One code
 conflict, `python/t5d/engine/netplay.py`'s arguments: the lane's `--piece-centric` and E10's
@@ -1232,14 +1809,14 @@ binding only; no training run.
   together; A8; the block-causal scope; no registers) on synthetic and engine positions, the training
   rows' batch and targets (an engine game's, square labels included, and synthetic ones), the board
   permutation, mirror and relayout outputs, `mirror_tokens`, the engine scope's tokens and the
-  evaluator's evaluations - identical between `0e37093` (main) and this commit; the 437th, the smoke
-  run's losses, differs between two runs at `0e37093` too (autograd's CPU
+  evaluator's evaluations - identical between `40a1f1c` (main) and this commit; the 437th, the smoke
+  run's losses, differs between two runs at `40a1f1c` too (autograd's CPU
   reductions are not deterministic). The parameter fingerprints (`tests/net/test_params.py`) pass.
 
 Spec: §9.1, §13.1, §14.4, §15.3; register A5, M4, M16, M18, M19, M24. BUILD_LOG: register row A5;
 spec issues 255-257; proposed edits 197 (a §15.3 row), 198 (§14.4's figures written back, objections
 (2) and (3)). MEASUREMENTS: the §15.3 table's A5 row and the "A5" section (Review correction,
-2026-10-24: the engine there is main `0e37093` with this commit's tool, `72e5f96` - not `f89c79f`).
+2026-10-24: the engine there is main `40a1f1c` with this commit's tool, `6670d9e` - not `bf49a6d`).
 
 ### 2026-10-23 - A5's plumbing: the evaluator and the training rows convert at the network's edge; games end to end; purity
 
@@ -1348,7 +1925,7 @@ annotated; the waiting list, "Current state", step 2's order and the H23, H26, H
 rows brought in line; CHECKPOINT 9's interim "one implementation" reading marked superseded.
 No code changed.
 
-Spec: none edited here. The ruling as written upstream (b5a33e4) - §11.0, §12.6; register
+Spec: none edited here. The ruling as written upstream (027082b) - §11.0, §12.6; register
 H23, H26, H34, H47, H52, reversal 33 - is the plan's; nothing is proposed.
 
 ### 2026-11-01 - Design documents: the CHECKPOINT 10 ruling, from upstream - ftxi and Kairos one lineage for the two-oracle bar
@@ -1374,8 +1951,8 @@ Kairos answers and ftxi does not). Edited upstream; nothing proposed here.
 The user's CHECKPOINT 9 brief reached the main loop on 2026-11-01, after the build had
 stopped at the account's usage limit on 2026-10-24. `docs/BUILD_LOG.md`'s "CHECKPOINT 9"
 section now carries the brief's rulings and what the build does with each: the design
-documents had already reached main as the user's own commits (7ed03a8..74c1ab9, merged in
-765c5b6, identical to the working tree), so no separate commit was made; the register-status
+documents had already reached main as the user's own commits (193fa91..644a1ea, merged in
+c22c87a, identical to the working tree), so no separate commit was made; the register-status
 rows of the retired NNUE (H6-H9, H20, F4; 6d and 6q void) relabelled; rows for G10 and for
 C26/C27 (low priority, in the cached path behind its flag, after each lane's current order;
 the conditioning-offset hook parked with C3, applying C26's rule when built); I7's and M18's
@@ -1526,9 +2103,9 @@ confirmed: the count from the exhaustive enumerator, the driver route, the parti
 independence from ftxi) and 363 (the opponent role and the boundary); issues 524-534 (533:
 the smoke run's results; 534: the instruction files' "three oracles", the user's).
 
-### 2026-10-23 - main (62ff24d) merged into lane/search: E10's replica prior read by the flat form's per-board pruning
+### 2026-10-23 - main (529098d) merged into lane/search: E10's replica prior read by the flat form's per-board pruning
 
-Main since 88d2007 (A8, engine ABI round 3, D2's flat head and the flat form's policy target with
+Main since 2b752ba (A8, engine ABI round 3, D2's flat head and the flat form's policy target with
 records version 2, MT-04) merged into `lane/search` (M23: merged, never rebased). Two code
 conflicts, each resolved so both sides' behaviour survives:
 
@@ -1568,7 +2145,7 @@ option's prior is its turns' unsteered priors, E10's replica prior). No new issu
 
 ### 2026-10-23 - E10 review fixes: self-play without the asset map until I2's steered visits are validated, the additive boost monotone and capped, a donor search no longer takes its successor's verdicts, Hunt not asked where the root's settling scan asks its question, every "only confirmed proofs enter" gate tested with a certificate E4 rejects
 
-Two reviews of E10 (`lane/search` 62d4310 and 2931ffa): reviewer A on the spec, the proof channel
+Two reviews of E10 (`lane/search` 1de7b46 and f0b8e22): reviewer A on the spec, the proof channel
 and the concurrency (probes); reviewer B by 52 mutants (25 survived) and 16 verified tests. The
 main loop's decisions bind where it gave them.
 
@@ -1693,7 +2270,7 @@ H44 (tooling built), H42, H19, H23, I3, I15. Proposed: edit 146; issues 191-197.
 
 ### 2026-10-23 - E10 redone, commit 1: verification v3 wired into the search per 6b″'s table - Hunt under 100 boards, the settling scans under 50, the asset map's boosts and I2's steered visits, Guard's hook off; every proof withheld while the proof channel is off
 
-E10 was lost with the machine; redone from the documents (`lane/search`, from main 88d2007).
+E10 was lost with the machine; redone from the documents (`lane/search`, from main 2b752ba).
 
 - **The verification ladder** (`engine/include/t5d/ladder.hpp`, `src/ladder.cpp`; register H1,
   H10, H14): at a decision's turn-start root, **Hunt** under 100 boards (H43) and the root's
@@ -1775,7 +2352,7 @@ lifetime, §11.3's proof stores); issues 177-190 logged, 180 put to the user.
 ### 2026-10-23 - CHECKPOINT 9 taken in: the design documents updated upstream, the build's plan for each ruling in the build log
 
 The user updated the design spec, the decision register and the architecture document
-upstream (74c1ab9; main took them by merge). `docs/BUILD_LOG.md` gains a "CHECKPOINT 9"
+upstream (644a1ea; main took them by merge). `docs/BUILD_LOG.md` gains a "CHECKPOINT 9"
 section saying what the untrained build does with each ruling: Kairos as the fourth
 oracle (H52) built in the gate lane, its golden files and triage in the quiet-machine
 block; the phase form (C26) and refresh inside a turn (C27) built in the cached path for
@@ -1900,7 +2477,7 @@ describes the test file, and no edit is proposed.
 
 ### 2026-10-23 - D2 flat head review fixes: the flat target pruned per board after marginalising, the optimistic prior refused under the flat form, the loss's claim corrected, the survivors killed
 
-Two reviews of D2's flat head (`cd310be`) and the flat form's policy target (`c3f9038`): one of spec
+Two reviews of D2's flat head (`3a870fb`) and the flat form's policy target (`fc7e2c1`): one of spec
 fidelity and correctness, one a mutation pass (66 mutants, 17 survivors, no bug found). In the
 network lane - no training run: optimiser steps only the smoke steps on synthetic rows.
 
@@ -2013,7 +2590,7 @@ head (BUILD_LOG issue 165). In the network lane - no training run.
 - **Parameters**: +257 (256 + 1) - the v1 is 22,965,683 (was 22,965,426), F2's arm 46,895,091, A8
   on 25,594,803. The head draws from a generator of its own (`model.d2_seed`), so every parameter
   that existed before it is drawn as before, bit for bit - pinned by fingerprints recorded at
-  `9c59cb0` (the small network at seed 7 under the default and the prototype flags, the v1 at seed
+  `188707a` (the small network at seed 7 under the default and the prototype flags, the v1 at seed
   0) and by the head's own draw (`test_params.py`).
 - **Delivered**: `NetworkEvaluator` and `CachedNetworkEvaluator` give every board's leave logit
   (`Evaluation.board_logits`, the input's board order), and `check_evaluation` checks them (one per
@@ -2043,7 +2620,7 @@ register D2, F1, M21 (D7, D8, B8 read). Issues 241, 242(e); proposed edit 187.
 
 ### 2026-10-23 - Engine ABI round 3 review fixes: the exchange label's recaptures read where they are made; the Q6 fallback, mid-action placement, the pin's royal half, the C API's bits and labels and every label reading tested; the labels' cost measured
 
-Two reviews of engine ABI round 3 (5d8b12b, 0986472): one of the rules (probes on hand-built
+Two reviews of engine ABI round 3 (baebd1c, 4a80ad5): one of the rules (probes on hand-built
 positions and random play), one of 42 mutants, 14 of which survived every test tier - one
 finding HIGH, seven MEDIUM, five LOW. All HIGH and MEDIUM fixed; the LOWs fixed but for the
 deprecated alias (below).
@@ -2224,7 +2801,7 @@ BUILD_LOG issues 172-174. §15.2's A7 row is unchanged (the mirror test now cove
 
 ### 2026-10-23 - A8 review fixes: the cost flagged under the 2x rule, the cached node's share counted, the FFN's form pinned, non-square padding and FP32 values tested
 
-A review of register A8 (`lane/net` a1ec09b: spec fidelity, and 24 mutants run at test time, five
+A review of register A8 (`lane/net` c2dd245: spec fidelity, and 24 mutants run at test time, five
 of which survived). In the network lane - no training run.
 
 - **The cost was presented as confirmed while more than 2x off section 15.3's estimate.** The row's
@@ -2368,7 +2945,7 @@ survivors.
   `apply_qat` validates its configuration, so its "another 8-bit format" refusal is tested with a
   validated one; the clamp before the cast documented as unobservable on this backend (torch 2.13's
   CPU cast saturates by itself); the gradient figure given as bound 0.5, measured at most 0.117
-  (CHANGELOG's G8 entry and the f2007c7 message said "within 0.12"); the DeepSeek-V3 report's
+  (CHANGELOG's G8 entry and the 3f0e87f message said "within 0.12"); the DeepSeek-V3 report's
   finding that Hopper FP8 GEMMs accumulate in about 14 bits - verified against the report - logged
   as a placeholder for 6w's GPU arm (238(f)).
 
@@ -2447,10 +3024,10 @@ cache refuses FP8 attention while C2 is deferred). Spec issue 238.
 
 ### 2026-10-23 - D2 flat form review fixes: children complete only when every successor is there; a point's realisations walked once; the per-board scores, widening, fallback and cost tested
 
-Two reviews of D2's flat form (42f3590, 3251857, 95d23cc): one of soundness (probes against
+Two reviews of D2's flat form (b1e9d00, c39e253, 943e0d7): one of soundness (probes against
 E4's listing over 1,171 positions under seven rulesets) and a pass of 31 mutants of the flat
 code, 12 of which survived every test tier - three findings HIGH, four MEDIUM, eight LOW.
-Merged first: main (the network heads, M21's training loop) into `lane/engine` (22a7337,
+Merged first: main (the network heads, M21's training loop) into `lane/engine` (b40f631,
 M23's merge); there the training generator (`python/t5d/train/selfplay.py`) now refuses the
 flat form by name until its policy target - D2's per-board marginals, the net lane's flat
 head - exists (it named the retired whole-turn arm), issue 234(b) and the D2 row say so, and
@@ -2516,7 +3093,7 @@ its legal-moves flag no longer reads split 1 as the whole-turn arm.
 - Docs: the three flat-form entries below corrected where they claimed what was untrue or
   untested; docs/BUILD_LOG.md (the D2 row; issues 163, 165, 167-171; edits 132, 134);
   docs/MEASUREMENTS.md (the many-realisation point's cost before and after; the memory per
-  flat node - 136 KB, the estimate x1.20 of the heap, about 137 KB and x1.23 at 3251857 -
+  flat node - 136 KB, the estimate x1.20 of the heap, about 137 KB and x1.23 at c39e253 -
   with their conditions; the tree form's deepest turn start, 3-6 with §8.2's gates and 3-8
   across its gate readings, reconciled with the D2 row - B-L9).
 
@@ -2857,7 +3434,7 @@ follows.
   finish after each first move; nodes, points, regions, boxes removed, the most positions
   held) on 571 positions - 300 tiny multiverses under random rulesets, random games from the
   sparse starts under five rulesets and from every named variant - unlimited and under node
-  budgets that stop it, hashed; the hash recorded at 2f07079, before the generator, and equal
+  budgets that stop it, hashed; the hash recorded at e8d3688, before the generator, and equal
   after it. `tiny_position` moved, unchanged, from test_detectors.cpp to
   `engine/tests/test_tiny.hpp` to be shared.
 - **Spec 15.2's row** (`engine/tests/test_turngen.cpp`): on 300 tiny multiverses (265 with
@@ -2904,7 +3481,7 @@ nine low; all fixed.
   evaluation and the search's record of its root read 37 turns (`tests/engine/test_evaluator.py`;
   the random head's outputs clamp to 0, so the old checks could not tell turns from log1p).
 - **LOW**: the pre-D3 parameters pinned - a fingerprint of the 64 parameters a small network had
-  at 47bc857 (seed 7), recorded there, under the default flags and with every prototype on
+  at 2dcffe0 (seed 7), recorded there, under the default flags and with every prototype on
   (`tests/net/test_params.py`; three float64 sums, not a hash of the bytes, so as not to depend
   on float32 libm across platforms); D9's submit mask tested on an offered but illegal submit
   (`tests/net/test_model.py`); the reply map's `ambiguous="turn"` arm on a reply with one masked
@@ -3054,7 +3631,7 @@ already consumes them.
 
 ### 2026-10-23 - D2 tree form review fixes: a carried inherited root is evaluated; the inherited value's refusal; the untested readings tested; the counts committed
 
-Two reviews of the tree form (f2b4679) - one finding HIGH, six MEDIUM, nine LOW, and a
+Two reviews of the tree form (af7aef0) - one finding HIGH, six MEDIUM, nine LOW, and a
 pass of 24 mutants of its code of which 13 survived the tree tests.
 
 - **The root is always evaluated - now true** (`engine/src/mcts.cpp`). A re-root onto
@@ -3224,7 +3801,7 @@ replaces it).
 
 ### 2026-10-23 - Network A6: the turn-state inputs embedded into the global registers
 
-Register A6's network side (the engine side, ABI round 1, merged at e8de15e): the three exact
+Register A6's network side (the engine side, ABI round 1, merged at 3f04f8e): the three exact
 turn-state counts - mandatory boards still to move, optional boards still playable, moves
 already made in the action - reach the network.
 
@@ -3347,7 +3924,7 @@ note; issue 156).
 
 ### 2026-10-22 - ABI round 2 review fixes: an MCGS residual fires on a draw lag, a missing uncertainty signal refused where it is read, the side table and the noise's edge set tested
 
-Two reviews of engine ABI round 2 (7c650d3, 7828d0d, 9d919c2) found four medium faults
+Two reviews of engine ABI round 2 (12df293, 3b7b151, 5769d41) found four medium faults
 and eight low ones; reviewer B's twelve mutants left ten alive. Every medium one is
 fixed, and every low one but part of B-L7 (below).
 
@@ -3708,7 +4285,7 @@ fixed, and every low one but part of B-L7 (below).
 
 ### 2026-10-22 - A7 review fixes: the other colour's refresh view without the anchor's moves; the mirror's own timeline map
 
-Two reviewers' findings on the A7 commit (00c4c41); no wrong result in the canonicalisation
+Two reviewers' findings on the A7 commit (c4b6b3a); no wrong result in the canonicalisation
 itself.
 
 - **A refresh's other-colour view** (`net/cache.py`, `viewed_by`; spec issue 229, new). It
@@ -3902,7 +4479,7 @@ player's side, as AlphaZero, Lc0 and KataGo do.
     `ConcurrentSolvedStore` and `DisproofStore`. 8 threads released at once probe and write
     185 positions spread over 60 of the 64 shards. Every shortest proof, every deepest
     disproof and exactly one entry per position must be kept.
-  - Built against the old code (a scratch copy of `e8de15e` with this file, `ShardLock`
+  - Built against the old code (a scratch copy of `3f04f8e` with this file, `ShardLock`
     named `std::shared_mutex`), each failed in every run: 50 of 50 on 2026-10-22 (the lock
     test with 136-876 overlaps a run, and lost increments in 31 runs; the store test by
     crashing), as in 120 of 120 on 2026-10-17. With `ShardLock` both passed 300 of 300 runs
@@ -3935,7 +4512,7 @@ player's side, as AlphaZero, Lc0 and KataGo do.
   for a plain mutex - not measured here.
 - The truth's sources. `scanner.hpp`, `scanner.cpp`, `prover.hpp` and `prover.cpp` are in
   `T5D_TRUTH_SOURCES`, so the truth's code signature changes again. It already differed from
-  M17's: `9be6f04` typed the prover's hash constants, and `e554da0` changed the prover's
+  M17's: `cc1e224` typed the prover's hash constants, and `7c932d2` changed the prover's
   reported line. No verdict logic changes. M17's verdicts stand on what they were read from:
   every 6b″ refutation and mate was confirmed by E4 alone. M17's 5-thread rates, though, were
   measured with the old lock's race and cost, so they may understate what 50 ms reaches.
@@ -4228,7 +4805,7 @@ Thirteen review findings on the two entries below (none refuted).
   ruleset can meet the gating conditions with that tier's oracles alone. `docs/BUILD_LOG.md`:
   the H47 row (what changed for a restricted run; the `AGENTS.md` lines put to the user -
   never edit the baseline or its pin by hand, never record a `LOSS` to make a gate run
-  pass); issue 126's ruling line in main's exact wording (a8a5920) and its built note;
+  pass); issue 126's ruling line in main's exact wording (c0fe27c) and its built note;
   issues 132 (a) and 133; proposed edit 104 carries H33's double-edit limit to the
   baseline's pin.
 - **The ftxi question** (`docs/checkpoints/upstream/ftxi-check-test-passed-boards.md`): the
@@ -4565,7 +5142,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   by temporary mutants of the worktree's own files, restored afterwards: B16 on frozen rows
   fails the definition and cached = dense; B16 at the anchor fails the root-refresh and
   refresh-fork rows - in the cached path alone. (The review fixes above re-ran the anchor
-  mutants on the suite before their new tests - B17's commit, fe99a55 - patched in at test
+  mutants on the suite before their new tests - B17's commit, 7aa963c - patched in at test
   time, over `test_cache`, `test_d8` and `test_complexity`: in the cached path alone B16 at the anchor fails those rows and every
   other that compares a refreshed anchor's evaluation with the reference or the dense model -
   the 6y, BF16, D8 and C24 cases, 10 in all; in both paths it fails the root-refresh, BF16 and
@@ -4733,7 +5310,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   before). No t0database record writes `x` on a move that takes nothing; 661 of them write
   captures without `x` (8,034 moves), which the reader now reads with a warning, as before
   but for the warning. `docs/MEASUREMENTS.md` unchanged. Re-run after the review fixes: this
-  build's `t5d-measure` and the parent commit's (cb7af77) byte-identical again, standard
+  build's `t5d-measure` and the parent commit's (ac7e1cd) byte-identical again, standard
   output and error, for `--turns --turn-summary` and `--moves-after-shift --summary`, each
   with and without `--legal` (716 of 761 records to their end in each).
 - `engine/README.md` (the reader's readings, the adapter's warnings, the corpus note, 6b's
@@ -4747,7 +5324,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   does not say which (step 2 and H31 had "as both say"); H51's writers; spec issue 127's
   measurement superseded (a two-oracle rule would now ungate Turn Zero) and H23's row stale
   on what nightly gates (left to the issue-122 component, which changes the gating); CI
-  started no run on `lane/gate` from a5e61d9 on - account billing - so H51 is unconfirmed on
+  started no run on `lane/gate` from f13d5ea on - account billing - so H51 is unconfirmed on
   Linux and the nightly dispatch still owed; `CLAUDE.md`'s "rulings R1-R10" (R1-R11 now) put
   to the user, the instruction files being theirs to change (H38's row).
 - Spec: §11.0 ("Running the gate": capture markers read leniently - built; "A
@@ -4773,7 +5350,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   (`T5D_TRUTH_SOURCES`: the state machine, movegen, check, legal ... untouched). Commit 1
   changed two of them, `prover.hpp` and `prover.cpp` (the line the prover reports, only:
   no verdict, distance or node count changes), so after this component the truth's code
-  signature differs from main's - as main's already differs from M17's (d96d6d9; 9be6f04
+  signature differs from main's - as main's already differs from M17's (f3d36c9; cc1e224
   typed the prover's hash constants). The main loop runs the Lazy SMP timing test before
   merging.
 - `engine/include/t5d/capi.h`, `src/capi.cpp`, `src/capi_internal.hpp`: `t5d_expansion`
@@ -4838,7 +5415,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   `docs/BUILD_LOG.md`: register A6 (engine side built, tested), C11, C14; spec issues
   143-145 (A6's arithmetic is not the rules' count; the two undefined counts read; §15.4's
   turn structure and the count); proposed edits 116-118.
-- Review fixes, the same day (after 7bccea6). The C API's root count was tested only at
+- Review fixes, the same day (after 94f64b8). The C API's root count was tested only at
   0 and 1, which the old flag gives too: a search reading the handle's count as the flag
   passed every engine and Python test. `capi_search_takes_the_moves_made_from_the_game_a6`
   and `test_the_root_takes_a_count_the_turn_start_flag_cannot_give_a6` now build a search,
@@ -4909,7 +5486,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   past such a node from it (`proof_line` does, when one is recorded) and stops at the
   defender's turn - continuing needs the defender's longest defence, which only an
   enumeration of the defender's actions finds (not cheap). So the tests check the
-  contract. (Corrected at review: this entry and e554da0's message first gave as the
+  contract. (Corrected at review: this entry and 7c932d2's message first gave as the
   reason that Guard records no certificate, 6b″ having measured it without one - but
   6b″'s tool ran Guard with `record_certificate` on, for its cross-check against E4
   (M17's "every refutation confirmed by E4"); only Guard's default records none.)
@@ -5165,7 +5742,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
 - `docs/BUILD_LOG.md`: register M22 measured; step 5's M22 note; spec issues 140-142
   (what "optional moves played" means; the ranges and the unit; nothing maps the
   figures to an order of the D2 work - put to the user); proposed spec edits 110-115.
-- Review fixes, the same day (after 2864be0). The D2 reading counted "where the arms
+- Review fixes, the same day (after f5948ab). The D2 reading counted "where the arms
   differ" by the moves played (4.1 / 19.7 / 50.9% of turns of more than one move);
   it is now counted by the turn's start, as §8.2's cost argument and the built ply
   split count it (15.1 / 65.2 / 99.4%), in MEASUREMENTS, issue 142 and edit 110. An
@@ -5183,9 +5760,9 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   K's turn-construction gate get the edit 6x gets (edit 115); the issue and edit
   lists start new Markdown lists, so that GitHub shows 140 and 110 as written; the
   `turn_summary_group` line and the `"error"` path documented; and the conditions
-  name the commit the figures were counted at (607e4b1, rebuilt and re-run there:
+  name the commit the figures were counted at (c4b45eb, rebuilt and re-run there:
   byte for byte), where the first version said only "this change", and say what the
-  fixes changed in the run's output against 2864be0's (one count, fields added,
+  fixes changed in the run's output against f5948ab's (one count, fields added,
   nothing else).
 - Spec: §8.2 "Measure first" and §15.1's Phase 1 row (the M4 write-back proposed:
   edits 110 and 114); §13.1 6x ("after the turn-width measurement", now met; edit
@@ -5418,7 +5995,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   PASSED` (calibration 1.33x); `gate --tier nightly` ok - oracle layer ok, `engine
   differential: PASSED`, gated Standard - Half Reflected and Standard - Reversed
   Royalty (calibration 1.20x). In CI (ubuntu-24.04) the commit tier passed with the
-  engine at 3a46da9 (run 39009070712, calibration 0.75x); the nightly is still to be
+  engine at e8a4f5d (run 39009070712, calibration 0.75x); the nightly is still to be
   run there. The engine compared with every recorded oracle answer (all six golden
   files): 169 disagreements, every one matched by an entry, every entry matched. The
   proof channel stays disabled.
@@ -5497,16 +6074,16 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
 ### 2026-10-17 - Build log: the CHECKPOINT 6-7 rulings, the plan by lane, the register brought up to date
 
 - `docs/BUILD_LOG.md`, "Where things stand": a section "CHECKPOINTS 6 and 7 - ruled
-  upstream (design documents f07568c)" - what the rulings decide, by register ID
+  upstream (design documents 65b8cce)" - what the rulings decide, by register ID
   with the register's status words; how each question of 2026-10-04's "Waiting on
   the user" is answered (Q-A -> H47, Q-B -> H48, the GPU question -> M19, issue
   121 -> M20 except D8's readout form, A5 -> behind its flag, D8's whole-turn token ->
   the flat form (D2), the training rows -> M21 and I12-I20); what changes for the
   build. Then "Current state (2026-10-17)": what is on main; where each lane stands,
-  by commit, as of 16:54 (gate: H47 with its review's fixes, 7530e36, issues 122-124
+  by commit, as of 16:54 (gate: H47 with its review's fixes, e150182, issues 122-124
   put to the user, edit 98 pending the ruling on 122, the gate with the engine
-  configured in progress; engine: M22 measured, 2864be0, issue 142 put to the user;
-  net: F5 and F6 built, f830f31, issue 204 put to the user - none merged); how to
+  configured in progress; engine: M22 measured, f5948ab, issue 142 put to the user;
+  net: F5 and F6 built, dc33b71, issue 204 put to the user - none merged); how to
   recreate a lane's worktree, and how the lanes share the one machine; the plan -
   three lanes in worktrees (the main loop's plan under M23's rule), the number blocks
   (spec issues: gate 122-139, engine 140-199, net 200-299, main loop 300 and up;
@@ -5521,7 +6098,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   (nothing that blocks: the standing items, and the lanes' issues put to the user as
   each lane merges). "Recovery": the comparison with the last green CI runs, made after
   the user's `gh auth login` - the same results; the engine job's one failure on
-  3b33942 (g++-13) is an intermittent five-thread Guard test, queued for the engine
+  497d649 (g++-13) is an intermittent five-thread Guard test, queued for the engine
   lane. The old state stays as history under "State on 2026-10-04 (before
   the loss)", its held, running, remaining and waiting lists superseded; the recovery
   notes point at the plan.
@@ -5606,7 +6183,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
 ### 2026-10-17 - Recovery after the lost machine: the toolchain rebuilt, main verified, the losses listed
 
 - `docs/BUILD_LOG.md`: "Recovery after the lost machine" at the top - what survived
-  (everything on `main` at 3b33942), what was lost because it was never pushed (the
+  (everything on `main` at 497d649), what was lost because it was never pushed (the
   gate-with-engine branch with its 113 triaged known divergences; engine E10) and
   where each is redone; main's verification on the rebuilt machine (engine 526 of
   526, network 775 passed and 2 skipped, `verify`, `selftest`, the commit-tier
@@ -5641,13 +6218,13 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
 - `engine/src/prover.cpp`: the prover's 64-bit hash constants are written as
   `std::uint64_t{...}` instead of `ull` literals. On Linux `std::uint64_t` is
   `unsigned long`, and g++ 13 and 14 rejected one expression mixing the two under
-  `-Werror=sign-conversion` (CI's engine job failed on the E9 merge, d96d6d9); g++
+  `-Werror=sign-conversion` (CI's engine job failed on the E9 merge, f3d36c9); g++
   16 here did not. All seven literals converted; 526 tests pass.
 - Spec: none - a portability fix.
 
 ### 2026-10-04 - 6b″ on a quiet machine: Hunt adopted under 100 boards, Guard in no range (M17)
 
-- `docs/MEASUREMENTS.md`: experiment 6b″ (M17) with engine E9 merged (d96d6d9),
+- `docs/MEASUREMENTS.md`: experiment 6b″ (M17) with engine E9 merged (f3d36c9),
   on a quiet machine, every test as pre-registered and read per board-count
   range - the same 805 roots as 6b, 5 threads, 50 ms, Guard and Hunt as they ship,
   only E4-confirmed proofs counted. Guard's depth 1 completes in 65.1% / 15.8% /
@@ -5916,7 +6493,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
 ### 2026-10-03 - 6b′ on a quiet machine: the verification redesign fails at 50-199 boards - M15's STOP
 
 - `docs/MEASUREMENTS.md`: experiment 6b′ (M15) with engine E8's prototype of the
-  redesign (M14; branch bd08c48, not merged - it waits on the design review), on
+  redesign (M14; branch 9c8916d, not merged - it waits on the design review), on
   a quiet machine, every test as pre-registered and read per board-count range.
   The df-pn proof channel decides 77.4% of roots under 50 boards (pass), 40.7% at
   50-99, 23.7% at 100-199 and 0.0% at 200+ (fail); the estimate channel fits the
@@ -5971,7 +6548,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
 ### 2026-10-03 - M7 on real games: the |E| curve from t0database, its verdict, the refused games
 
 - `docs/MEASUREMENTS.md`: the |E| phase curve over the 716 t0database games that
-  replay to the end (901e5be, Q4 as ruled, legal and pseudo-legal destinations),
+  replay to the end (c7840d8, Q4 as ruled, legal and pseudo-legal destinations),
   the games' board counts (max 186; 14 reach 100 boards), and M7's verdict from
   §15.6 as written: on at k = 8 from 50 to 186 boards; under 50 boards inside the
   ±10% band (1.60x at k = 4, 1.45x at k = 8, against 1.5x), and the kill clause
@@ -6804,7 +7381,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   (https://github.com/Silicon-Spider/Temporal-5D). GitHub created it with a
   commit of its own - `LICENSE` (the GPL-3.0 text) and a two-line `README.md` -
   so the graft commit, never pushed, was rebased onto it: e1b6980 is now
-  a56beb4. Nothing has been pushed yet. The project's licence is still being
+  f943fbe. Nothing has been pushed yet. The project's licence is still being
   decided, and whether that `LICENSE` file stays is part of the decision. The
   oracle work stays uncommitted, as before. `AGENTS.md`, `CLAUDE.md`,
   `CONTRIBUTING.md` and `oracles/README.md` no longer say the repository has no
@@ -6862,7 +7439,7 @@ The user's CHECKPOINT 8 rulings on spec issues 122-124 (register H47 as amended)
   and its stock CLI, not its Python bindings; a fourth repository, the notation
   specification, is pinned; and no oracle answers every question the gate asks.
 
-### 2026-09-30 - graft wiring (commit e1b6980, rebased as a56beb4)
+### 2026-09-30 - graft wiring (commit e1b6980, rebased as f943fbe)
 
 - Added the wiring of graft, a code-navigation tool for coding agents:
   `.claude/helpers/`, `.claude/skills/graft/`, and entries in

@@ -4,7 +4,8 @@ Checks that every head's loss is finite, that gradients reach the parameters, an
 an optimiser step changes them. It is not training - the build brief allows a few
 optimiser steps on synthetic data and no training runs (spec section 15).
 
-Run: ``python -m t5d.train.smoke`` (from ``python/``).
+Run: ``python -m t5d.train.smoke`` (from ``python/``); ``--completed-q`` runs the same steps under
+register I21's loss arm (a prototype: the policy head on synthetic completed-Q targets).
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from ..net.heads import effort_bin
 from ..net.model import T5DNet, build_model
 from ..net.state import Batch, PositionState, collate
 from ..net.synthetic import synthetic_states
-from .losses import LossConfig, Targets, compute_losses
+from .losses import LossConfig, Targets, completed_q_arm, compute_losses
 
 MAX_STEPS = 3
 
@@ -55,12 +56,17 @@ class SmokeReport:
     unchanged: list[str] = field(default_factory=list)  # names of the tensors that did not
 
 
-def synthetic_targets(batch: Batch, cfg: NetConfig, generator: torch.Generator, *, flat_row: int | None = None) -> Targets:
+def synthetic_targets(
+    batch: Batch, cfg: NetConfig, generator: torch.Generator, *, flat_row: int | None = None, completed_q: bool = False
+) -> Targets:
     """Random but well-formed targets for a batch (smoke testing only). Every third position is a
     cheap search (no policy or categorical target, section 12.5); one short-term horizon of the
     last position has no target (NaN). With ``flat_row``, that position is a decision of D2's flat
     form (issue 242): a random distribution over each of its head boards' options - the moves leaving
-    it, leaving it - so that the flat policy loss reaches D2's leave head (``smoke_train`` adds one)."""
+    it, leaving it - so that the flat policy loss reaches D2's leave head (``smoke_train`` adds one).
+    With ``completed_q`` (register I21's arm), every position but the flat one also carries a
+    completed-Q target (``_synthetic_completed_q``), the cheap searches included; its draws are made
+    after every other, so the rest of the targets are the same with and without it."""
     bsz, length = batch.piece.shape
     g = generator
 
@@ -84,7 +90,7 @@ def synthetic_targets(batch: Batch, cfg: NetConfig, generator: torch.Generator, 
     short_term[-1, -1] = math.nan
     q, d = rand(bsz) * 2 - 1, rand(bsz) * 0.5
     d = torch.minimum(d, 1 - q.abs())
-    return Targets(
+    targets = Targets(
         policy=policy,
         wdl=(1 - outcome).long(),  # +1 -> 0 win, 0 -> 1 draw, -1 -> 2 loss
         root_value=root_value,
@@ -99,6 +105,26 @@ def synthetic_targets(batch: Batch, cfg: NetConfig, generator: torch.Generator, 
         opp_reply=opp,
         **({} if flat_row is None else _synthetic_flat(batch, rand, flat_row)),
     )
+    if completed_q:  # drawn last: the targets above are the same with and without the arm
+        targets = replace(targets, **_synthetic_completed_q(batch, rand, targets.flat_rows))
+    return targets
+
+
+def _synthetic_completed_q(batch: Batch, rand, flat_rows: torch.Tensor | None) -> dict:
+    """``Targets``' completed-Q fields (register I21's arm; ``synthetic_targets``): a random
+    distribution, positive on every legal action - the moves and, where it is legal, submit - as the
+    completed-Q target is on every action the prior offers; on every position, the cheap searches
+    included (section 12.5), but the flat ones (``flat_rows``: a flat decision has no such target)."""
+    bsz = batch.moves.shape[0]
+    _, submit_legal = batch.submit_mask()
+    w = (rand(bsz, batch.moves.shape[1]) + 0.05) * batch.move_valid
+    ws = (rand(bsz) + 0.05) * submit_legal
+    total = (w.sum(dim=-1) + ws).clamp(min=1e-9)
+    moves, submit = w / total[:, None], ws / total
+    if flat_rows is not None:
+        moves[flat_rows] = 0.0
+        submit[flat_rows] = 0.0
+    return dict(completed_q=moves, completed_q_submit=submit)
 
 
 def _synthetic_flat(batch: Batch, rand, row: int) -> dict:
@@ -146,7 +172,12 @@ def smoke_train(
     lr: float = 1e-4,
     loss_cfg: LossConfig | None = None,
     model: T5DNet | None = None,
+    completed_q: bool = False,
 ) -> SmokeReport:
+    """At most ``MAX_STEPS`` optimiser steps on one synthetic batch (module docstring). With
+    ``completed_q`` the batch's targets carry register I21's completed-Q target too
+    (``synthetic_targets``), which the loss arm needs (``losses.completed_q_arm`` as ``loss_cfg``);
+    without it, the batch, the targets and the losses are as they were."""
     if not 1 <= steps <= MAX_STEPS:
         raise ValueError(f"the smoke test runs 1..{MAX_STEPS} optimiser steps, never more")
     cfg = NetConfig() if cfg is None else cfg
@@ -157,7 +188,7 @@ def smoke_train(
     # unchanged (the per-square targets are drawn per token of the batch).
     batch = collate(with_actions(synthetic_states(seed, [*board_counts, 3], piece_centric=cfg.piece_centric)))
     gen = torch.Generator().manual_seed(seed)
-    targets = synthetic_targets(batch, cfg, gen, flat_row=len(board_counts))
+    targets = synthetic_targets(batch, cfg, gen, flat_row=len(board_counts), completed_q=completed_q)
     names = [name for name, _ in model.named_parameters()]
     before = [p.detach().clone() for p in model.parameters()]
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.0)
@@ -190,9 +221,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--steps", type=int, default=MAX_STEPS)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--fp32", action="store_true", help="FP32 trunk instead of the default BF16")
+    parser.add_argument(
+        "--completed-q",
+        action="store_true",
+        help="register I21's arm (a prototype): the policy head on synthetic completed-Q targets, the policy's weight moved onto them",
+    )
     args = parser.parse_args(argv)
     cfg = NetConfig(trunk_dtype="fp32" if args.fp32 else "bf16")
-    report = smoke_train(cfg, steps=args.steps, seed=args.seed)
+    arm = dict(loss_cfg=completed_q_arm(), completed_q=True) if args.completed_q else {}
+    # The nine-board position holds a far board pair (tests/train/test_smoke.py checks it), so
+    # B15's per-axis far tables (register B15, section 4.1) take a gradient too; the library
+    # default (1, 3, 6) holds none.
+    report = smoke_train(cfg, steps=args.steps, seed=args.seed, board_counts=(1, 3, 6, 9), **arm)
     for i, losses in enumerate(report.losses):
         parts = " ".join(f"{k}={v:.4f}" for k, v in losses.items())
         print(f"step {i}: {parts}")

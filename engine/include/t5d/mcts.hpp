@@ -64,7 +64,10 @@
 //    evaluator's submit logit is not read and the C API reports
 //    submit_possible 0. A node whose generator a budget stopped
 //    (generator_nodes, the memory ceiling) has incomplete children and is
-//    never proven lost (H37); one with no turn generated and no verdict is
+//    never proven lost (H37), and so has one whose generator threw (an
+//    allocation failure inside it: the generator is dropped, the turns that
+//    pull made taken back - t5d/turngen.hpp promises nothing after a throw;
+//    build-log issue 535); one with no turn generated and no verdict is
 //    stuck. Terminal verdicts stay E4's detector's (detect_mate), as below.
 //  * TurnSplit::Tree, D2's TREE FORM (§8.2, "Evaluating at turn boundaries";
 //    CHECKPOINT 6, built first at CHECKPOINT 8): the ply split's nodes, edges,
@@ -94,9 +97,26 @@
 //    kGateAlways (§15.2's "every interaction gate firing") every mid-turn
 //    node is a leaf and the search is the ply split's, bit for bit (H15's
 //    digest; memory_bytes() is not compared - a node is larger by the tree
-//    form's fields under every split). Refused with graph search (C11): under MCGS
-//    an inherited node's priors, and whether it was evaluated, would depend on
-//    the path that created it (build-log spec issue 301).
+//    form's fields under every split). UNDER GRAPH SEARCH (C11; §8.5, "The
+//    tree form under graph search", the 2026-11-15 review settling build-log
+//    spec issue 301) only EVALUATED nodes are graph nodes - the root, turn
+//    starts (the complete turn a submit edge reaches) and the mid-turn nodes a
+//    gate's move made, each keyed by its state and count as below. An
+//    inherited node's priors, and whether it was evaluated at all, are the
+//    path's, so the gate on a move edge's OWN move decides the kind of node
+//    the edge leads to, and nothing else does: a gate fires - a graph node,
+//    found or entered in the table; none - a PATH-LOCAL node (NodeView::
+//    path_local) made for that edge: in no table, never found, one parent,
+//    expanded on that parent's logits - also where another ordering's gated
+//    move made an evaluated graph node of the same state (the two stay
+//    apart; the inherited one consults neither it nor the evaluation cache).
+//    The orderings of one turn meet at the first evaluated node, at the
+//    latest the turn start after the submission. A path-local node a re-root
+//    makes the root is entered in the table then, and evaluated as above
+//    (advance_to's lookup of a state that is no child of the root finds graph
+//    nodes only: one held only by a path-local node starts a fresh root).
+//    With kGateAlways no node is path-local and the search is the ply split's
+//    graph search, bit for bit.
 //
 // HOW LEGALITY ENTERS. Through one call site (mcts.cpp, leaf_expansion): the
 // expansion of a leaf (t5d/expand.hpp) with ExpandOptions::legal_moves under
@@ -659,7 +679,8 @@ struct SearchParams {
   double variance_bonus_cap = 2.0;
 
   // ---- C11 (prototype): MCGS --------------------------------------------------------
-  /// Refused with split Tree (build-log spec issue 301).
+  /// With split Tree only evaluated nodes are graph nodes (TurnSplit::Tree,
+  /// above; §8.5).
   bool graph = false;
   /// The lineage reading (C23, ruled): states that differ in a branch origin
   /// are different positions for the network, so different nodes.
@@ -1144,6 +1165,9 @@ struct SearchStats {
   std::uint64_t transposition_hits = 0;  ///< MCGS: an edge linked to an existing node
   std::uint64_t key_collisions = 0;    ///< equal keys, different states
   std::uint64_t dead_ends = 0;         ///< partial turns with no legal completion, pruned
+  /// Counted as expansions make them - events: an expansion that throws and is
+  /// made again (the ply split's leaf a leaf again) counts its edges again (the
+  /// tree form's inherited expansions put theirs back - review finding L5).
   std::uint64_t submit_edges = 0;      ///< D8: submit edges made (submitting possible)
   std::uint64_t illegal_submits = 0;   ///< ... of which illegal (C4), kept pruned
   std::uint64_t unknown_edges = 0;     ///< (a) edges whose move the expansion left unknown
@@ -1157,26 +1181,41 @@ struct SearchStats {
   std::uint64_t turn_caps = 0;         ///< nodes the turn cap ended (I11)
   std::uint64_t stuck = 0;             ///< turn starts with no child and no verdict
   /// D2's flat form: turns generated (the children made), and generators a
-  /// budget stopped (their nodes' children incomplete).
+  /// budget stopped (their nodes' children incomplete) - in the expansions
+  /// kept: a first pull that throws after its generator stopped is undone with
+  /// its expansion and uncounted (the redo counts its own), a later pull's stop
+  /// stays counted even if that pull then throws (the node keeps the turns the
+  /// generator gave). So fallback_listings (below) <= stopped_generators, with
+  /// the difference the later pulls' stops (review finding L5).
   std::uint64_t generated_turns = 0;
   std::uint64_t stopped_generators = 0;
   /// ... of which stopped before their first turn, their nodes' turns E4's
   /// listing's instead (SearchParams::flat_fallback).
   std::uint64_t fallback_listings = 0;
+  /// ... and pulls that threw (an allocation failure inside the generator, or
+  /// while its turns were taken in; build-log issue 535): each drops its
+  /// node's generator - the node keeps the turns it had before the pull, its
+  /// children incomplete, as after a budget stop - or, at the node's first
+  /// pull, undoes its expansion (a leaf again, its generator made afresh).
+  std::uint64_t dropped_generators = 0;
   std::uint64_t nodes_created = 0;
   std::uint64_t nodes_collected = 0;   ///< deleted by re-rooting
   std::uint64_t reroots = 0;
   std::uint64_t cache_purged = 0;      ///< cache entries behind the root, purged (EvalCache)
   /// 6m: nodes expanded from an evaluation without the uncertainty signal
   /// uncertainty_source selects (their variance 0) - only where nothing reads
-  /// it: with E2, E3 or E5's term on, such an evaluation is refused.
+  /// it: with E2, E3 or E5's term on, such an evaluation is refused. Counted
+  /// as evaluations are taken - an event: an expansion or re-evaluation that
+  /// throws and is made again counts it again (review finding L5).
   std::uint64_t uncertainty_missing = 0;
   /// D2's tree form: mid-turn nodes expanded on inherited priors - no evaluation.
   std::uint64_t inherited_nodes = 0;
   /// ... and mid-turn nodes sent to the network (or the cache) instead, by the
   /// first gate found to fire - indexed by the gate's bit (between, capture,
   /// check, present, always); tested in the order always, present, between,
-  /// capture, check (the cheapest first).
+  /// capture, check (the cheapest first). Under graph search a node is counted
+  /// once, by the gate of the move that made it (other moves into it fired
+  /// one too - or they would not lead to it - perhaps another).
   std::array<std::uint64_t, 5> gate_fired{};
   // Stage E10, the verification ladder - counted as its verdicts reach the
   // search (not part of digest()):
@@ -1277,6 +1316,11 @@ struct NodeView {
   /// are its parent's with tree_inherit_value, 0 without) - until a re-root
   /// makes it the root and the network evaluates it.
   bool inherited = false;
+  /// D2's tree form under graph search (§8.5, C11): made by a move that fired
+  /// no gate - the path's own node: in no table, never merged, one parent;
+  /// inherited once expanded. False everywhere else, and for a node a re-root
+  /// made the root (a graph node from then on).
+  bool path_local = false;
   double k0 = 0;
   std::size_t instantiated = 0;
   std::size_t edge_count = 0;
@@ -1445,7 +1489,12 @@ class Search {
   /// hold one in two nodes; one state with two counts is two inputs, A6, and
   /// asked twice). Precondition: none is waiting. Exception-safe: if anything throws
   /// (std::bad_alloc included), the batch is abandoned and no virtual loss is
-  /// left before the exception leaves.
+  /// left before the exception leaves - and the search stays consistent and
+  /// searches on (build-log issue 535): no node is left that the root does not
+  /// reach, a node whose expansion threw is a leaf again, and a flat-form
+  /// node whose turn generator threw keeps the turns it had and loses the
+  /// generator (its children incomplete, as after a budget stop;
+  /// SearchStats::dropped_generators).
   std::size_t gather(std::size_t max_leaves,
                      std::uint64_t max_playouts = std::numeric_limits<std::uint64_t>::max());
   /// The evaluations wanted, in order.
@@ -1454,7 +1503,9 @@ class Search {
   /// up, releases the virtual loss. Throws std::invalid_argument (releasing
   /// the virtual loss, nothing backed up) for a malformed evaluation. If
   /// anything else throws part-way (std::bad_alloc), the leaves already
-  /// delivered stay delivered and the rest of the batch is abandoned.
+  /// delivered stay delivered and the rest of the batch is abandoned - the
+  /// leaf whose expansion threw a leaf again, the search consistent as after
+  /// gather.
   void deliver(std::span<const Evaluation> evaluations);
   /// Releases the waiting leaves' virtual loss without backing anything up.
   void abandon() noexcept;
@@ -1528,6 +1579,18 @@ class Search {
   /// Re-roots on root child `index` (of root_children()): carries its subtree's
   /// statistics, deletes every node the new root cannot reach; the evaluation
   /// cache survives; the evaluator hook is told. Precondition: nothing waiting.
+  /// Every re-root (here and in the advance calls below) happens whole or not
+  /// at all (build-log issue 600): one that throws (std::bad_alloc included)
+  /// leaves the tree, the graph's table and the root's side tables and effort
+  /// label as they were - a child node made for it stays, linked under the old
+  /// root; a node made for a state the tree did not hold is taken back - and
+  /// only the root hook's own exception comes after a re-root done. The one
+  /// loss (review finding L3): the verification ladder's verdicts for the old
+  /// decision that its ending had taken over and not yet recorded, when the
+  /// failure comes there - never a proof (nothing is offered at a decision's
+  /// end, and the proof channel is off, H41).
+  /// advance_action under the board-move split re-roots once per decision: a
+  /// failure part-way leaves the search on the last decision it re-rooted on.
   void advance(std::size_t index);
   /// Re-roots on the state reached by `moves` - one decision: under the
   /// board-move split one move (never submitted with it, D8) or none (submit),

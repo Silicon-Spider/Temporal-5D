@@ -7,7 +7,8 @@ and B14's attention paths, block-sparse (the default) and chunked, which build m
 biases one query block at a time - ``structure.py``, ``smolgen.py``, ``attention.py``;
 B14's FlexAttention score function runs eagerly on CPU (``flex.py``: forward only, small
 inputs; compiled kernels need a GPU). CHECKPOINT 6: B15's 4D displacement bias, the v1
-default (``displacement.py``), superseding B6's binned biases; B16's score-time status key
+default (``displacement.py``), superseding B6's binned biases and keeping B6's two per-axis
+tables beyond its exact classes (the 2026-11-15 review); B16's score-time status key
 biases on frozen boards, with the cached configuration (``status.py``); B17's key-side Shaw
 term on top of B15, behind its flag (``shaw.py``). Stage N3: the
 block-causal scope (C17, C19 - ``scope.py``, ``NetConfig.attn_scope``), the lineage it rests
@@ -15,7 +16,8 @@ on (``PositionState.parent`` / ``creation``), the cached evaluation path with su
 recompute, prefix sharing, refresh epochs and FP8 storage (C2, C3, C3a rung 1, C15, C20 -
 ``cache.py``), the refresh ladder's complexity trigger (C24, prototype - ``complexity.py``),
 a search-tree fixture (``tree.py``), and section 15.3's cost model and
-benchmark (``cost.py``, ``cache_bench.py``). See ``config.py`` for which register rows are
+benchmark (``cost.py``, ``cache_bench.py``), with register G11's count of what one forward
+dispatches (``opcount.py``). See ``config.py`` for which register rows are
 built here and which are flags for later stages. Register A7: the input is read from the acting
 player's side (``state.py``; ``mirror`` is a position's colour-swapped mirror). Register A5, a
 prototype behind its flag (``NetConfig.piece_centric``, off; dense scope only): piece-centric
