@@ -9458,3 +9458,7 @@ struck through, where nothing of it is left to apply); the others stand as writt
   verify ok (exit 0); gate commit ok (engine differential smoke test passed, baseline 41 compared, 0
   declined; proof channel DISABLED). Tests and a tool only: the Lazy SMP test and the nightly gate
   run on the round's final tree.
+- **2026-11-23 - main af0c19b merged into `lane/engine`** (M23; the project timeline in the root
+  README). No conflict; nothing under `engine/` changed. Checks: verify ok (exit 0); gate commit ok
+  (oracle layer ok; engine differential smoke test passed, baseline 41 compared, 0 declined; proof
+  channel DISABLED). The round's final checks run on this tree.
