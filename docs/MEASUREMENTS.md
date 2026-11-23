@@ -2103,9 +2103,18 @@ block-causal, N\* = the start's boards + 3.
 | Rooted at or above N\*: a cached leaf against the two-level reference anchored at the root (logits) | 1.31e-6 | 1e-4 |
 | ... the root leaf against the dense pass (issue 259's anchor) | 9.54e-7 | 1e-4 |
 | ... a search's non-root leaves against the dense pass (the smallest search maximum) | 1.33e-1 (smallest) | above 1e-3 |
+| A carried graph search across N\*: a carried node reached after the crossing by a cached path - its WDL against the dense pass's, and against the cached path's evaluation of the same state (2026-11-23; BUILD_LOG issue 264) | 1e-6 (largest); 1.3e-3 to 5.0e-3 | - |
 | The dense pass: a position alone against in a batch of four (logits; 3 seeds x 4 synthetic positions of 9-17 boards) | 1.13e-6 | - |
 | The dense pass: grad against no-grad, alone | 1.37e-6 | - |
 | The dense pass: the same batch twice | 0 (bitwise) | - |
+
+*Added 2026-11-23 (C26/C27's review round; the same machine, loaded - other lanes' tests running -
+PyTorch 2.13.0+cpu, Python 3.14.7, NumPy 2.5.2, 3 torch threads, the engine built in `lane/net` on
+main 4e9267e).* The graph row: the ply split with `graph=1`, N\* the root's boards + 1, 256 playouts
+before the crossing and 128 after it, model and search seeds (6, 3) and (7, 4) on Timeline
+Battleground, Very Small - Open and Two Timelines; 3 of the 6 carried searches met such a node (nine
+links in all), the WDLs compared as probabilities (the engine's `network_wdl` and the softmax of each
+evaluation's logits).
 
 *Read.* Under N\* the phase form is the dense search itself, so its figure is equality, not a gap.
 At or above N\* the cached leaves sit on their references at the summation-order level, as MT-04's

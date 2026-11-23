@@ -22,8 +22,9 @@ refresh (C3). "The dense search" is read as the same network's dense pass, batch
   dense pass (issue 259's anchor); the other leaves more than 1e-3 from it; the search not the dense
   one.
 * The boundary (R6c), one evaluator across crossings (R6d), the evaluation cache shared across the
-  crossing (R6e, C14), a carried search crossing it (R6f, C12), whole games crossing it (R6g), F1 in
-  BF16 (R6h, slow).
+  crossing (R6e, C14), a carried search crossing it (R6f, C12 - under graph search a cached path
+  transposes into a carried node evaluated dense, BUILD_LOG issue 264, pinned), whole games crossing
+  it (R6g), F1 in BF16 (R6h, slow).
 * Units: N*'s placeholder is ``token_counts.N_STAR``'s; the dense epoch's engine number; the dense
   dispatch is ``NetworkEvaluator``'s, bit for bit, with either prior and the leave logits; its
   ``max_batch``; the start shortcut; A5 still refused first.
@@ -479,27 +480,74 @@ def test_a_shared_cache_across_the_crossing():
 # --- R6f: a carried search crossing N* (C12) ----------------------------------------------------------
 
 
-@requires_engine
-@pytest.mark.parametrize("arm", ["ply-tree", "tree-form", "tree-form-no-gates"])
-def test_a_carried_search_crossing_n_star(arm):
-    """Match play carries the search (C12). Rooted under N* (the root's boards + 1) the search is
-    dense; advanced onto its most visited child - for the tree form onto a child it inherited (never
-    evaluated) - the new root has N* boards or more, and the next run opens the root refresh: the
-    search's epoch moves from the dense number to the new epoch's, the root's visits are kept, no
-    position is evaluated dense any more, and every new leaf is the two-level reference anchored at
-    the new root; under the tree form the inherited root is the first new leaf, evaluated once."""
+#: R6f's searches: (variant, network seed, search seed, playouts before the crossing, after it). The
+#: graph arm's are larger, so that a line after the crossing meets a carried node (``_into_dense``);
+#: their order is the order they are tried in, until one meets one.
+CARRIED = [("Standard - Two Timelines", 6, 3, 48, 24)]
+CARRIED_GRAPH = [
+    ("Misc - Timeline Battleground", 7, 4, 256, 128),
+    ("Standard - Two Timelines", 7, 4, 256, 128),
+    ("Very Small - Open", 7, 4, 256, 128),
+]
+
+
+def _boards(state) -> set:
+    """A position's boards by coordinates and contents (a position's boards are its predecessor's and
+    the ones its move made)."""
+    p, h = state.timeline, state.half_turn
+    return {(int(p[b]), int(h[b]), state.piece[b].tobytes(), state.colour[b].tobytes()) for b in range(state.n_boards)}
+
+
+def _into_dense(s, ev, dense: _Recorder, cached: _Recorder) -> int:
+    """Under graph search, after the crossing: a node the cached search made (evaluated in the root
+    refresh's epoch, never before) one move from a state the dense search evaluated and the cached
+    one never did; the search advanced onto that node, its child by that move is the carried node -
+    the edge made after the crossing, the node before it: a cached path transposed into a node
+    evaluated dense - and that node holds the dense evaluation (its WDL the dense pass's, not the
+    cached path's), never evaluated again. How many such children the node has (0: no candidate)."""
+    first = lambda views: {v[:2]: i for i, v in reversed(list(enumerate(views)))}  # noqa: E731
+    d_at, c_at = first(dense.views), first(cached.views)
+    children = {c.child_key: c.index for c in s.children() if c.child_key}
+    dense_only = {k: _boards(state_of(dense.positions[i])) for k, i in d_at.items() if k not in c_at}
+    pairs = []
+    for made, i in c_at.items():
+        if made in d_at or made[0] not in children:
+            continue
+        boards = _boards(state_of(cached.positions[i]))
+        pairs += [(made, x) for x, xb in dense_only.items() if x[1] == made[1] + 1 and boards < xb and len(xb - boards) in (1, 2)]
+    if not pairs:
+        return 0
+    made = pairs[0][0]
+    want = {x[0]: x for m, x in pairs if m == made}
+    s.advance(children[made[0]])
+    linked = [c for c in s.children() if c.child_key in want]
+    for c in linked:
+        i = d_at[want[c.child_key]]
+        state = state_of(dense.positions[i])
+        with torch.no_grad():
+            now = _split(ev.cached.evaluate(state, ev.epoch), [state])[0]
+        wdl = np.asarray(c.network_wdl)
+        softmax = lambda x: np.exp(x - x.max()) / np.exp(x - x.max()).sum()  # noqa: E731
+        assert c.evaluated and np.abs(wdl - softmax(np.asarray(dense.evals[i].wdl_logits, np.float64))).max() < 1e-5, "the dense evaluation"
+        assert np.abs(wdl - softmax(np.asarray(now.wdl_logits, np.float64))).max() > 1e-4, "not the cached path's"
+    return len(linked)
+
+
+def _carried_crossing(arm: str, variant: str, model_seed: int, search_seed: int, before_playouts: int, after_playouts: int) -> int:
+    """R6f at one root: the dense search, the advance across N*, the cached search after it - and
+    under graph search ``_into_dense``'s count."""
     from t5d.engine.search import Search, search_params
 
-    model = _model(6)
-    with _search_root("Standard - Two Timelines") as root:
+    model = _model(model_seed)
+    with _search_root(variant) as root:
         n = root.info().boards
         ev = _phase(model, n + 1)
-        with Search(root, params=search_params(seed=3, **QUIET, **ARMS[arm])) as s:
-            _drive(s, ev, playouts=48)
+        with Search(root, params=search_params(seed=search_seed, **QUIET, **ARMS[arm])) as s:
+            dense = _drive(s, ev, playouts=before_playouts)
             dense_number = s.info().epoch
             assert dense_number == engine_epoch(ev.cached.dense_epoch)
             kids = [c for c in s.children() if not c.submit and c.visits > 1]
-            if arm != "ply-tree":
+            if arm.startswith("tree-form"):
                 kids = [c for c in kids if not c.evaluated]
                 assert kids, (arm, "an inherited child with visits")
             pick = max(kids, key=lambda c: c.visits)
@@ -507,7 +555,7 @@ def test_a_carried_search_crossing_n_star(arm):
             before = s.info()
             assert before.root_visits >= pick.visits > 1
             dense_before = ev.positions_by_mode["dense"]
-            rec = _drive(s, ev, playouts=24)
+            rec = _drive(s, ev, playouts=after_playouts)
             after = s.info()
             anchor = rec.started[-1]
             assert anchor.n_boards >= n + 1 and ev.epoch.kind == "root" and after.epoch == engine_epoch(ev.epoch) != dense_number
@@ -517,9 +565,37 @@ def test_a_carried_search_crossing_n_star(arm):
                 state = state_of(pos)
                 ref = _split(reference_output(model, state, anchor=anchor), [state])[0]
                 GAPS["cached leaf vs reference"] = max(GAPS["cached leaf vs reference"], _evals_close(out, ref, (arm, i)))
-            if arm != "ply-tree":
+            if arm.startswith("tree-form"):
                 assert rec.views[0][0] == before.root_key and after.root_evaluated and not before.root_evaluated
                 assert [v[0] for v in rec.views].count(before.root_key) == 1
+            return _into_dense(s, ev, dense, rec) if arm == "ply-graph" else 0
+
+
+@requires_engine
+@pytest.mark.parametrize("arm", ["ply-tree", "ply-graph", "tree-form", "tree-form-no-gates"])
+def test_a_carried_search_crossing_n_star(arm):
+    """Match play carries the search (C12). Rooted under N* (the root's boards + 1) the search is
+    dense; advanced onto its most visited child - for the tree form onto a child it inherited (never
+    evaluated) - the new root has N* boards or more, and the next run opens the root refresh: the
+    search's epoch moves from the dense number to the new epoch's, the root's visits are kept, no
+    position is evaluated dense any more, and every new leaf is the two-level reference anchored at
+    the new root; under the tree form the inherited root is the first new leaf, evaluated once.
+
+    Under graph search (``ply-graph``) the re-root keeps the carried nodes in the graph's table, keyed
+    by state and moves made, not by epoch, so the behaviour BUILD_LOG issue 264 records is pinned: a
+    node the cached search made after the crossing transposes into a carried node evaluated dense,
+    which is not evaluated again - the cached search reads that state's dense evaluation
+    (``_into_dense``). Section 7.10's "transpositions never mix a dense and a cached evaluation of
+    one state", read strictly, forbids it: a spec conflict for the user. If the strict reading is
+    ruled, the engine drops or re-evaluates the carried nodes' table entries at the crossing, and
+    this arm's assertion turns round. Tried on ``CARRIED_GRAPH``'s searches in order until one meets
+    such a node."""
+    met = 0
+    for spec in CARRIED_GRAPH if arm == "ply-graph" else CARRIED:
+        met += _carried_crossing(arm, *spec)
+        if met:
+            break
+    assert met or arm != "ply-graph", "no search met a cached path transposing into a node evaluated dense"
 
 
 # --- R6g: games crossing N* ---------------------------------------------------------------------------

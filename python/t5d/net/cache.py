@@ -88,17 +88,20 @@ than N* boards runs dense; one whose root has N* or more runs cached, with the r
 network serves both" (section 7.10). The root decides, once per search: ``root_epoch`` applies
 ``CacheConfig.mode`` to the root's board count (every board - the T0 board and inactive
 timelines included) and returns either the evaluator's one dense epoch (``dense_epoch``) or a
-root refresh (C3 - the phase form requires it). Every node of the search carries the root's
+root refresh (C3 - the phase form requires it). In a fresh search every node carries the root's
 epoch, so its mode: a transposition or a cache hit never mixes a dense and a cached evaluation of
 one state, which a per-node switch would do whenever a line crossed N*. A dense epoch's nodes are
 evaluated by the network's own dense pass (``evaluate``: the full model over the position under
 the dense scope - no B16, which exists only under the block-causal scope, so it is the refresh
 pass's function); it has no anchor, no history and no store: below N* "there is no cache to
 refresh" (section 7.9), so ``prepare`` and ``refresh`` refuse it. The dense epoch is independent
-of the root - a dense evaluation is a function of the state alone - so every search below N*
-shares it, and the engine's evaluation cache serves dense evaluations across searches (C14). Board
-count never falls, so a game crosses N* once; the first cached search starts with its root
-refresh, and carried nodes keep the statistics their dense evaluations gave them (section 8.7).
+of the root - a dense evaluation is a function of the state alone, up to its last bits, which
+depend on the batch it was evaluated in (BUILD_LOG issue 262) - so every search below N* shares
+it, and the engine's evaluation cache serves dense evaluations across searches (C14). Board count
+never falls, so a game crosses N* once; the first cached search starts with its root refresh, and
+carried nodes keep the statistics their dense evaluations gave them (section 8.7) - so a search
+carried across N* holds nodes of both modes, and under graph search a new path can transpose into
+a carried node evaluated dense (BUILD_LOG issue 264).
 N* is ``CacheConfig.phase_boards``, placeholder 50. The conditioning-offset hook (C3's training,
 parked) applies the same predicate to the conditioning root when it is built.
 
@@ -109,11 +112,13 @@ our submoves supersede there is computed when the network next runs, by the next
 ``evaluate``, which computes every frozen board without an entry, in topological order, in that
 node's epoch. The deferral is exact by construction: an entry's key is its epoch's and a digest of
 the board with the acting player (A7) and of its past's digests; ``compute_board`` reads only the
-board's own tokens, its causal past's entries (its ancestry, closed under future moves - C23) and
-geometry in a frame centred on itself; and ``put`` never overwrites. So each entry - a board with
-its past, a perspective and an epoch - is computed once, at the first evaluated node that reads it,
-and shared below it: "once per board and epoch", per perspective (BUILD_LOG issue 267). The
-refresh triggers are checked only at evaluated nodes (``tree.py``).
+board's own tokens, its causal past's entries (its ancestry, closed under future moves - C23),
+under C20's ``past_and_epoch_history`` reading the epoch's history boards' entries too (their
+digests are in the key, as the past's are), and geometry in a frame centred on itself; and ``put``
+never overwrites. So each entry - a board with its past, a perspective and an epoch - is computed
+once, at the first evaluated node that reads it, and shared below it: "once per board and epoch",
+per perspective (BUILD_LOG issue 267). The refresh triggers are checked only at evaluated nodes
+(``tree.py``).
 
 **Storage precision (C15, G1).** The cache stores frozen K/V in the network's own format,
 ``NetConfig.frozen_kv_format`` (``kvformat.py``): ``"match"`` (default) stores them exactly

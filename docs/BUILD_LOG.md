@@ -5356,7 +5356,11 @@ superseded or made moot says so; nothing is deleted.
     evaluator has no `start`, so a cache shared with such a search never mixes the two - never a
     cached epoch's (their keys differ), and the same for every evaluator. The alternative, a dense
     epoch per root, would lose C14's reuse below N\*, where 88% of the human games' moves are.
-    Edit 381.
+    Edit 381. *Corrected 2026-11-23 (C26/C27's review, finding L9): "a function of the state alone"
+    holds up to the last bits, which depend on the batch the state was evaluated in (issue 262) - so
+    the shared evaluation cache serves a dense evaluation whose last bits came from another search's
+    batch. The cached path's docstring now says so; edit 381 was applied upstream (the spec review of
+    2026-11-15) with the unqualified clause, and edit 385 proposes the qualification.*
 262. **"The dense search" read as the same network's dense pass, batched alike** (§15.2's C26 row;
     register C26, C19-C21). The row: "a search rooted under N\* equals the dense search node for
     node". The dense pass's last bits are no function of the position alone: grad mode moves them,
@@ -5387,7 +5391,38 @@ superseded or made moot says so; nothing is deleted.
     tree search (not MCGS) a new node for a state another carried node holds is evaluated cached.
     Read as §8.7's carry - statistics "mildly stale" that "self-correct under fresh backups" - not
     as C26's forbidden mix: no evaluation of one mode is ever served for the other (the engine
-    cache's epoch keeps them apart; tested). For the user to confirm.
+    cache's epoch keeps them apart; tested). For the user to confirm. *Corrected 2026-11-23 (C26/C27's
+    review, finding M1): that last claim holds for the engine's evaluation cache only, and the tree
+    search only.* **Under graph search (MCGS) a cached path transposes into a node evaluated dense.**
+    The re-root rebuilds the graph's table from the carried nodes, keyed by state and moves made in
+    the action, not by epoch (`engine/src/mcts.cpp`: `reroot`, `identity`, `find_node`), so after the
+    crossing a node the cached search makes can reach, by a move, a state a carried node holds: the
+    new edge links to that node, which is not evaluated again, and the cached search reads its dense
+    evaluation - its priors, and its value through its statistics. Probed through the C step API
+    (ply split, `graph=1`, N\* the root's boards + 1, 256 playouts before the crossing and 128 after,
+    two seeds on each of Timeline Battleground, Very Small - Open and Two Timelines): in 3 of the 6
+    carried searches a node evaluated in the root refresh's epoch, never before the crossing, has a
+    child by a move that is a carried node, evaluated before the crossing and never after - nine such
+    links in all (six at one root) - whose WDL is the dense pass's to 1e-6 and 1.3e-3 to 5.0e-3 from
+    the cached path's evaluation of the same state. Pinned by R6f's new `ply-graph` arm
+    (`test_a_carried_search_crossing_n_star`). That is a dense and a cached evaluation of one state
+    mixed through a transposition, which §7.10 - "every node in a search is evaluated the same way, so
+    transpositions (§8.5) never mix a dense and a cached evaluation of one state" - forbids, read
+    strictly: **a spec conflict, for the user**. The tree search has no such route (a carried node is
+    reached only along the carried tree's own edges); the tree form under graph search (decision 10,
+    from main 4e9267e) has it by the same code for its evaluated nodes, which are graph nodes (not
+    probed). The two readings: (a) §8.7's carry covers it - a carried node's statistics, its dense
+    evaluation among them, are reused like any carried statistics, and the graph's merge with them;
+    nothing to build, and the arm stands as written; (b) strict - after the crossing no path reaches
+    a node of the other mode: at a re-root that changes the search's mode (or at every epoch
+    change) the engine must drop the carried nodes' table entries, so a new path makes its own node,
+    evaluated cached, beside the carried one, as the tree search does - or re-evaluate the carried
+    nodes in the new epoch; an engine change in `reroot` and `set_epoch`, ABI-neutral, and the arm's
+    assertion turns round. Graph search and the phase form are both off by default, so nothing ships
+    either way meanwhile. No edit proposed until the user rules (the sentence (a) or (b) would add to
+    §7.10 is drafted here, not proposed: (a) "a search carried across N\* keeps its nodes, and under
+    graph search a line made after the crossing may merge into one (§8.7)"; (b) "at the crossing the
+    carried nodes leave the transposition table").
 265. **The root refresh runs once per search root - per decision - not once per game move** (§7.9,
     §7.10; register C3). Pre-existing: §7.9's "once per actual game move" is built as once per
     search, and under the ply split and the tree form an action is several decisions, each a search
@@ -5424,7 +5459,16 @@ superseded or made moot says so; nothing is deleted.
     parent has none. Built: the nearest evaluated ancestor's predicted difficulty - the evaluation
     whose logits the inner nodes inherited (`tree.evaluated_ancestor`). This departs from issue 78's
     "an unevaluated parent contributes nothing" (which would give None under every inner parent);
-    add-only either way. For the user with issue 268. Edit 384.
+    add-only either way. For the user with issue 268. Edit 384. *Restated 2026-11-23 (C26/C27's
+    review, finding L4; the built reading kept, as the main loop decided):* the alternative is the
+    literal reading - C24's "the parent's outputs" (§7.9, register C24) read as the parent's own,
+    with issue 78's rule that an unevaluated parent contributes nothing: under the tree form a node
+    below an inner parent then has no effort signal, and C24 fires there on structure and travel
+    alone. Either reading is one line in `SearchTree.complexity_signals`. The spec as the review of
+    2026-11-15 edited it carries edit 384, so §7.9 now names the built reading ("the nearest
+    evaluated ancestor's"); the literal one would withdraw that sentence. The built one reaches no
+    search before the user rules: C24 is a prototype, its flag off, run on the fixture only (the
+    engine path refuses it, issue 271). The user's question.
 270. **C27 does not name the flat form** (§7.9, §8.2; register C27, D2). Under the flat form every
     node is a turn start and every node is evaluated, and a turn's travel lies on the edge into the
     child, so rung 1 and C24 read it there, as under the ply split. Nothing to build (tested: T10,
@@ -9579,6 +9623,16 @@ repository's copies, which upstream has still to take:
     turn's travel counts on the edge into its node." Why: issues 268, 269 and 270 - three readings
     the build had to choose, each named for the user.
 
+385. **§7.10 "The root decides, once per search" (the dense evaluation's last bits; edit 381 as
+    applied)**: now - "Below N\* every search shares one dense epoch, because a dense evaluation is a
+    function of the state alone: the shared evaluation cache (§8.7) serves dense evaluations across
+    searches, and never serves one to a cached search." Proposed - "... because a dense evaluation is
+    a function of the state alone, up to its last bits, which depend on the batch it was evaluated in
+    (§15.2's C26 row compares the dense search batched alike): the shared evaluation cache (§8.7)
+    serves dense evaluations across searches - their last bits another search's batch's - and never
+    serves one to a cached search." Why: issue 261's correction (C26/C27's review, finding L9) -
+    unqualified, the clause contradicts issue 262, which edit 380's wording of the row rests on.
+
 <!-- A new list, so that the numbers from 400 render as written. -->
 
 400. **§11.0 "Third-party code" and register H26 (what reading every oracle's code found)**:
@@ -10220,3 +10274,9 @@ entry changes in the same edit as its code, which the standing rule defers to up
   line, both session-log entries); `docs/design/` is main's exactly. Then the findings of the three
   review passes of 6754794 (spec, correctness, mutation; no HIGH), each fixed as the main loop
   decided, a commit per group.
+  - **The records** (M1; L2, L3, L4, L9). Issue 264's graph route was probed: in 3 of 6 carried
+    graph searches across N\*, a cached path transposed into a node evaluated dense. It is pinned by
+    R6f's new `ply-graph` arm. Issue 264 is now a spec conflict for the user, with the engine work
+    reading (b) would need (`reroot`, `set_epoch`). Issues 261 and 269 are restated, edit 385 is
+    proposed, and the cached path's docstring is corrected. No engine code changed. Checks: ruff
+    clean; R6f "4 passed in 54.24s".

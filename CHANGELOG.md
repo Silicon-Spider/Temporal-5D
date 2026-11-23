@@ -10,6 +10,48 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-23 - C26/C27's review, the records: issue 264 under graph search - probed, pinned, a spec conflict for the user (M1); four statements corrected (L2, L3, L4, L9)
+
+The review of 6754794 ran three independent passes (spec fidelity, correctness, mutation): no HIGH
+finding. The main loop decided each finding; this entry and the three after it fix them.
+
+- **M1 - issue 264 overstated what holds under graph search.** Its claim ("no evaluation of one mode
+  is ever served for the other ... tested") holds for the engine's evaluation cache only. The main
+  loop's decision: probe it, pin what happens with a graph arm, correct the record, change no engine
+  code.
+  - Probed through the C step API: the ply split with graph search, N\* the root's boards + 1, 256
+    playouts before the crossing and 128 after it, six carried searches on three variants. In three
+    of them, a node the cached search made after the crossing has a child, by a move, that is a
+    carried node: evaluated dense before the crossing and never after. Its WDL is the dense pass's
+    to 1e-6, and 1.3e-3 to 5.0e-3 from the cached path's. The re-root's table is keyed by state and
+    moves made, not by epoch.
+  - Pinned: `test_a_carried_search_crossing_n_star` gains a `ply-graph` arm. Its searches are larger
+    and on three roots, tried in order until one meets such a node. The test advances onto the node
+    the cached search made and finds the carried node among its children, holding the dense
+    evaluation.
+  - The record: issue 264 names the graph route. It is a spec conflict with section 7.10's
+    "transpositions never mix a dense and a cached evaluation of one state", for the user.
+    - Reading (a), section 8.7's carry: nothing to build.
+    - Reading (b), strict: the engine drops or re-evaluates the carried nodes' table entries at the
+      crossing (`reroot`, `set_epoch`; ABI-neutral), and the arm's assertion turns round.
+
+    Graph search and the phase form are both off by default.
+- **L2**: the cached path's docstring says every node carries the root's epoch "in a fresh search",
+  and names the carried graph route.
+- **L3**: `compute_board` reads the epoch's history boards too under C20's
+  `past_and_epoch_history` reading.
+- **L9**: "a dense evaluation is a function of the state alone" now adds "up to its last bits, which
+  depend on the batch it was evaluated in" (issue 262). This was in the docstring and in issue 261.
+  Edit 381 was applied upstream unqualified, so the correction is proposed as edit 385.
+- **L4**: issue 269 keeps the built reading (the nearest evaluated ancestor's effort) and states
+  the literal one as the alternative. It stays the user's question. No code change.
+
+MEASUREMENTS: the graph row of the phase form's table, with its conditions. No engine code changed.
+
+Spec: sections 7.9, 7.10 and 8.7; register C12, C24, C26. Proposed edit 385 (section 7.10, the dense
+evaluation's last bits) in `docs/BUILD_LOG.md`. Spec issues 261, 264 and 269 are updated there.
+Issue 264 is the user's to rule; its two sentences are drafted, not proposed.
+
 ### 2026-11-23 - Merge main (4e9267e) into lane/net, before the C26/C27 review round
 
 Main's commits since the lane took it (faaa64e): issue 535's fix and its review round
