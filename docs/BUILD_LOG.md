@@ -1362,6 +1362,7 @@ threads reach at least one thread's sum (one retry on a shared machine).
 | 2026-11-09 | issue 535's fix into main (the main loop's merge battery) | main faaa64e + lane/fix535 8c4f905 (pre-rewrite 05afde5 + d44a7af), merged tree before the commit | dev-r, 24 logical; the engine and search lanes' fix rounds running | 32 | 293 | 317 / 315 / 315 | none | pass x3 |
 | 2026-11-09 | E8 behind its flag (the search lane, step 2; before review) | lane/search 6bdd838 (E11, main faaa64e in) + E8, the tree before the commit | dev-r, 24 logical; other lanes' jobs running; load 30-54% before, 39-62% after | 32 | 292 / 293 / 293 | 316 / 314 / 315 | none | pass x3 |
 | 2026-11-23 | the review's code round into main (the tree form under graph search, G11's network side; the main loop's check) | main d760019 + the round, the working tree before its commit | dev-r, 24 logical; the engine lane's and search lane's checks running | 32 | 293 / 289 / 291 | 301 / 303 / 304 | none | pass x3 |
+| 2026-11-23 | main 032db11 into lane/search (`mcts.cpp` combined: issue 535's fix and the tree form under graph search beside E11's deadline) | lane/search eb7353b (the merge 8903439 and the cited-ids update), inside its checks after the whole `--werror --test` run | dev-r, 24 logical; the engine lane's checks running; load 99-100% before and after | 32 | 293 / 293 / 293 | 315 / 314 / 313 | none | pass x3 |
 
 ## Environment
 
@@ -10418,3 +10419,7 @@ entry changes in the same edit as its code, which the standing rule defers to up
   heading, this file's four conflicts kept on both sides (the Lazy SMP rows and the session
   entries by date, this lane's issue and edit blocks before main's), the package docstring's two
   bullets; no code conflict; `docs/design/` main's as it is.
+  Checks on eb7353b (the merge and the cited-ids update): engine 774 of 774 (`--werror`),
+  long_detectors 2 of 2, the Lazy SMP test x3 (table above), ruff clean, pytest 219 passed (the
+  time, search-API, netplay, decision-log, switch-match and pool files), verify ok, gate commit
+  ok (smoke test passed, 0 declined; proof channel DISABLED).

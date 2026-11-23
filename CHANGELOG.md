@@ -23,7 +23,9 @@ the Lazy SMP table's rows by date (main's with its cited ids, this lane's E11/E8
 issues 452-479 and edits 331-345 before main's blocks, the session log's entries by date; the
 `t5d.engine` package docstring, both modules' bullets (`switch_match.py`, `pool.py`). No code
 conflicted: `mcts.cpp`'s deadline plumbing (E11) and the tree form under graph search merged
-cleanly, and the engine builds at `--werror`.
+cleanly, and the engine builds at `--werror`. Checked after the cited-ids update (eb7353b): the
+whole engine suite, long_detectors, the Lazy SMP test x3 (`mcts.cpp` combined), ruff, the engine-driving
+Python files and `test_pool.py`, verify and gate commit - all green (the build log's session entry).
 
 Spec: none changed here - `docs/design/` is main's. No proposed edit; no measured figure.
 
