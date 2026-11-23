@@ -2127,3 +2127,45 @@ TEST(capi_search_a_cleared_deadline_is_cleared) {
     }
   }
 }
+
+TEST(capi_search_verify_within_takes_a_deadline) {
+  // The review's H1 (part 4): t5d_search_verify_within - an exact verification
+  // within a deadline. Past it (a tiny positive value: a budget already spent)
+  // a child the expansion left unknown stays unknown and stays; with none (0)
+  // it is decided. NaN and negatives are refused (THE DEADLINE).
+  t5d_game* raw = nullptr;
+  const char* boards[] = {"[4k3/8/8/8/8/8/4r3/4K3:0:1:w]"};
+  REQUIRE_EQ(t5d_game_new_from_fen(boards, 1, 8, 8, T5D_PARITY_ODD, T5D_TO_MOVE_WHITE, 0, &raw, nullptr), T5D_OK);
+  const Game g(raw);
+  t5d_search_params sp = quick_params();
+  sp.hunt = 0;
+  sp.settling = 0;
+  sp.legality_checks = 0;  // the expansion settles nothing beyond its cheap tiers
+  sp.legality_nodes = 0;
+  sp.verify_unknown = 0;
+  const SearchHandle s = new_search(g.get(), sp);
+  REQUIRE_EQ(t5d_search_run(s.get(), T5D_EVALUATOR_UNIFORM, 1, 16, nullptr), T5D_OK);
+  t5d_search_summary info{};
+  REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
+  const size_t count = static_cast<size_t>(info.root_children);
+  size_t unknown = count;
+  for (size_t i = 0; i < count; ++i) {
+    t5d_root_child c{};
+    REQUIRE_EQ(t5d_search_child(s.get(), i, &c, nullptr, 0, nullptr), T5D_OK);
+    if (c.legality == T5D_LEGALITY_UNKNOWN) {
+      unknown = i;
+      break;
+    }
+  }
+  REQUIRE(unknown < count);  // the premise
+  int32_t v = -1;
+  REQUIRE_EQ(t5d_search_verify_within(s.get(), unknown, 1e-9, &v, nullptr), T5D_OK);
+  CHECK_EQ(v, T5D_LEGALITY_UNKNOWN);
+  REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
+  CHECK_EQ(static_cast<size_t>(info.root_children), count);  // it stays
+  REQUIRE_EQ(t5d_search_verify_within(s.get(), unknown, 0.0, &v, nullptr), T5D_OK);
+  CHECK(v == T5D_LEGALITY_LEGAL || v == T5D_LEGALITY_ILLEGAL);
+  CHECK_EQ(t5d_search_verify_within(s.get(), 0, std::nan(""), &v, nullptr), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_search_verify_within(s.get(), 0, -1.0, &v, nullptr), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_search_verify_within(s.get(), 0, 1.0, nullptr, nullptr), T5D_ERR_ARGUMENT);
+}

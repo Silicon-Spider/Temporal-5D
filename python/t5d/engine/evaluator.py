@@ -771,7 +771,10 @@ def run_timed_search(
     ``batch_size`` playouts, the engine's own ``Search::run`` slice, so a deterministic evaluator
     builds the tree the engine's ``run_timed`` builds - with ``tm.check`` before each, until a
     stop; then ``tm.end``. On the wall clock the search's deadline is the hard bound for the run
-    (the rules engine's calls inside a batch stop at it), cleared after; ``model_clock``: the
+    (the rules engine's calls inside a batch stop at it; a 0 s bound a deadline already passed,
+    never 0 - none: the E11 review's L3), lifted for a slice before any root child has a visit
+    (the exception, a move needs a visit: the root's listing completes - M1), cleared after;
+    ``model_clock``: the
     cost model's clock (elapsed NaN), deterministic. ``effort``: the root's effort distribution
     for E8 (off unless the time manager's ``difficulty_weighting``). ``clock``: a clock of the
     driver's in seconds (a test's virtual clock) in place of the wall clock - the engine's
@@ -793,13 +796,28 @@ def run_timed_search(
     stats = ServeStats()
     out_stop: str | None = None
     slices = 0
+    # The hard bound as the search's deadline, seconds from now: a 0 s bound (a clock at the
+    # overhead) is a deadline already passed, never 0 - which means none (the review's L3).
+    hard = max(plan.hard_seconds, 1e-9)
+    lifted = False  # the forced slice's: run without the bound (M1)
     if steady:
-        search.set_deadline(plan.hard_seconds)
+        search.set_deadline(hard)
     try:
         while True:
             verdict = tm.check(search, math.nan if model_clock else now() - t0)
             if verdict.stop != T5D_TIME_STOP_NONE:
                 break
+            if steady:
+                # The exception (a move needs a visit): until a root child has one, the slice runs
+                # without the hard bound inside it, so that the root's listing and classification
+                # complete (the review's M1) - as the engine's run_timed does.
+                forced = search.info().root_visits < 2 and not any(c.visits > 0 for c in search.children())
+                if forced and not lifted:
+                    search.set_deadline(0.0)
+                    lifted = True
+                elif not forced and lifted:
+                    search.set_deadline(max(hard - (now() - t0), 1e-9))
+                    lifted = False
             driver = CStepDriver(search, playouts=batch, regs_per_board=regs_per_board, global_regs=global_regs, value_kind=value_kind)
             st = serve(driver, evaluator, batch_size=batch)
             slices += 1

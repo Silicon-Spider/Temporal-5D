@@ -1455,6 +1455,18 @@ t5d_status t5d_search_verify(t5d_search* search, size_t index, int32_t* legality
   });
 }
 
+t5d_status t5d_search_verify_within(t5d_search* search, size_t index, double seconds, int32_t* legality,
+                                    char** error) {
+  return guarded(error, [&]() -> t5d_status {
+    if (search == nullptr || legality == nullptr) throw std::invalid_argument("search or legality is NULL");
+    t5d::LegalityOptions exact = t5d::LegalityOptions::exact();
+    exact.max_bytes = search->search.params().mate_bytes;
+    exact.deadline = t5d::mcts::deadline_after(std::chrono::steady_clock::now(), seconds, "seconds");
+    *legality = static_cast<int32_t>(search->search.verify(index, exact));
+    return T5D_OK;
+  });
+}
+
 t5d_status t5d_search_advance(t5d_search* search, size_t index, char** error) {
   return guarded(error, [&]() -> t5d_status {
     if (search == nullptr) throw std::invalid_argument("search is NULL");

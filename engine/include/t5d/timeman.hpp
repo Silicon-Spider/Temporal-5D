@@ -86,13 +86,20 @@
 // search the bound as its deadline (Search::set_deadline), which the rules
 // engine's calls inside the batch - the turn starts' mate checks, the legality
 // classification and its verification, the flat form's fallback listing - stop
-// at, answering Unknown, never a verdict (H37). The one exception: a decision
-// whose root has no visited child yet runs on, whatever the clock says, until
-// one has a visit (a move must be chosen, and choosing needs a visit) - from an
-// unevaluated root that takes up to two evaluator calls, the root's own leaf
-// and then its children's: one slice in the batched mode (two calls inside
-// it), two one-leaf slices in the synchronous mode. So a fresh root's decision
-// can end past its bound by those two calls.
+// at, answering Unknown, never a verdict (H37). Match play's steps after the
+// search sit inside the bound too (§8.6: the post-search scan "inside the hard
+// bound, not after it"; the review's H1): the chosen move's exact
+// verification gets what the bound leaves, and where it is cut or the move is
+// illegal the most visited child known legal is played. TWO EXCEPTIONS: (1) a
+// decision whose root has no visited child yet runs on, whatever the clock
+// says, until one has a visit (a move must be chosen, and choosing needs a
+// visit) - from an unevaluated root up to two evaluator calls, the root's own
+// leaf and then its children's (one slice batched, two one-leaf slices
+// synchronous), the slice run without the bound inside it so that the root's
+// listing completes (the review's M1); (2) where no child is known legal once
+// the bound's verification is cut, the children are verified in visit order
+// against the side's REMAINING clock, the first shown legal played - the side
+// flags if its clock runs out first, never a throw (t5d/selfplay.hpp).
 //
 // NO ROOT-SCAN RESERVE (§8.6's "Guards": "a reserve held for one re-search if
 // that scan refutes"; register E7): its one named consumer, Guard's

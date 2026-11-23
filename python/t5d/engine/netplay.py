@@ -41,7 +41,11 @@ mirrors the engine's ``play_game`` (``src/selfplay.cpp``; ``t5d-play``) step for
   time (search, choice, verification), or on ``model_clock`` its work at the cost model's price
   (deterministic). A side whose clock runs out loses on time (``end`` "flag", result ``*``: the
   clock is the match's convention, not a rule), as the engine's ``play_game`` does - the flagged
-  decision's work counted in the totals. Self-play takes no clock.
+  decision's work counted in the totals. The steps after the search follow the engine's policy
+  (the E11 review's H1): the search re-run a batch at a time, the chosen move verified within the
+  hard bound (``Search.verify(index, seconds)``), the most visited child known legal played where
+  it is cut; with none known legal, the children verified in visit order against the side's
+  remaining clock - the flag falls if it runs out, never a throw (M1). Self-play takes no clock.
 * **6e's steering switches** (H13, H43; spec section 11.2: "an on/off test of its own at match
   play"): ``asset_map`` (on) and ``hunt_suggest`` (off) for every search; ``search_overrides``,
   further ``t5d_search_params`` fields by name; ``side_overrides``, White's and Black's own (match
@@ -555,8 +559,12 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                     stats, _ = run_search(
                         search, evaluator, playouts=cfg.playouts, batch_size=cfg.batch_size, self_play=cfg.mode != "match", **regs
                     )
-                pick = _choose(search, cfg, res, stats, evaluator, regs, rng)
-                if cfg.decision_log:
+                dclock = None if timed is None else _DecisionClock(d0, timed.plan.hard_seconds, res.clock_remaining[mover], cfg.model_clock)
+                try:
+                    pick = _choose(search, cfg, res, stats, evaluator, regs, rng, dclock)
+                except _OutOfClock:
+                    pick = None  # the side's flag falls (charged below)
+                if cfg.decision_log and pick is not None:
                     res.decision_log.append(_decision_entry(game, search, pick, len(res.actions), res.decisions, action, start.even))
                 after = search.info()
                 res.decisions += 1
@@ -582,7 +590,7 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                     if spent > timed.plan.hard_seconds:
                         res.hard_overruns += 1
                     res.clock_remaining[mover] -= spent
-                    if res.clock_remaining[mover] <= 0:
+                    if res.clock_remaining[mover] <= 0 or pick is None:
                         flagged = True  # the side's flag fell during its action: not recorded
                         break
                 child = search.child(pick)
@@ -773,26 +781,75 @@ def decision_log_lines(res: GameResult, *, demotion_share: float = 0.3) -> list[
     return lines
 
 
-def _choose(search: Search, cfg: PlayConfig, res: GameResult, stats, evaluator, regs, rng) -> int:
+class _OutOfClock(Exception):
+    """The side's clock ran out before it had a move (stage E11, the review's H1 and M1)."""
+
+
+@dataclass
+class _DecisionClock:
+    """A clocked decision's time after its search (stage E11, the review's H1): its start, its
+    hard bound and the side's clock at its start, all on the wall clock (the model clock has no
+    wall time: ``model``)."""
+
+    d0: float
+    hard: float
+    remaining: float
+    model: bool
+
+    def left(self, budget: float) -> float:
+        """Seconds of ``budget`` from the decision's start still unspent (a tiny positive value
+        once spent: a deadline already passed)."""
+        return max(budget - (time.perf_counter() - self.d0), 1e-9)
+
+    def out(self) -> bool:
+        return not self.model and time.perf_counter() - self.d0 >= self.remaining
+
+
+#: A clocked decision's batches without a visit before its flag falls, where its clock does not
+#: advance (the model clock): the engine's play_game's kNoVisitRounds.
+_NO_VISIT_ROUNDS = 16
+
+
+def _choose(search: Search, cfg: PlayConfig, res: GameResult, stats, evaluator, regs, rng, clock: _DecisionClock | None = None) -> int:
     """The decision's child: the final rule (match) or visit sampling (self-play), then made
-    known legal (a chosen unknown child is classified exactly first)."""
+    known legal (a chosen unknown child is classified exactly first). A clocked decision
+    (``clock``; the engine's play_game's policy, the E11 review's H1): the search re-run one batch
+    at a time; the verification within the hard bound, then the most visited child known legal;
+    with none known legal, the children verified in visit order against the side's remaining
+    clock; ``_OutOfClock`` when the clock runs out first - never a throw for want of a move."""
 
     def visited() -> bool:
         return any(c.visits > 0 for c in search.children())
 
+    def search_more(playouts: int) -> None:
+        more, _ = run_search(search, evaluator, playouts=playouts, batch_size=cfg.batch_size, self_play=cfg.mode != "match", **regs)
+        stats.batch_sizes.extend(more.batch_sizes)
+        stats.evaluate_seconds += more.evaluate_seconds
+
     def choose_now() -> int:
-        if not visited():  # children were removed: search again
-            more, _ = run_search(search, evaluator, playouts=cfg.playouts, batch_size=cfg.batch_size, self_play=cfg.mode != "match", **regs)
-            stats.batch_sizes.extend(more.batch_sizes)
-            stats.evaluate_seconds += more.evaluate_seconds
+        if not visited():  # children were removed: search again (a clocked decision: one batch)
+            search_more(cfg.batch_size if clock is not None else cfg.playouts)
+            rounds = 0
+            while clock is not None and not visited():
+                # M1: never a throw for want of a visit - on, a batch at a time, until the clock runs out
+                before = search.info().playouts
+                if clock.out() or rounds >= _NO_VISIT_ROUNDS:
+                    raise _OutOfClock
+                search_more(cfg.batch_size)
+                if not visited() and search.info().playouts == before:
+                    raise _OutOfClock
+                rounds += 1
         if cfg.mode == "match":
             return search.choose()[0]
         t = cfg.temperature if res.decisions < cfg.temperature_decisions else 0.0
         return search.choose_by_visits(t, float(rng.random()))
 
+    def within(budget: float) -> float:
+        return 0.0 if clock is None or clock.model else clock.left(budget)
+
     pick = choose_now()
     while search.child(pick).legality != T5D_LEGALITY_LEGAL:
-        verdict = search.verify(pick)
+        verdict = search.verify(pick, within(clock.hard) if clock is not None else 0.0)
         res.verified_choices += 1
         if verdict == T5D_LEGALITY_LEGAL:
             break
@@ -800,10 +857,39 @@ def _choose(search: Search, cfg: PlayConfig, res: GameResult, stats, evaluator, 
             pick = choose_now()
             continue
         legal = [c for c in search.children() if c.legality == T5D_LEGALITY_LEGAL]
-        if not legal:
-            raise RuntimeError("no root child could be shown legal (the memory ceiling)")
-        pick = max(legal, key=lambda c: c.visits).index
+        if legal:
+            pick = max(legal, key=lambda c: c.visits).index
+            continue
+        if clock is not None and not clock.model:
+            return _legal_against_the_clock(search, res, clock)
+        raise RuntimeError("no root child could be shown legal (the memory ceiling)")
     return pick
+
+
+def _legal_against_the_clock(search: Search, res: GameResult, clock: _DecisionClock) -> int:
+    """H1's second exception: no child known legal after the bound's verification - the children
+    verified in visit order against the side's remaining clock, the first shown legal returned;
+    ``_OutOfClock`` when the clock runs out first."""
+    tried: set[tuple] = set()
+    while True:
+        children = sorted(search.children(), key=lambda c: -c.visits)
+        removed = False
+        for c in children:
+            key = (tuple(c.moves), c.submit)
+            if key in tried:
+                continue
+            verdict = search.verify(c.index, clock.left(clock.remaining))
+            res.verified_choices += 1
+            if verdict == T5D_LEGALITY_LEGAL:
+                return c.index
+            if verdict == T5D_LEGALITY_ILLEGAL:
+                removed = True
+                break
+            if clock.out():
+                raise _OutOfClock
+            tried.add(key)
+        if not removed:
+            raise RuntimeError("no root child could be shown legal (the memory ceiling)")
 
 
 def _reroot(carried: list[Search | None], mover: int, reply: Sequence[Move], game: Game) -> bool:

@@ -21,8 +21,11 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <fstream>
 #include <memory>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -30,6 +33,7 @@
 
 #include "play_record.hpp"
 #include "synthetic.hpp"
+#include "t5d/legal.hpp"
 #include "t5d/mcts.hpp"
 #include "t5d/movegen.hpp"
 #include "t5d/pgn.hpp"
@@ -637,50 +641,27 @@ TEST(timeman_the_hard_bound_holds_on_the_wall_clock_under_load) {
   }
 }
 
-TEST(timeman_the_deadline_stops_the_rules_engine_inside_a_batch) {
-  // A 400-board position (random pseudo-legal play, synthetic). Past the
-  // deadline the calls a batch makes stop at once and answer Unknown: E4's
-  // detector under the budget the search gives it (Search::set_deadline's
-  // time left), and the legality classification - exact, no node budget, so
-  // only the clock stops it - inside the search's expansion and alone.
-  synthetic::Spec spec;
-  spec.target_boards = 400;
-  spec.target_active = 10;
-  spec.seed = 5;
-  const synthetic::Game g = synthetic::play_until_reached(spec);
-  REQUIRE(g.stop == synthetic::Stop::Target);
-  REQUIRE(g.state.multiverse().board_count() >= 400);
-  SearchBudget past;
-  past.max_time = std::chrono::nanoseconds{0};  // what the search gives a check past its deadline
-  const MateResult mate = detect_mate(g.state, Detector::Hypercuboid, past);
-  CHECK(mate.verdict == Outcome::Unknown || mate.verdict == Outcome::Ongoing);  // never a terminal unproven
+TEST(timeman_the_persistent_deadline_reaches_the_calls_inside_a_batch) {
+  // Search::set_deadline (E11's persistent deadline; the step API and
+  // run_timed set it) reaches the calls a batch makes: past it, the exact
+  // legality classification of the expansion - no node budget, so only the
+  // clock stops it - leaves moves unknown, never a verdict. (What a run's own
+  // Limits::seconds reaches is issue 406's, tested in test_legality_cost.cpp;
+  // the review's M4: not duplicated here.)
   SearchParams sp = quiet_params();
-  sp.mate_nodes = 50'000;  // the root's own check, at construction, is bounded by nodes
   sp.legality = LegalityOptions::exact();
-  Search search(g.state, sp);
+  Search search(game({"[4k3/8/8/8/8/8/4r3/4K3:0:1:w]"}, BoardSize{8, 8}), sp);
   search.set_deadline(std::chrono::steady_clock::now() - std::chrono::seconds(1));
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
-  const auto t0 = std::chrono::steady_clock::now();
-  Limits one;
-  one.playouts = 1;
-  search.run(*uniform, one);
-  const double spent = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-  CHECK(spent < 30.0);  // generous: the exact classification is otherwise unbounded
+  search.run(*uniform, Limits{16});
   CHECK(!search.root_terminal());
   CHECK(search.stats().unknown_edges > 0);
-  CHECK(search.stats().playouts >= 1);
-  // The legality classification alone, past its deadline: nothing beyond the
-  // cheap tiers is settled.
-  MoveList moves;
-  generate_moves(g.state, moves);
-  std::vector<MoveLegality> out;
-  LegalityOptions late = LegalityOptions::exact();
-  late.deadline = std::chrono::steady_clock::now() - std::chrono::seconds(1);
-  LegalityStats stats;
-  classify_moves(g.state, std::span<const Move>(moves.data(), moves.size()), out, late, &stats);
-  CHECK_EQ(stats.search_nodes, std::uint64_t{0});
-  CHECK(std::count(out.begin(), out.end(), MoveLegality::Unknown) > 0);
+  // Cleared, the same search classifies exactly.
+  Search exact(game({"[4k3/8/8/8/8/8/4r3/4K3:0:1:w]"}, BoardSize{8, 8}), sp);
+  exact.run(*uniform, Limits{16});
+  CHECK_EQ(exact.stats().unknown_edges, std::uint64_t{0});
 }
+
 
 // ---- determinism, the hook's refusal, match play ----------------------------------
 
@@ -1705,4 +1686,285 @@ TEST(timeman_run_keeps_the_persistent_deadline_and_its_own_inside) {
   REQUIRE(!spy.seen.empty());
   for (const std::optional<Clk::time_point>& d : spy.seen) CHECK(d == std::optional(far));
   CHECK(search.deadline() == std::optional(far));
+}
+
+// ---- match play's hard bound after the search (the E11 review's H1, M1) ------------------------
+
+namespace {
+
+std::string read_text(const std::string& path) {
+  std::ifstream in(path, std::ios::binary);
+  REQUIRE(in.good());
+  std::ostringstream out;
+  out << in.rdbuf();
+  return out.str();
+}
+
+Move move_named(const GameState& s, const std::string& text) {
+  MoveList moves;
+  generate_moves(s, moves);
+  for (const Move& m : moves) {
+    if (to_string(m, s.multiverse().even()) == text) return m;
+  }
+  throw std::runtime_error("no pseudo-legal move " + text);
+}
+
+// Issue 406's Q3 node (engine/testdata/legality-cost/q3-flat-node.5dpgn): 18
+// boards, 141 pseudo-legal moves, some whose exact proofs need hundreds of
+// thousands of nodes. Under Q3's rule (play activates).
+GameState q3_flat_node() {
+  RuleOptions q3;
+  q3.play_activates = true;
+  const PgnRecord record =
+      read_pgn(read_text((std::string(T5D_ENGINE_DIR) + "/testdata/legality-cost/q3-flat-node.5dpgn")));
+  PgnReplay replay(record, {}, q3);
+  while (!replay.finished()) replay.play_next();
+  return replay.state();
+}
+
+// Steers to `first` (logit 4) and `second` (3.5), and charges `clock` per
+// leaf - the search's time on the match clock.
+class SteerAndCharge final : public Evaluator {
+ public:
+  SteerAndCharge(ManualClock& clock, double per_leaf, std::optional<Move> first, std::optional<Move> second)
+      : clock_(clock), per_leaf_(per_leaf), first_(first), second_(second) {}
+  void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
+    for (std::size_t i = 0; i < batch.size(); ++i) {
+      const MoveList& moves = batch[i].expansion->moves();
+      out[i].logits.assign(moves.size(), 0.0f);
+      for (std::size_t m = 0; m < moves.size(); ++m) {
+        if (first_ && moves[m] == *first_) out[i].logits[m] = 4.0f;
+        if (second_ && moves[m] == *second_) out[i].logits[m] = 3.5f;
+      }
+      out[i].wdl = wdl_of(0.0);
+      out[i].value = two_hot(0.0);
+    }
+    clock_.t += per_leaf_ * static_cast<double>(batch.size());
+  }
+
+ private:
+  ManualClock& clock_;
+  double per_leaf_;
+  std::optional<Move> first_;
+  std::optional<Move> second_;
+};
+
+// One clocked action at the Q3 node on the clock seam: the evaluator prices a
+// leaf at 1 s, so the decision's forced first slice (a move needs a visit)
+// alone spends far past its hard bound, and the verification after it is cut
+// at once - deterministic, whatever the machine.
+PlayParams q3_clocked(double base, bool lazy) {
+  PlayParams p;
+  p.search = quiet_params();
+  p.search.split = TurnSplit::BoardMove;
+  p.search.batch_size = 4;
+  p.search.legality = LegalityOptions::budgeted(0, 0);  // the expansion settles nothing beyond tier 1
+  p.search.verify_unknown = lazy;
+  p.search.verify_legality = LegalityOptions::nodes(60'000);
+  p.match_play = true;
+  p.max_actions = 1;
+  p.decision_log = true;
+  p.clock.enabled = true;
+  p.clock.base_seconds = base;
+  return p;
+}
+
+bool legal_exactly(const GameState& s, const Move& m) {
+  std::vector<MoveLegality> out;
+  classify_moves(s, std::span<const Move>(&m, 1), out, LegalityOptions::exact());
+  return out.at(0) == MoveLegality::Legal;
+}
+
+}  // namespace
+
+TEST(timeman_a_clocked_verification_sits_inside_the_hard_bound) {
+  // H1, the policy's step (1): the chosen move's exact verification runs
+  // under the decision's own hard bound - here already spent, so it is cut
+  // at once - and the existing fallback plays the most visited child known
+  // legal. The search is steered to a move whose exact proof needs 531,432
+  // nodes (lazily verified within 60,000: unknown) and then to one the lazy
+  // verification shows legal. Before the policy the exact proof ran to its
+  // end (some 0.8 s here, charged to the side) and removed the move as
+  // illegal; now it is cut, and the move stays among the children.
+  const GameState s = q3_flat_node();
+  const Move steered = move_named(s, "(+2T2)Kb4(+1T1)a4");
+  const Move legal = move_named(s, "(+1T2)Ka3(+2T2)a3");
+  ManualClock clock;
+  SteerAndCharge ev(clock, 1.0, steered, legal);
+  PlayParams p = q3_clocked(60, true);
+  p.clock.clock = &clock;
+  GameRecord g(s);
+  CHECK_NOTHROW(g = play_game(s, ev, p));
+  REQUIRE(!g.decision_log.empty());
+  const DecisionLog& d = g.decision_log.front();
+  const std::vector<Move>& played = d.children.at(d.chosen).step.moves;
+  REQUIRE_EQ(played.size(), std::size_t{1});
+  CHECK(played.front() == legal);  // the child known legal, in the steered move's place
+  CHECK(g.verified_choices >= 1);
+  // The steered move's verification was cut, not finished: it is still among
+  // the decision's children (an exact proof finds it illegal and removes it).
+  bool kept = false;
+  for (const DecisionLog::Child& c : d.children) kept = kept || (c.step.moves.size() == 1 && c.step.moves[0] == steered);
+  CHECK(kept);
+  CHECK(!legal_exactly(s, steered));  // the premise: finished, the proof would have removed it
+  CHECK(g.end != GameEnd::Flag);
+}
+
+TEST(timeman_no_child_known_legal_searches_against_the_clock_and_never_throws) {
+  // H1's second exception (policy steps 2 and 6): no root child known legal
+  // (the expansion settles nothing, no lazy verification), the bound's
+  // verification cut - the children are verified in visit order against the
+  // side's REMAINING clock. With 60 s on it a legal move is found and played
+  // (verified more than once: the cut call, then the search); with the
+  // clock spent by the forced slice the side's flag falls - never the throw
+  // that ended the game before the policy.
+  const GameState s = q3_flat_node();
+  {
+    ManualClock clock;
+    SteerAndCharge ev(clock, 1.0, std::nullopt, std::nullopt);
+    PlayParams p = q3_clocked(60, false);
+    p.clock.clock = &clock;
+    GameRecord g(s);
+    CHECK_NOTHROW(g = play_game(s, ev, p));
+    REQUIRE(!g.decision_log.empty());
+    const DecisionLog& d = g.decision_log.front();
+    const std::vector<Move>& played = d.children.at(d.chosen).step.moves;
+    REQUIRE_EQ(played.size(), std::size_t{1});
+    CHECK(legal_exactly(s, played.front()));
+    CHECK(g.verified_choices >= 2);
+    CHECK(g.end != GameEnd::Flag);
+    CHECK(g.hard_overruns >= 1);  // the forced slice ran past the bound: counted
+  }
+  {
+    ManualClock clock;
+    SteerAndCharge ev(clock, 1.0, std::nullopt, std::nullopt);
+    PlayParams p = q3_clocked(2.0, false);  // the forced slice's 4 leaves cost 4 s
+    p.clock.clock = &clock;
+    GameRecord g(s);
+    CHECK_NOTHROW(g = play_game(s, ev, p));
+    CHECK(g.end == GameEnd::Flag);
+    CHECK_EQ(g.winner, 0);  // Black was to move: White wins on time
+    CHECK_EQ(g.decisions, std::uint64_t{1});
+    CHECK_EQ(g.hard_overruns, std::uint64_t{1});
+    CHECK(g.clock_remaining[1] <= 0);
+    CHECK(g.actions.empty());
+    CHECK(g.final_state == g.start);
+  }
+}
+
+TEST(timeman_a_flat_root_whose_listing_a_deadline_cut_never_throws_out_of_play) {
+  // M1, E11's part (the re-listing itself is issue 406's, tested on main): a
+  // clocked flat game whose every node falls back to the listing
+  // (generator_nodes 1) on a steady clock the test holds - the hard bound a
+  // deadline already passed (a clock at the overhead), so every listing after
+  // the forced slice is cut. The forced slice lists the root without the
+  // bound; the game ends with moves or a flag, never an exception, and its
+  // record replays.
+  SteadyManual clock;
+  PlayParams p;
+  p.search = quiet_params();
+  p.search.split = TurnSplit::Flat;
+  p.search.generator_nodes = 1;
+  p.match_play = true;
+  p.turn_cap.turns = 3;
+  p.clock.enabled = true;
+  p.clock.clock = &clock;
+  p.clock.base_seconds = TimeParams{}.overhead_seconds;
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  GameRecord g(variant("Standard"));
+  CHECK_NOTHROW(g = play_game(variant("Standard"), *uniform, p));
+  CHECK(g.decisions >= 1);
+  GameState s = g.start;
+  for (const std::vector<Move>& action : g.actions) {
+    for (const Move& m : action) s.apply(m);
+    s.submit();
+  }
+  CHECK(s == g.final_state);
+  // The carried case: a child whose listing a passed deadline cut, advanced to,
+  // is listed by the next run without one and can be chosen.
+  SearchParams sp = quiet_params();
+  sp.split = TurnSplit::Flat;
+  sp.generator_nodes = 1;
+  const auto prepared = [&](Search& x) {
+    x.run(*uniform, Limits{1});  // the root listed, its children made
+    x.set_deadline(std::chrono::steady_clock::now() - std::chrono::seconds(1));
+    x.run(*uniform, Limits{24});  // the children's listings cut
+    x.set_deadline(std::nullopt);
+  };
+  Search probe(variant("Standard"), sp);
+  prepared(probe);
+  const std::vector<RootChild> kids = probe.root_children();
+  std::optional<std::size_t> emptied;
+  for (std::size_t i = 0; i < kids.size() && !emptied; ++i) {
+    if (kids[i].visits == 0) continue;
+    Search x(variant("Standard"), sp);
+    prepared(x);
+    x.advance(i);
+    if (x.root_children().empty()) emptied = i;
+  }
+  REQUIRE(emptied.has_value());  // the premise: a visited child left with no turns
+  Search search(variant("Standard"), sp);
+  prepared(search);
+  search.advance(*emptied);
+  CHECK(search.root_children().empty());
+  CHECK(!search.node(search.root()).stuck);
+  CHECK(search.run(*uniform, Limits{4}) == StopReason::Playouts);
+  CHECK(!search.root_children().empty());
+  CHECK_NOTHROW(search.choose());
+}
+
+// ---- the deadline's reach that issue 406's tests lack (the review's M4) ----------------------
+
+TEST(timeman_past_the_deadline_the_classification_is_the_cheap_tiers_alone) {
+  // E11's gating (kept at the merge with issue 406, M2): past the deadline no
+  // tier-2 check is taken - checks, destination scans, greedy tries - and no
+  // tier-3 search starts, so an exact classification is, move by move, the
+  // classification with no check and no node at all (budgeted(0, 0)). On
+  // three positions, each with moves the cheap tiers leave open (the review's
+  // M4: L01, L02).
+  const auto late = [] {
+    LegalityOptions o = LegalityOptions::exact();
+    o.deadline = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+    return o;
+  };
+  std::vector<GameState> positions;
+  positions.push_back(game({"[4k3/8/8/8/8/8/4r3/4K3:0:1:w]"}, BoardSize{8, 8}));
+  positions.push_back(q3_flat_node());
+  positions.push_back(t5d_test::v3::mate_in_two());
+  for (const GameState& s : positions) {
+    MoveList all;
+    generate_moves(s, all);
+    const std::vector<Move> moves(all.begin(), all.end());
+    std::vector<MoveLegality> cut;
+    std::vector<MoveLegality> cheap;
+    std::vector<MoveLegality> full;
+    LegalityStats st;
+    classify_moves(s, moves, cut, late(), &st);
+    classify_moves(s, moves, cheap, LegalityOptions::budgeted(0, 0));
+    classify_moves(s, moves, full, LegalityOptions::nodes(200'000));
+    CHECK(cut == cheap);
+    CHECK_EQ(st.search_nodes, std::uint64_t{0});
+    CHECK(std::count(cut.begin(), cut.end(), MoveLegality::Unknown) >
+          std::count(full.begin(), full.end(), MoveLegality::Unknown));  // the premise: tiers 2-3 settle more
+  }
+}
+
+TEST(timeman_past_the_deadline_a_mating_turn_start_is_not_terminal) {
+  // The turn starts' mate checks inside a batch take the deadline (the
+  // review's M4: M01): flat form, White mates in one - past the persistent
+  // deadline no child turn start is found terminal (its check stopped:
+  // Unknown, never a verdict); without one, the mate is found.
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  for (const bool past : {true, false}) {
+    SearchParams sp = quiet_params();
+    sp.split = TurnSplit::Flat;
+    Search search(t5d_test::v3::mate_in_one(), sp);
+    if (past) search.set_deadline(std::chrono::steady_clock::now() - std::chrono::seconds(1));
+    search.run(*uniform, Limits{64});
+    bool mate = false;
+    for (const RootChild& c : search.root_children()) {
+      if (c.child != kNoNode && search.node(c.child).terminal == Terminal::Checkmate) mate = true;
+    }
+    CHECK_EQ(mate, !past);
+  }
 }

@@ -10,6 +10,52 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - E11/E8 review fixes, phase 2: match play's hard bound held after the search, never a throw for want of a move, the deadline's reach tested where issue 406's tests stop
+
+The review of the E11/E8 change, phase 2 on the reconciled tree (after main d4c7fb9's merge):
+findings H1 (parts 1-4 and 6), M1, M3 (the Python test), M4, L2 and L3.
+- **H1 - the policy, no reserve** (`engine/src/selfplay.cpp`): a clocked decision's chosen move is
+  verified under its own hard bound, on the match clock (the steady clock or the test seam's); where
+  that verification is cut or the move is illegal, the existing fallback plays the most visited
+  child known legal. Only where NO child is known legal does the decision go past its bound - the
+  second exception beside "a move needs a visit": the children are verified in visit order (the most
+  visited first, an illegal one removed) against the side's REMAINING clock, the first shown legal
+  played; the side flags if its clock runs out first, never the old `std::logic_error`. The
+  turn-start verdict stays uncharged - it decides the result, the referee's work (issue 456) -
+  and decision 13's node budget for it arrives with `lane/engine` (part 5, not built here).
+- **H1 in netplay** (part 4): a new C function `t5d_search_verify_within(search, index, seconds,
+  ...)` - the exact verification within a deadline (THE DEADLINE's rules) - mirrored by
+  `Search.verify(index, seconds)`; `netplay._choose` follows the same policy on a decision clock
+  (`_DecisionClock`), re-runs one batch in the timed path as `play_game` does, and raises
+  `_OutOfClock` for the flag.
+- **M1**: issue 406's re-listing adopted at the merge; E11's own part - `run_timed`'s forced slice
+  runs without the hard bound (the engine's and `run_timed_search`'s), and a clocked decision with
+  no visited child searches on against the side's clock (16 batches without a visit at most, for a
+  clock no idle loop advances) and flags - never a throw out of `play_game` or netplay.
+- **M3** (Python): `run_timed_search` sets the bound, lifts it for the forced slice and clears it
+  (a monkeypatched `set_deadline`).
+- **M4**: `timeman_the_deadline_stops_the_rules_engine_inside_a_batch` cut to what issue 406's
+  tests lack - the persistent deadline reaching the calls inside a batch (on a small position in
+  check, no 400-board generation, no timing); new: past the deadline an exact classification equals
+  the cheap tiers' alone (`budgeted(0, 0)`) move by move on three positions; a mating turn start is
+  not terminal past the deadline and is found without it.
+- **L2**: every conversion through `deadline_after` (at the merge); the time left saturated at 0 in
+  `legal.cpp`.
+- **L3**: `run_timed_search` maps a 0 s hard bound to a deadline already passed (1e-9 s), never 0.
+- **Tests**: `engine/tests/test_timeman.cpp` - the verification cut inside the bound at issue
+  406's Q3 node on the clock seam (the steered move kept, a child known legal played); no child
+  known legal - a legal move found against the clock, or the flag (never a throw, the overrun
+  counted); a flat game whose listings the bound cuts, and a carried child re-listed; the M4 tests.
+  `test_capi_search.cpp` - `t5d_search_verify_within`. `python/tests/engine/test_time_management.py`
+  - M3/L3's spy, `Search.verify(seconds)`, netplay's clocked choice and its flag.
+- **Docs**: `t5d/timeman.hpp`, `t5d/capi_search.h`, the engine README (the hard bound's paragraph,
+  "Tested"), netplay's and `run_timed_search`'s docstrings; issues 456, 458, 467 and the E7 row in
+  `docs/BUILD_LOG.md`, edit 346.
+
+Spec: §8.6 ("Guards": the hard bound inviolable, the post-search scan inside it), §12.3 (match
+play); register E7 (the tight wall-clock hard bound), H37, D13 (decision 13, adopted when it lands).
+Proposed edit 346; issues 456, 458, 467. No measured figure.
+
 ### 2026-11-23 - main (d4c7fb9) merged into lane/search, the two deadlines reconciled: one mechanism (E11 review M2, M3)
 
 Main taken by merge (M23) with `lane/engine` on it - issue 406's deadline reaching the rules

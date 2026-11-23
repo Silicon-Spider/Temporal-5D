@@ -4629,11 +4629,24 @@ verification of unknown edges (`LegalityOptions::deadline`, new) stop at it and 
 Unknown - never a verdict (H37). The deadline does not reach the flat form's turn generator
 (node-budgeted only), the synchronous mode's inline ladder jobs, `hunt_suggest`'s wait for the
 root's Hunt, `place()`'s exact verification with the proof channel on, or the asset map's
-quiescence (issue 467). The one exception: a root with no visited child runs on, whatever the clock
-says, until one has a visit (a move needs a visit) - from an unevaluated root that takes up to
-two evaluator calls, the root's own leaf and then its children's (one slice in the batched mode,
-two one-leaf slices in the synchronous mode), so a fresh root's decision can end that much past
-its bound. A moves-left above `kMovesLeftMaxTurns` (2000 turns; issue 476) is refused from the
+quiescence (issue 467). One deadline mechanism serves the time manager and issue 406's
+`Limits::seconds` (the merge, the review's M2): every conversion through `deadline_after` (0 and
+1e9 s or more none, NaN and negatives refused); `Search::set_deadline` persistent, `run()` giving
+its batches the earlier of it and its own seconds and restoring it on return; `run_timed`
+restoring the caller's deadline and taking a game's `max_seconds` as its slices' seconds. Match
+play's steps after the search sit inside the bound (§8.6's post-search scan "inside the hard
+bound"; the review's H1): the chosen move's exact verification gets what the bound leaves, and
+where it is cut or the move illegal the most visited child known legal is played. Two
+exceptions: (1) a root with no visited child runs on, whatever the clock says, until one has a
+visit (a move needs a visit) - from an unevaluated root up to two evaluator calls, the root's own
+leaf and then its children's (one slice batched, two one-leaf slices synchronous), the slice run
+without the bound inside it so that the root's listing completes (the review's M1; a listing the
+bound cut elsewhere is re-listed later - issue 406); (2) where no child is known legal once the
+bound's verification is cut, the children are verified in visit order against the side's
+remaining clock, the first shown legal played, and the side flags if the clock runs out first -
+never a throw, from `play_game` or netplay (which verifies through `t5d_search_verify_within`).
+The turn-start verdict is not charged to either side (it decides the result: the referee's work -
+issue 456); decision 13's node budget for it arrives with `lane/engine`. A moves-left above `kMovesLeftMaxTurns` (2000 turns; issue 476) is refused from the
 context and capped from the root's network output, so a plan's integral sums at most 1000
 actions.
 
@@ -4748,7 +4761,15 @@ named in the record; netplay's increment, its model clock (reproducible, the mod
 charged), a flag mid-action, a flagged decision's work counted and bad `time_overrides`
 refused; the proof hook taken with the proof channel off - extending on a withheld proof,
 never stopping (a solved root stops only with the channel), nothing injected in a match game -
-in C++, C and Python.
+in C++, C and Python. Phase 2 (the merge with issue 406): the hard bound inside every batch of
+every slice and the caller's deadline restored (also after a throw), the forced slice without
+it, `run()`'s own deadline inside the persistent one, the C API's deadline cleared by 0, 1e9 s or
+infinity; past the deadline an exact classification equal, move by move, to one with no check
+and no node, and a mating turn start not terminal; match play at issue 406's Q3 node on the clock
+seam - the verification cut inside the bound and a child known legal played, the second
+exception finding a legal move against the clock or flagging, never a throw; a flat game whose
+listings the bound cuts never throwing, and a carried child re-listed; `t5d_search_verify_within`
+and netplay's clocked choice (Python).
 
 ## 5DFEN
 

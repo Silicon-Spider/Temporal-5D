@@ -2218,7 +2218,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | E4 | principle (weakened) | "Narrow hard, because the auditor is watching" - the register says weakened: it holds where the settling scans (< 50 boards) and Hunt (< 100) run - wired since E10 (2026-10-23), their proofs withheld until the sign-off; above that, narrowing is a bet on the audit lane and the league |
 | E1 | built, tested (the mandatory-count widening option not built) | PUCT with entropy-adaptive top-k widening and FPU; the policy temperature at every node. CHECKPOINT 7 (with I19), engine ABI round 2b: root noise in self-play with its total concentration (`dirichlet_concentration`, placeholder 0.03 x 361, appended beside the per-child `dirichlet_alpha`, which stays as its arm at 0) split across the root's open edges, per decision (issue 150); KataGo-style shaping a prototype behind `dirichlet_shaping`, off (its form a reading, issue 151); the root policy temperature (I19; issue 152), before the noise. "The widening schedule may depend on the mandatory-board count" - an option for 6g, not built (A6's count is in the expansion). Under D2's flat form (2026-10-23): k0 from the turn distribution's entropy (the boards' entropies summed) capped at `flat_k0_max` 16, widening generating the turns it instantiates, the root noise's total concentration split per board across its options and drawn before generation, both temperatures per board (issue 167). Every constant a placeholder, named in §8.4's "Constants as built" (issue 82; edit 123) |
 | E5, E9 | built, tested | LCB with a visit floor (E5); the solver behind H41's switch, the secure child, a visit cap on solved children (E9) - constants named as placeholders in §8.4 (issues 84-85). E5's optional term (weight 0) reads the child's uncertainty signal - 6m's switch, since engine ABI round 2a (issue 149) |
-| E7 | built (E11, `lane/search`, 2026-11-08; placeholders) | Time management, `t5d/timeman.hpp`: the moves-left integral allocator on a cost model (the dense FLOP shape with a fixed share, its scale measured online; moves-left in turns, our actions half of them, N advanced by M22's boards per action - issues 305, 452-457); 6o's arms as switches (`allocator`: Integral, FlatEvals, FlatWallClock; `signals` on/off); the stop/extend table (smart pruning, KLDGain, a solved root only with the proof channel, overlap with churn, volatility, falling eval, instability - issues 459-463) with the spiral guard (each kind once a decision - tested on its own; a cap on the plan, never past the hard bound - issue 464, tested at 500 boards); the wall-clock hard bound held tight at high N and given to the rules engine's calls inside a batch (`Search::set_deadline`, `LegalityOptions::deadline` - issues 458, 467); the model clock (deterministic); match play's per-side clock (`PlayParams::clock`; t5d-play `--time`; netplay `PlayConfig.time`; issue 456); the C API and its Python mirror. NO root-scan reserve (issue 306). The second volatility source - Hunt's and the settling scans' proofs - is a hook, off, extend-only with the proof channel off (decision 12, ruled 2026-11-23; issues 180, 470); the ladder's jobs cost the move no time - nothing waits for them, and they end at the re-root, not at the hard bound - nothing deducted for them (issue 466). Not built: pondering (C13), MLH steering (I3; issue 469) |
+| E7 | built (E11, `lane/search`, 2026-11-08; placeholders) | Time management, `t5d/timeman.hpp`: the moves-left integral allocator on a cost model (the dense FLOP shape with a fixed share, its scale measured online; moves-left in turns, our actions half of them, N advanced by M22's boards per action - issues 305, 452-457); 6o's arms as switches (`allocator`: Integral, FlatEvals, FlatWallClock; `signals` on/off); the stop/extend table (smart pruning, KLDGain, a solved root only with the proof channel, overlap with churn, volatility, falling eval, instability - issues 459-463) with the spiral guard (each kind once a decision - tested on its own; a cap on the plan, never past the hard bound - issue 464, tested at 500 boards); the wall-clock hard bound held tight at high N and given to the rules engine's calls inside a batch (`Search::set_deadline`, `LegalityOptions::deadline` - issues 458, 467; one mechanism with issue 406's since the phase-2 merge), match play's verification after the search under it too, with two exceptions - a move needs a visit, and no child known legal: a search against the side's remaining clock (phase 2, issue 458); the model clock (deterministic); match play's per-side clock (`PlayParams::clock`; t5d-play `--time`; netplay `PlayConfig.time`; issue 456); the C API and its Python mirror. NO root-scan reserve (issue 306). The second volatility source - Hunt's and the settling scans' proofs - is a hook, off, extend-only with the proof channel off (decision 12, ruled 2026-11-23; issues 180, 470); the ladder's jobs cost the move no time - nothing waits for them, and they end at the re-root, not at the hard bound - nothing deducted for them (issue 466). Not built: pondering (C13), MLH steering (I3; issue 469) |
 | E2, E3 | built behind flags, tested | Off; awaiting 6m and 6t. They read a node's uncertainty signal: the categorical's variance by default, the error head's output under 6m's switch (`uncertainty_source`, engine ABI round 2a; issue 149); their constants placeholders twice over (issues 81, 149) |
 | E8 | built behind its flag (off; `lane/search`, 2026-11-09; placeholders) | Difficulty-weighted allocation (`TimeParams::difficulty_weighting`, `t5d/timeman.hpp`): the root's effort distribution (D4's 16 bins, the top one censored) through the time context; the plan E7's soft bound x 2^(the bin at the 0.8 quantile - this game's running mean bin, seeded at 256 visits), clamped to [0.25, 4], to a floor of 32 evaluations and to E7's hard bound; won't-resolve (censored mass >= 0.5) plans for the hard bound (reading A) or E7's plan (B: `CapAtPlan`), and takes no overlap-with-churn extension; the guards code paths (the ex-post extensions still apply; the floor; the hard bound and the ladder's budgets untouched - I4). Off = E7 bit for bit (tested). The quantile is heads.effort_quantile's (tested across languages). Inert without an effort distribution - the built-in evaluators and netplay give none (issue 473). Issues 471-475, edits 339-341 |
 | E6 | not built (rule) | Refused |
@@ -7832,6 +7832,15 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     (the clock is the match's convention, not a rule, as I11's cap is), scored for the other
     side. `MatchClock`'s defaults - `base_seconds` 60, `increment_seconds` 0 - are placeholders
     no driver reads (t5d-play and netplay set their own; added at E11's review, L9). Edit 338.
+    *The turn-start verdict (phase 2, 2026-11-24; the review's H1 part 5):* not charged to either
+    side - it decides the game's result, so it is the referee's work, not a side's (a reading the
+    documents allow: it is not a decision). The documents give it decision 13's node budget (the
+    2026-11-15 review, ruled by the user 2026-11-23: "the game loop's terminal test takes a node
+    budget, never a time limit; a turn start it cannot settle ends the game unscored"), which
+    `lane/engine` is building (the budgeted terminal test, the unscored ending,
+    `t5d_search_verify_budgeted`, both Python loops); this lane adopts it from main when it lands
+    rather than building a second one. Until then the clocked loop's verdict stays as it was:
+    uncharged, and bounded only by `max_seconds` (issue 406's deadline).
 457. **"Every board-move adds a board"** (§8.6's trajectory). A branching jump adds two boards
     (its destination's successor and the new timeline's), and an action's moves number one or
     more. Built: N advances between two of our actions by both players' boards per action,
@@ -7846,8 +7855,14 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     (choosing needs a visit). (Revised 2026-11-23, review L1: "runs one batch ... past the bound
     by one batch (tested: never more)" was wrong - from an unevaluated root the visit takes up to
     two evaluator calls, the root's own leaf and then its children's: one slice in the batched
-    mode, two one-leaf slices in the synchronous mode; now tested on an exhausted clock.) Edits
-    333, 342.
+    mode, two one-leaf slices in the synchronous mode; now tested on an exhausted clock.)
+    (Phase 2, 2026-11-24, review H1 and M1: the bound held past the search too - match play's
+    verification of the chosen move runs under it, the most visited child known legal played
+    where it is cut; the forced slice runs without the bound inside it, so that the root's listing
+    completes; and a SECOND exception - no child known legal once the verification is cut: the
+    children verified in visit order against the side's remaining clock, the side flagging if it
+    runs out, never a throw. "Held tight" covered `run_timed`'s slices only until then.) Edits
+    333, 342, 346.
 459. **The stop signals' definitions** (§8.6's "visit gap unbridgeable", "root visit
     distribution stops changing"). Built (placeholders): smart pruning - the lead of the most
     visited child (path visits, MCGS) over the second exceeds the remaining evaluations (to
@@ -7929,7 +7944,12 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     deadline and taking the game's `max_seconds` as each slice's seconds; E11's gating of tier-2
     checks kept (tighter, H37-sound); issue 406's candidate digest in the cache and the batch,
     and its re-listable cut fallback listing, adopted; a slice before any root child has a visit
-    runs without the hard bound (M1).)*
+    runs without the hard bound (M1).)* *(Phase 2, 2026-11-24: the chosen move's verification
+    after the search is no longer outside it - match play runs it under the decision's hard bound
+    (the review's H1), with the second exception for no child known legal (issue 458); netplay
+    through `t5d_search_verify_within`. A listing the bound cut is not stuck (issue 406's
+    re-listing); a clocked game never throws for want of a visit - it searches on against the
+    side's clock and flags (M1).)*
 468. **§11.4's knock-on against §8.6 and register E7** (§11.4: "Time management loses the
     scanner as a second volatility source above 50 boards"; §8.6: "a proof from Hunt or the
     settling scans ... (under 100 and 50 boards)"). Hunt answers under 100 boards, so the second
@@ -10271,6 +10291,13 @@ repository's copies, which upstream has still to take:
     before the sign-off); no hook carries a proof into a prior - Hunt's partial lines have their
     own flag (`hunt_suggest`, off), and a proof-to-prior switch is not built (issue 478)". Why:
     issues 478, 479, 470.
+346. **§8.6 "Guards" and register E7's "tight wall-clock hard bound"**, beside edits 333 and 342:
+    Proposed - "match play's steps after the search sit inside the hard bound - the chosen move's
+    verification gets what it leaves, the most visited child known legal played where it is cut;
+    two exceptions to the inviolable bound: a root with no visited child is searched until one has
+    a visit, and where no child is known legal once the verification is cut, the side searches
+    for a legal move against its remaining clock and flags if it runs out". Why: issue 458 as
+    revised in phase 2 (the E11 review's H1 and M1).
 *Edits 402 and up are the review's code round (2026-11-22 to 2026-11-23; "Where things stand",
 top), numbered from the main loop's block. The documents they name are the repository's revised
 copies of 2026-11-15, which upstream has still to take; section 16's preamble says an as-built
@@ -11210,3 +11237,10 @@ entry changes in the same edit as its code, which the standing rule defers to up
   whatever the candidate list. M3's tests (the hard bound inside every batch, restored after; the
   forced slice; a thrown batch; run()'s own deadline inside the persistent one; the C API's
   cleared deadline) added in the merge.
+  - Phase 2's fixes on the reconciled tree: H1 (the clocked verification under the decision's hard
+    bound, the fallback to a child known legal, the second exception - a search against the side's
+    remaining clock, a flag never a throw; netplay through the new `t5d_search_verify_within`);
+    M1 (the forced slice without the bound; a clocked decision with no visited child searching on
+    and flagging); M3's Python test; M4 (the duplicate cut to the persistent deadline's reach, the
+    cheap-tiers equality and the mating turn start added); L2; L3 (a 0 s bound 1e-9 s in Python).
+    H1 part 5 left to `lane/engine`'s decision 13 (issue 456). Issues 456, 458, 467; edit 346.

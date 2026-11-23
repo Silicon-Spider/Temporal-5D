@@ -652,6 +652,16 @@ T5D_API t5d_status t5d_search_choose_by_visits(const t5d_search* search, double 
 T5D_API t5d_status t5d_search_verify(t5d_search* search, size_t index, int32_t* legality,
                                      char** error);
 
+/* The same within a deadline `seconds` from now (stage E11, the review's H1:
+ * a clocked decision's verification sits inside its hard bound): past it the
+ * classification stops and answers T5D_LEGALITY_UNKNOWN - never a verdict
+ * (H37); the child then stays. `seconds` follows t5d/mcts.hpp's THE DEADLINE:
+ * 0, or 1e9 or more (+infinity included), sets none (t5d_search_verify);
+ * NaN or a negative value is refused. A budget already spent: a tiny positive
+ * value (a deadline already passed). */
+T5D_API t5d_status t5d_search_verify_within(t5d_search* search, size_t index, double seconds, int32_t* legality,
+                                            char** error);
+
 /* Re-roots on root child `index` (C12): its statistics carried, every node the
  * new root cannot reach deleted, cached evaluations kept. */
 T5D_API t5d_status t5d_search_advance(t5d_search* search, size_t index, char** error);

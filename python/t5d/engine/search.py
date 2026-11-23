@@ -512,11 +512,16 @@ class Search:
         self._lib.call("t5d_search_choose_by_visits", self._live(), c_double(temperature), c_double(random), byref(index), error=True)
         return int(index.value)
 
-    def verify(self, index: int) -> int:
+    def verify(self, index: int, seconds: float = 0.0) -> int:
         """Classify root child ``index``'s move exactly (``T5D_LEGALITY_*``); an illegal child
-        is removed and the children's indices change."""
+        is removed and the children's indices change. ``seconds`` (stage E11, the review's H1): a
+        deadline from now - past it the classification answers ``T5D_LEGALITY_UNKNOWN`` and the
+        child stays; 0 (or 1e9 or more): none; a budget already spent: a tiny positive value."""
         out = c_int32()
-        self._lib.call("t5d_search_verify", self._live(), c_size_t(int(index)), byref(out), error=True)
+        if seconds:
+            self._lib.call("t5d_search_verify_within", self._live(), c_size_t(int(index)), c_double(float(seconds)), byref(out), error=True)
+        else:
+            self._lib.call("t5d_search_verify", self._live(), c_size_t(int(index)), byref(out), error=True)
         return int(out.value)
 
     def advance(self, index: int) -> None:

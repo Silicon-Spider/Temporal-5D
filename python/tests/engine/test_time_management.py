@@ -25,6 +25,9 @@ from t5d.engine import Game, NetworkEvaluator, UniformEvaluator
 from t5d.engine.capi import (
     MIRRORED_SEARCH_STRUCTS,
     T5D_EVALUATOR_UNIFORM,
+    T5D_LEGALITY_ILLEGAL,
+    T5D_LEGALITY_LEGAL,
+    T5D_LEGALITY_UNKNOWN,
     T5D_SPLIT_BOARD_MOVE,
     T5D_SPLIT_FLAT,
     T5D_STOP_EVALUATIONS,
@@ -38,8 +41,8 @@ from t5d.engine.capi import (
     layout_mismatches,
     load_library,
 )
-from t5d.engine.evaluator import run_timed_search
-from t5d.engine.netplay import PlayConfig, check_replay, network_config, play_game, replay_with_gate
+from t5d.engine.evaluator import ServeStats, run_timed_search
+from t5d.engine.netplay import GameResult, PlayConfig, check_replay, network_config, play_game, replay_with_gate
 from t5d.engine.search import ALLOCATORS, Search, TimeManager, search_params, time_params
 from t5d.net import build_model
 from t5d.net.config import NetConfig
@@ -412,3 +415,89 @@ def test_e8_off_leaves_the_plan_alone():
         assert given == none and not given.difficulty_applied and given.effort_bin == -1
         with pytest.raises(ValueError, match="16"):
             a.begin(s, remaining=30.0, effort=[1.0] * 3)
+
+
+def test_run_timed_search_sets_the_bound_lifts_it_for_the_forced_slice_and_clears_it(monkeypatch):
+    """The review's M3 (test 4) and L3, with M1's forced slice: on the wall clock the hard bound is
+    the search's deadline - a 0 s bound (a clock at the overhead) a deadline already passed (1e-9 s),
+    never 0, which means none - lifted for a slice before any root child has a visit and set again
+    after it, and cleared when the run ends."""
+    calls: list[float] = []
+    real = Search.set_deadline
+
+    def spy(self, seconds):
+        calls.append(float(seconds))
+        real(self, seconds)
+
+    monkeypatch.setattr(Search, "set_deadline", spy)
+    quiet = search_params(hunt=0, settling=0)
+    with Game.variant("Standard") as g, Search(g, params=quiet) as s, TimeManager() as tm:
+        s.run(T5D_EVALUATOR_UNIFORM, 32)  # visited: no forced slice
+        run = run_timed_search(s, UniformEvaluator(), tm, remaining=3.0)
+        assert calls == [run.plan.hard_seconds, 0.0]
+    calls.clear()
+    with Game.variant("Standard") as g, Search(g, params=quiet) as s, TimeManager() as tm:
+        run = run_timed_search(s, UniformEvaluator(), tm, remaining=3.0)  # a fresh root
+        assert calls[0] == run.plan.hard_seconds and calls[1] == 0.0  # lifted for the forced slice
+        assert len(calls) >= 4 and calls[2] > 0.0 and calls[-1] == 0.0  # set again, then cleared
+    calls.clear()
+    with Game.variant("Standard") as g, Search(g, params=quiet) as s, TimeManager() as tm:
+        s.run(T5D_EVALUATOR_UNIFORM, 32)
+        run = run_timed_search(s, UniformEvaluator(), tm, remaining=time_params().overhead_seconds)
+        assert run.plan.hard_seconds == 0.0
+        assert calls == [1e-9, 0.0]
+
+
+def _check_position_search(**kw):
+    """White in check (a rook on e2), the expansion settling nothing beyond its cheap tiers and no
+    lazy verification: root children left unknown."""
+    g = Game.from_fen(["[4k3/8/8/8/8/8/4r3/4K3:0:1:w]"])
+    params = search_params(hunt=0, settling=0, legality_checks=0, legality_nodes=0, verify_unknown=0, **kw)
+    s = Search(g, params=params)
+    s.run(T5D_EVALUATOR_UNIFORM, 32)
+    return g, s
+
+
+def test_verify_takes_a_deadline():
+    """The review's H1 (part 4): ``Search.verify(index, seconds)`` - past the deadline an unknown
+    child stays unknown and stays; with none, it is decided."""
+    g, s = _check_position_search()
+    try:
+        unknown = [c for c in s.children() if c.legality != T5D_LEGALITY_LEGAL]
+        assert unknown  # the premise
+        n = len(s.children())
+        assert s.verify(unknown[0].index, 1e-9) == T5D_LEGALITY_UNKNOWN
+        assert len(s.children()) == n
+        assert s.verify(unknown[0].index) in (T5D_LEGALITY_LEGAL, T5D_LEGALITY_ILLEGAL)
+    finally:
+        s.close()
+        g.close()
+
+
+def test_netplay_choice_follows_the_clocked_policy():
+    """The review's H1 in netplay (parts 1, 2 and 4), on a decision clock the test sets: the hard
+    bound spent, the pick's verification is cut; with no child known legal the children are
+    verified in visit order against the side's remaining clock and one shown legal is returned;
+    with that clock spent too the side's flag falls (``_OutOfClock``) - never the old throw."""
+    from t5d.engine.netplay import PlayConfig, _choose, _DecisionClock, _OutOfClock
+
+    cfg = PlayConfig(mode="match", batch_size=4)
+    res = GameResult(config=cfg, record="", actions=[], end="", winner=None)
+    g, s = _check_position_search()
+    try:
+        assert not any(c.legality == T5D_LEGALITY_LEGAL for c in s.children())  # the premise
+        spent = _DecisionClock(d0=time.perf_counter() - 10.0, hard=1.0, remaining=600.0, model=False)
+        pick = _choose(s, cfg, res, ServeStats(), UniformEvaluator(), {}, None, spent)
+        assert s.child(pick).legality == T5D_LEGALITY_LEGAL
+        assert res.verified_choices >= 2  # the cut verification, then the search
+    finally:
+        s.close()
+        g.close()
+    g, s = _check_position_search()
+    try:
+        out = _DecisionClock(d0=time.perf_counter() - 10.0, hard=1.0, remaining=5.0, model=False)
+        with pytest.raises(_OutOfClock):
+            _choose(s, cfg, res, ServeStats(), UniformEvaluator(), {}, None, out)
+    finally:
+        s.close()
+        g.close()
