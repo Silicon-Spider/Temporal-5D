@@ -1350,17 +1350,17 @@ threads reach at least one thread's sum (one retry on a shared machine).
 | 2026-10-23 | engine ABI round 3 (B11's pin and check relations, D4's per-square labels; reviewed, 5760a36) | main 188707a + lane/engine 5760a36, merged tree before the commit | dev-r, 24 logical; the network lane's flat head finishing and the search lane's E10 reviews starting; load 80-88% before, 85-91% after | 32 | 292 / 293 / 293 | 309 / 313 / 307 | none | pass x3; the nightly gate passed in 570 s (Half Reflected and Reversed Royalty gated, as before) |
 | 2026-10-23 | main 529098d into lane/search | lane/search 703ca97 + main 529098d, merged tree before the commit | dev-r, 24 logical; this merge's whole pytest suite (serial) and other lanes' jobs running; load 99% before and after | 32 | 291 / 289 / 291 | 311 / 301 / 311 | none | pass x3 |
 | 2026-10-24 | E10 (the search wiring and H44's audit lane; reviewed, 703ca97; main 529098d merged in, fcedc2e) | main bf5ef64 + lane/search fcedc2e, merged tree before the commit | dev-r, 24 logical; the engine, network and gate lanes running; load 90-99% before, 84-99% after | 32 | 292 / 292 / 291 | 309 / 308 / 310 | none | pass x3; the lane's merge of main ran the nightly gate (525 s, Half Reflected and Reversed Royalty gated) on the same engine code |
-| 2026-10-24 | E11, time management (the search lane, step 2; before review) | lane/search 666cfa4 + E11, the tree before the commit (it touches no scanner or search.* file; run as the brief asks; main 2e8be67, merged in after, changed no engine file) | dev-r, 24 logical; other lanes' jobs running; load 91-99% before, 91-94% after | 32 | 292 / 291 / 292 | 304 / 310 / 310 | none | pass x3 |
-| 2026-11-01 | E11, time management (the search lane, step 2; before review), resumed | main 1c085ac + E11, the tree before the commit | dev-r, 24 logical; other lanes' jobs running; load 96-100% before, 96-100% after | 32 | 291 / 292 / 293 | 303 / 311 / 310 | none | pass x3 |
+| 2026-10-24 | E11, time management (the search lane, step 2; before review) | lane/search fcedc2e + E11, the tree before the commit (it touches no scanner or search.* file; run as the brief asks; main 84ffecc, merged in after, changed no engine file) | dev-r, 24 logical; other lanes' jobs running; load 91-99% before, 91-94% after | 32 | 292 / 291 / 292 | 304 / 310 / 310 | none | pass x3 |
+| 2026-11-01 | E11, time management (the search lane, step 2; before review), resumed | main cb72413 + E11, the tree before the commit | dev-r, 24 logical; other lanes' jobs running; load 96-100% before, 96-100% after | 32 | 291 / 292 / 293 | 303 / 311 / 310 | none | pass x3 |
 | 2026-11-02 | issue 535's fix (the search's exception safety, issue 600; the scanner untouched; before review) | lane/fix535 on main d8a54d3, the tree before the commit (its final `--werror` build) | dev-r, 24 logical; other lanes' jobs (a node process on about 11 cores, two pytest runs) and this branch's serial pytest; load 100% before and after | 32 | 289 / 288 / 289 | 211 / 210 / 297 | runs 1 and 2 (5 threads 198 < 287, 225 < 288) | fail, fail, pass - the 5 threads starved: see the next two rows |
 | 2026-11-02 | issue 535's fix, again, run alternately with the control below | the same tree | dev-r, 24 logical; the same jobs; load 100% before and after | 32 | 290 / 290 / 290 | 311 / 305 / 298 | none | pass x3 |
 | 2026-11-02 | control for the two rows above: the base, main d8a54d3 (the scanner identical), run alternately with the fix | main's own build of d8a54d3 | dev-r, 24 logical; the same jobs; load 100% before and after | 32 | 292 / 288 / 289 | 304 / 211 / 307 | run 2 (5 threads 196 < 288) | pass, fail, pass - the base fails the same way under this load: the failures above are the machine's, not the change's |
-| 2026-11-02 | E11, time management (the search lane, step 2; before review), main 2cb107d merged in | main 2cb107d + E11, the tree before the commit | dev-r, 24 logical; other lanes' jobs running; load 99-100% before and after | 32 | 292 / 291 / 289 | 303 / 305 / 303 | none | pass x3 |
+| 2026-11-02 | E11, time management (the search lane, step 2; before review), main d8a54d3 merged in | main d8a54d3 + E11, the tree before the commit | dev-r, 24 logical; other lanes' jobs running; load 99-100% before and after | 32 | 292 / 291 / 289 | 303 / 305 / 303 | none | pass x3 |
 | 2026-11-08 | issue 535's fix with main 03eca7a taken in (a fast-forward; before review) | lane/fix535: main 03eca7a + the fix, the tree before the commit (its final `--werror` build) | dev-r, 24 logical; this branch's Python suite in two shards, another lane's pytest, two other lanes' engine runs, mutation runs; load 100% before and after | 32 | 290 / 289 / 290 | 305 / 311 / 304 | none | pass x3 |
-| 2026-11-08 | E11, time management (the search lane, step 2; before review), main c8a9c49 merged in | main c8a9c49 + E11, the tree before the commit | dev-r, 24 logical; other lanes' jobs running; load 100% before and after | 32 | 289 / 291 / 289 | 302 / 304 / 305 | none | pass x3 |
-| 2026-11-08 | E11, time management (the search lane, step 2; before review), main e15f173 merged in | main e15f173 + E11, the tree before the commit | dev-r, 24 logical; quiet - load 25% / 13% / 5% before, 30% / 18% / 2% after | 32 | 293 / 293 / 293 | 315 / 314 / 314 | none | pass x3 |
+| 2026-11-08 | E11, time management (the search lane, step 2; before review), main 03eca7a merged in | main 03eca7a + E11, the tree before the commit | dev-r, 24 logical; other lanes' jobs running; load 100% before and after | 32 | 289 / 291 / 289 | 302 / 304 / 305 | none | pass x3 |
+| 2026-11-08 | E11, time management (the search lane, step 2; before review), main d6cbdb7 merged in | main d6cbdb7 + E11, the tree before the commit | dev-r, 24 logical; quiet - load 25% / 13% / 5% before, 30% / 18% / 2% after | 32 | 293 / 293 / 293 | 315 / 314 / 314 | none | pass x3 |
 | 2026-11-09 | issue 535's fix into main (the main loop's merge battery) | main faaa64e + lane/fix535 8c4f905 (pre-rewrite 05afde5 + d44a7af), merged tree before the commit | dev-r, 24 logical; the engine and search lanes' fix rounds running | 32 | 293 | 317 / 315 / 315 | none | pass x3 |
-| 2026-11-09 | E8 behind its flag (the search lane, step 2; before review) | lane/search 861c8f0 (E11, main 05afde5 in) + E8, the tree before the commit | dev-r, 24 logical; other lanes' jobs running; load 30-54% before, 39-62% after | 32 | 292 / 293 / 293 | 316 / 314 / 315 | none | pass x3 |
+| 2026-11-09 | E8 behind its flag (the search lane, step 2; before review) | lane/search 6bdd838 (E11, main faaa64e in) + E8, the tree before the commit | dev-r, 24 logical; other lanes' jobs running; load 30-54% before, 39-62% after | 32 | 292 / 293 / 293 | 316 / 314 / 315 | none | pass x3 |
 | 2026-11-23 | the review's code round into main (the tree form under graph search, G11's network side; the main loop's check) | main d760019 + the round, the working tree before its commit | dev-r, 24 logical; the engine lane's and search lane's checks running | 32 | 293 / 289 / 291 | 301 / 303 / 304 | none | pass x3 |
 
 ## Environment
@@ -2899,7 +2899,7 @@ placeholders consolidated for the user".
     FP8 bounds (rows 1 and 11), BF16 and FP8 on the adversarial geometries, and more seeds
     for the every-switch sets;
   - optional: D4's constructed travel turns (row 16).
-- **Search** (`lane/search`): E11 and E8 built (861c8f0, 644801c) and reviewed (05afde5..644801c:
+- **Search** (`lane/search`): E11 and E8 built (6bdd838, f974d0c) and reviewed (faaa64e..f974d0c:
   1 HIGH, 8 MEDIUM, 13 LOW); the review's fixes in two phases, as the main loop decided - phase 1
   (M5-M8, L1, L4-L13) on `lane/search` now, phase 2 (merge main once `lane/engine`'s issue 406 is
   on it, reconcile the two deadline mechanisms - M2 - then H1, M1, M3, M4, L2, L3, and the
@@ -10209,29 +10209,29 @@ entry changes in the same edit as its code, which the standing rule defers to up
   root-scan reserve (issue 306); the proof source a hook, off, refused without the proof channel
   (issue 180 open). The brief's "E7's existing time management on main (stage E7, merged
   2026-10-03)" was stage E7 of the rules engine (Q4 and the submit action); no time management
-  existed - E11 is the first. Written 2026-10-24 and checked then on 666cfa4 + E11 (engine 700
+  existed - E11 is the first. Written 2026-10-24 and checked then on fcedc2e + E11 (engine 700
   of 700, long_detectors, the Lazy SMP test x3, pytest 1714 passed / 1 skipped, verify, gate
   commit - all green); the session stopped at the account's usage limit before the commit, and
   resumed: main taken by merge five times as it moved (M23: both sides of CHANGELOG,
-  BUILD_LOG and `evaluator.py`'s imports kept) - 1c085ac (CHECKPOINT 9's brief), 2cb107d
-  (CHECKPOINT 10's documents, the Linux build fixes), c8a9c49 (A5, the sharded network job),
-  e15f173 (the done-means audit, Kairos round 2, the network job's shards by file) and 05afde5
+  BUILD_LOG and `evaluator.py`'s imports kept) - cb72413 (CHECKPOINT 9's brief), d8a54d3
+  (CHECKPOINT 10's documents, the Linux build fixes), 03eca7a (A5, the sharded network job),
+  d6cbdb7 (the done-means audit, Kairos round 2, the network job's shards by file) and faaa64e
   (the upstream drafts, issue 602's two test tolerances) - and every
-  check re-run each time, all green: on 1c085ac + E11 (2026-11-01: engine 700 of 700,
+  check re-run each time, all green: on cb72413 + E11 (2026-11-01: engine 700 of 700,
   long_detectors, the Lazy SMP test x3, pytest 1714 passed / 1 skipped, verify, gate commit), on
-  2cb107d + E11 (2026-11-02: the same, pytest 1715 passed / 1 skipped with the cost-model test
-  added), on c8a9c49 + E11 (2026-11-08: the same, pytest 1944 passed / 2 skipped in three
-  disjoint shards, `T5D_TEST_SHARD`); on e15f173 + E11 (2026-11-09): engine 705 of 705
+  d8a54d3 + E11 (2026-11-02: the same, pytest 1715 passed / 1 skipped with the cost-model test
+  added), on 03eca7a + E11 (2026-11-08: the same, pytest 1944 passed / 2 skipped in three
+  disjoint shards, `T5D_TEST_SHARD`); on d6cbdb7 + E11 (2026-11-09): engine 705 of 705
   (`--werror`), long_detectors 2 of 2, the Lazy SMP test x3 (table above; a quiet machine), ruff
   clean, pytest 1987 passed / 1 skipped (three disjoint shards: 662 + 1 skipped, 664, 661), verify
-  ok, gate commit ok (smoke test passed, 0 declined; proof channel DISABLED). Main's 05afde5 came
+  ok, gate commit ok (smoke test passed, 0 declined; proof channel DISABLED). Main's faaa64e came
   after and changed no engine or library code (CI, documents, one known-divergence line, two
   network tests' tolerances): the engine build is unchanged (ninja: no work), and its changed
   tests (`tests/net/test_params.py`, `test_quant.py`) with `test_time_management.py`, ruff,
   verify and gate commit were re-run on the merged tree - all green. One literal of a test
-  rewritten as `std::uint64_t{...}` for CI's Linux g++ (-Wsign-conversion, as main's b5ab406).
+  rewritten as `std::uint64_t{...}` for CI's Linux g++ (-Wsign-conversion, as main's 04ceab1).
   **A download to report** (CHECKPOINT 9's rule, "nothing downloads without asking", arrived
-  after it): on 2026-10-24, after merging main 2e8be67 (which added Kairos as the fifth
+  after it): on 2026-10-24, after merging main 84ffecc (which added Kairos as the fifth
   submodule), `harness.py sync` in this worktree cloned Kairos's pinned commit from
   github.com/FirePlank/5d-chess-engine into the worktree's own module store
   (`.git/worktrees/search/modules/oracle-kairos`, 90 MB) - not on the CHECKPOINT 9 section's
@@ -10274,11 +10274,11 @@ entry changes in the same edit as its code, which the standing rule defers to up
   Python mirror; `t5d-play --difficulty-weighting` (inert: the built-in evaluators give no
   effort). The quantile is `heads.effort_quantile`'s, checked through the C API. Also: match
   play's time managers are made from the clock's parameters only when the clock is on. Checks on
-  the tree before the commit (lane/search 861c8f0 + E8): engine 711 of 711 (`--werror`),
+  the tree before the commit (lane/search 6bdd838 + E8): engine 711 of 711 (`--werror`),
   long_detectors 2 of 2, the Lazy SMP test x3 (table above; load 30-62%), ruff clean, pytest 1989
   passed / 1 skipped (`T5D_REQUIRE_ENGINE=1`, three disjoint shards: 665, 662, 662 + 1 skipped),
   verify ok, gate commit ok (smoke test passed, 0 declined; proof channel DISABLED).
-- **2026-11-09 - E11/E8 review fixes, phase 1** (`lane/search`; the review of 05afde5..644801c,
+- **2026-11-09 - E11/E8 review fixes, phase 1** (`lane/search`; the review of faaa64e..f974d0c,
   its findings and the main loop's decisions in the review's own file; issues 476-499 and edits
   342-359 are this round's block). Phase 1 is M5-M8, L1 and L4-L13, one commit per group; phase 2
   waits for `lane/engine` on main (the work item above).
@@ -10290,7 +10290,8 @@ entry changes in the same edit as its code, which the standing rule defers to up
     `clock`), `ALLOCATORS` against the header, `TimeManager`'s own refusal (7 of 7 mutants killed).
   - Stopped 2026-11-09 by the weekly limit during M8; resumed 2026-11-23 on the rewritten history
     (2026-11-16: every id new - fixes 1 and 2 are now 3566c67 and 9630783, E11 6bdd838, E8 f974d0c,
-    main 05afde5 faaa64e; ids in this log from before then are the old ones).
+    main 05afde5 faaa64e; this lane's cited ids from before then were updated on 2026-11-23, save
+    where a line quotes the old one on purpose).
   - Fixes 3 - M8, L6, L8(a, b, e): `MatchClock::clock`, a `Clock*` seam for match play's clock (the
     decision run, charged and Guard's re-search bounded by it); the whole-decision charge, the
     increment, a mid-action flag, the overrun counted, the hard bound binding in the end-to-end
@@ -10351,6 +10352,8 @@ entry changes in the same edit as its code, which the standing rule defers to up
   replaced (mapped by tree and author date from the reflogs, 346 commits; the 121 ids it shares
   with `lane/net`'s replacement all equal); five lines quoting an old id "before the rewrite"
   keep it. Still to take it: `lane/engine` and `lane/search`, once their rounds are committed.*
+  *On `lane/search` 2026-11-23, after main 032db11 was merged in: 44 ids replaced by the same
+  mapping (13 distinct), seven lines quoting an old id on purpose kept.*
 - **2026-11-22 to 2026-11-23 - the review's code** (the user's instruction to this session: "make
   the changes to code" the review left). Planned item by item, built by one agent per item in the
   main working tree, each report checked before the next; the spec and the register not edited

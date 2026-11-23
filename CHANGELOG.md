@@ -209,7 +209,7 @@ built; the seam is a test hook. No proposed edit; no measured figure.
 
 ### 2026-11-09 - E11/E8 review fixes 2: the time surface through the C API and Python tested past its defaults
 
-Review of 05afde5..644801c, phase 1, finding M7 (the main loop's decision: the step-API digest
+Review of faaa64e..f974d0c, phase 1, finding M7 (the main loop's decision: the step-API digest
 tests parametrized over the signals off and both flat arms on an elapsed time the driver supplies,
 and every probe as a test). Each mutant the finding names is killed on this tree (C01, C02, C04,
 C07, C11, Y15, Y02: 7 of 7).
@@ -240,7 +240,7 @@ C API and Python. No proposed edit; no measured figure.
 
 ### 2026-11-09 - E11/E8 review fixes 1: E7's stop/extend rules and allocator inputs pinned, E8's floor and cap tested, the strict hard bound
 
-The review of 05afde5..644801c (E11 and E8 on `lane/search`: 1 HIGH, 8 MEDIUM, 13 LOW) is fixed in
+The review of faaa64e..f974d0c (E11 and E8 on `lane/search`: 1 HIGH, 8 MEDIUM, 13 LOW) is fixed in
 two phases as the main loop decided - phase 1 now; phase 2 (H1, M1-M4, L2, L3 and the deadline's
 reconciliation, M2) after `lane/engine`'s issue 406 reaches main. This entry: M5, M6, L7 and L8(c,
 d). Every new test kills the reviewers' mutant it is named for (re-run on this tree: 16 of 16
@@ -437,6 +437,10 @@ the `lane/fix535` merge, the 2026-11-15 spec review and its code round were comm
 ids were mapped to the new by tree and author date from the reflogs (346 commits), and checked
 against `lane/net`'s replacements (121 shared ids, all equal). Five lines that quote an old id
 on purpose, as "before the rewrite", keep it.
+
+On `lane/search` (2026-11-23, after main 032db11 was merged in, with this entry): 44 ids replaced
+by the same mapping (13 distinct; `CHANGELOG.md` 7, `docs/BUILD_LOG.md` 37), seven lines quoting an
+old id on purpose kept.
 
 Spec: none - commit ids cited in documents; no part of the spec describes it.
 
