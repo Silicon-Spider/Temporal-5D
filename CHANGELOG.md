@@ -286,6 +286,19 @@ split's graph (C11) and the re-root (C12) - and with H37 (a node's children comp
 on an exhausted search), which a generator that threw broke; E1's root noise is drawn again
 after a failed expansion. No part of the spec describes exception safety.
 
+### 2026-11-09 - Merge main (faaa64e) into lane/net, after the C26/C27 work
+
+Main's three commits since the lane took it (d6cbdb7): the network job's Linux-only failures (issue
+602: t5d-audit built, two tolerances fitted - `test_params.py`, `test_quant.py`) and the upstream
+drafts for three oracle notation-reader gaps (issue 579). Two conflicts, both sides kept: CHANGELOG
+by heading, main's entries first, then the lane's; BUILD_LOG's session log, main's entry first. No
+issue or edit number collides (the lane's issues 259-275 and edits 380-384). Checks on the merged
+tree: ruff "All checks passed!", "117 files already formatted"; main's two changed test files "61
+passed in 55.43s"; the lane's own files are those its commits tested (no file of either side
+touched the other's).
+
+Spec: no part of the spec describes a merge (the merged entries carry their own Spec lines).
+
 ### 2026-11-09 - The network job's three Linux-only failures: t5d-audit built, two tolerances fitted to what they measure
 
 Once sharded (issue 601), the network job ran its whole suite on Linux. It failed the same three
@@ -376,6 +389,222 @@ with a documented rule as questions citing the source, which also tests our own 
 files them") and register H27 describe the process this follows; no edit proposed - issue 579 says
 why (two of the three gaps are not recorded divergences, which the clause neither requires nor
 forbids reporting).
+
+### 2026-11-09 - C26/C27: the default path, bit for bit - evidence (no code)
+
+Commit 4 of the C26/C27 work (`lane/net`): no file of code changes. A scratch probe (not committed)
+recorded per-case hashes of 93 cases at three trees - main d6cbdb7, issue 259's commit 99b81b1 and the
+lane's head 0f934d7 (C26, C27, issue 271) - with the engine library unchanged between them:
+- the cached path's every output (every `NetOutput` field, bit for bit) along `test_cache.py`'s random
+  paths on its seven geometries x both C20 readings x the causal, root-refresh and node-refresh epochs
+  (42 cases);
+- C24's simulation (`test_complexity._simulate`, nodes evaluated on first reach: its refresh events and
+  every node's epoch; 3 seeds);
+- step-API searches of 24 playouts - H15's digest, the search's epoch and every evaluation's bytes -
+  with `NetworkEvaluator` (dense and block-causal scope) and `CachedNetworkEvaluator` (causal and root
+  refresh), under the ply split, the tree form and the flat form, at two random-play roots whose
+  pseudo-legal and legal moves agree and two where they differ (issue 259's roots; 48 cases).
+
+Issue 259's commit against the lane's head: **all 93 identical** - C26 (behind `phase_form`), C27
+(behind `evaluates`) and issue 271's refusal leave the default path bit for bit as it was. Main against
+issue 259's commit: exactly 6 differ - the root-refresh searches, under each split, at the two roots
+whose pseudo-legal and legal moves differ (issue 259's fix: the refreshed history now conditioned on
+the root leaf's own moves); every other case identical, root-refresh searches at roots whose two lists
+agree included. The whole suite with `T5D_REQUIRE_ENGINE=1` on the lane's head, as CI shards it
+(`T5D_TEST_SHARD=i/4`, slow tests included, 2 torch threads each, a loaded machine): shard 0/4 "539
+passed, 1617 deselected in 2619.41s", 1/4 "539 passed, 1617 deselected in 1373.92s", 2/4 "539
+passed, 1 skipped, 1616 deselected in 2950.43s" (the skip: `T5D_RECORDS` unset, opt-in), 3/4 "538
+passed, 1618 deselected in 830.40s" - 2155 passed. `harness.py gate --tier commit` (the engine
+unchanged): every check ok but `pins` and `boundary` (the two "kairos is not checked out" of
+`verify`), so "oracle layer [commit]: FAILED"; "engine differential: SMOKE TEST - PASSED" (41
+records compared with the last green run, 0 declined; calibration 1.24x); "proof channel: DISABLED -
+the gate failed".
+
+Spec: no part of the spec describes this entry (evidence for C26/C27's entries below; register C26,
+C27; issues 259-275).
+
+### 2026-11-09 - The engine path refuses node refreshes it cannot make (issue 271)
+
+The engine's search opens one epoch per search and never refreshes a node, and
+`CachedNetworkEvaluator` read neither `CacheConfig.node_refresh` (C3a's rung 1) nor
+`complexity_refresh` (C24): through the step API a cached evaluator configured for either was
+silently the root-refresh-only path. It now refuses both (`NotImplementedError`, naming issue 271),
+after A5's and the prior's checks; the root refresh and C26's phase form are accepted as before. No
+caller set the flags, so nothing else changes. The refresh ladder - rung 1, C24, and C27's triggers
+at evaluated nodes - runs in the search-tree fixture only; issue 271 lists what the engine would
+need for 6c's rung-1 sub-arm to run through the real search (an ABI change, the user's call after
+6c). The done-means audit's row 5 note "its 16 playouts never reach the node refresh's visit gate"
+is corrected: the engine path has no node refresh at all. Register-status rows C3/C3a and C24 say
+where the ladder runs. Test: `tests/engine/test_phase_form.py::test_the_engine_path_refuses_node_refreshes`
+(both flags refused, alone and beside the root refresh; the root refresh and the phase form accepted).
+
+Checks: ruff "All checks passed!"; with `T5D_REQUIRE_ENGINE=1`, `test_evaluator`, `test_leave`, the
+shared-cache epoch test and `test_piece_centric_engine` (its games aside) "57 passed, 3 deselected in
+20.25s"; the phase form's units and boundary "7 passed, 55 deselected in 14.30s" (the whole suite
+before the next entry); `harness.py verify` as before.
+
+Spec: §7.9 (the ladder; "Inside a turn"); register C3a, C24, C27; issue 271. No spec edit: the spec
+does not say where the ladder runs before 6c.
+
+### 2026-11-09 - C27: refresh and supersession inside a turn (section 15.2's C27 row)
+
+CHECKPOINT 9's ruling 2, C27's half: "C27 goes into the tree form's work for the cached flag -
+refresh triggers only at nodes the network evaluates, and a board our submoves supersede mid-turn is
+recomputed when the network next runs, once per board and epoch":
+- **Which nodes the engine evaluates** (read, nothing changed): under the ply split every expanded
+  node; under the tree form the root, turn starts, gated mid-turn nodes and a carried inherited
+  root, every other mid-turn node expanded by `inherit()` on the last evaluated node's logits without
+  reaching the caller; under the flat form every node, a turn start. The engine has one epoch per
+  search and no node refresh (issue 271).
+- **The fixture's tree form** (`net/tree.py`). `SearchTree(evaluates=...)` takes the gate decision for
+  each new node; a node it declines is `inner` (`Node.inner`; the root never is; `evaluates` None: every
+  node evaluated, as before). An inner node is never evaluated or refreshed (both refused) and no
+  trigger is checked at it. Rung 1 at an evaluated node reads a branching travel move anywhere on its
+  segment since the nearest evaluated node (`segment_branched` - per path, issue 268); C24's travel
+  counts inner travel (unchanged code: inner nodes never refresh) and its effort is the nearest
+  evaluated ancestor's (`evaluated_ancestor` - issue 269); a refresh forks inner descendants with the
+  rest.
+- **The deferred recompute** is the cached path's own, exact by construction (docstrings in
+  `net/cache.py` and `net/complexity.py`; no code): a board an inner move supersedes is computed by
+  the next evaluated node's `evaluate`, which computes every frozen board without an entry, in that
+  node's epoch - once per board, with its past and its perspective (A7; issue 267), and epoch.
+- **Section 15.2's row**: on the fixture (`python/tests/net/test_turn_refresh.py`, T6) the deferred
+  arm against recompute at supersession (every frozen board of an inner node's position computed
+  there, from both colours' sides): every evaluated node bit for bit alike, the deferred entries the
+  eager ones tensor for tensor, every evaluated node its reference (largest gaps 1.91e-6 on the trunk, 1.55e-6 on the heads), and the
+  deferral non-vacuous in every case - every geometry, both C20 readings, the lineage and two-parent
+  readings, causal, root and node epochs (supersession inside a refreshed subtree), three markings,
+  the present moving and a timeline woken inside inner segments; evaluations alone under the creation
+  reading and current frozen features; slow, the rest of seeds 0-2 and BF16/FP8. T7: once per board
+  and epoch. The triggers only at evaluated nodes, and with every node evaluated the fixture as it
+  was (C24's simulation unchanged). On engine positions (`python/tests/engine/test_cached_tree_form.py`):
+  the same two arms on every engine variant's random play (T8: turn starts evaluated, by marking also
+  the present gate's state or half the mid-action states; non-vacuous in 31 of 32 cases, the 32nd has
+  no action of two moves; largest gaps 1.79e-6 and 1.43e-6); the step API's tree form (T9: natural gates and none;
+  causal, root refresh and the phase form's cached half - every leaf its reference, within 1.43e-6; with no
+  gates a turn start computes boards its turn's inner moves superseded; every leaf the every-gate
+  search also meets bit for bit alike, turn starts among them); the flat form's leaves turn starts
+  offering no submit, nothing inherited (T10).
+
+Checks: ruff "All checks passed!", "117 files already formatted"; with `T5D_REQUIRE_ENGINE=1`, the
+two new modules, slow tests included, "93 passed in 1453.13s" (per commit alone: the fixture's "28
+passed, 22 deselected in 470.96s", the engine's "24 passed, 19 deselected in 259.72s"); `test_tree`,
+`test_complexity`, `test_cache`, `test_fork_protocol`, the phase form's fixture module and
+`test_turn_refresh` "167 passed, 23 deselected in 1060.69s" (a loaded machine). The default path bit for
+bit: the scratch probe's 69 cases identical at issue 259's commit and here. Mutants killed: triggers
+at inner nodes (rung 1, and C24's `complexity_due` called directly - a check added for it), rung 1
+reading only the incoming move, the effort signal taken from an inner parent, a fork that skips inner
+descendants (T6's node epoch, T7), a node evaluated in its epoch lineage's root epoch; a frozen
+board's digest without its past survives T6 (one path never holds two pasts of one board) and is
+killed by `test_cache`'s origin test. `harness.py verify` as before.
+
+Spec: §7.3's end, §7.9 "Inside a turn", §8.2 and §15.2's C27 row; register C3a, C20, C24, C27, D2, A7
+(spec issue 303); issues 267-270 (268 and 269 for the user); proposed edits 383 (once per board,
+perspective and epoch) and 384 (the triggers under the tree and flat forms).
+
+### 2026-11-09 - C26: the phase form in the cached path, behind its flag (section 15.2's C26 row)
+
+CHECKPOINT 9's ruling 2 (low priority, `lane/net` after A5): "in the cached path behind its flag, a
+mode switch chosen by the search root's board count (N\*, default 50), with section 15.2's two new
+rows" - C26's half, built behind `CacheConfig.phase_form` (off: the cached path at every size, bit
+for bit as before):
+- **One predicate.** `CacheConfig.mode(n_boards)`: "dense" when the flag is on and the root's board
+  count is under N\* (`CacheConfig.phase_boards`, placeholder 50 - `token_counts.N_STAR`, pinned by a
+  test), else "cached". `CachedEvaluator.root_epoch` applies it to the search root; the parked
+  conditioning-offset hook will apply it to the conditioning root (`trainer.py`'s docstring, the
+  ruling's last sentence). The phase form requires C3's root refresh - §7.10 runs the cached half
+  "with the root refresh" - and is refused without it (issue 260).
+- **The dense epoch** (`net/cache.py`). Under N\* `root_epoch` returns the evaluator's one dense
+  epoch (`Epoch("dense", "dense")`, `CachedEvaluator.dense_epoch`): no anchor, history or store
+  entry. `evaluate` runs the network's dense pass over the position in the caller's grad mode (no
+  B16 - the refresh pass's function); `prepare` and `refresh` refuse it ("below N\* there is no cache
+  to refresh"); the fixture's `visit` never refreshes in it. `Epoch.mode` names each epoch's mode.
+  At or above N\* the root refresh, unchanged.
+- **The engine path** (`engine/evaluator.py`). `CachedNetworkEvaluator` hands a dense epoch's batches
+  to `dense`, a `NetworkEvaluator(scope="dense")` with its prior and a new `max_batch` (default 32):
+  the dense pass's last bits move with the batch and the grad mode (about 1e-6, measured), so a
+  search rooted under N\* is the dense search bit for bit only through the dense evaluator itself
+  (issue 262; edit 380). `positions_by_mode` counts each mode. The dense epoch's engine number is
+  its key's hash - the same for every search below N\*, so the shared evaluation cache serves dense
+  evaluations across self-play's searches (C14), never 0 and never a cached epoch's (issue 261). A5
+  stays refused first.
+- **Section 15.2's row**, through the C step API (`python/tests/engine/test_phase_form.py`): rooted
+  under N\* the search is the dense search node for node - H15's digest, the counts, every evaluation
+  bit for bit - on three variants x two seeds x the ply split (tree and graph), the tree form
+  (natural gates, none) and the flat form, the evaluation cache on and off, batched and synchronous,
+  and on all 16 variants under the ply split and the tree form; a per-node switch (the mode by each
+  leaf's own board count, N\* one above the root) builds another search on every arm; rooted at or
+  above N\* every node is the cached path's, the two-level reference's (largest gap 1.31e-6), the root
+  leaf the dense pass (9.54e-7), the other leaves at least 1.3e-1 from it. Beside it: the boundary at
+  the root's board count (a random-play root, a mid-action root past the shift, Turn Zero's T0 board
+  counted, the PGN of boards alike but for their past), a branching jump's child exactly at N\*, one
+  evaluator across two crossings, one shared evaluation cache across the crossing (the epoch changes,
+  nothing served across it) and below it (cache hits), a carried search crossing it (C12: its visits
+  kept, its inherited root evaluated once, cached), and whole games crossing it (never back to dense;
+  every dense batch the dense path's; replayed by the gate). Slow: the other games, F1 in BF16.
+  Without the engine (`python/tests/net/test_phase_form.py`): the predicate at its boundary and its
+  validation, the dense epoch, the fixture tree rooted under N\* (every node the dense pass bit for
+  bit, nodes at N\* or more included; no refresh with every trigger at its most eager; the store
+  empty) and at N\* (the cached path's bit for bit; rung 1 as before).
+- **Not built**: the conditioning-offset hook (the predicate only), C16's dense lower layers (refused
+  by §7.10), the window; the engine is unchanged.
+
+Checks: ruff "All checks passed!", "115 files already formatted"; with `T5D_REQUIRE_ENGINE=1`, the
+new modules - `tests/engine/test_phase_form.py` "54 passed, 7 deselected in 423.66s" (its slow seven
+"7 passed, 54 deselected in 447.35s") and `tests/net/test_phase_form.py` "19 passed in 376.24s" - and the suites the cached path
+sits in: `test_cache`, `test_tree`, `test_complexity`, `test_fork_protocol`, `test_quant`, `test_d8`,
+`test_perspective`, `test_turn_state`, `test_leave`, `test_piece_centric` and the new module "654
+passed, 1 deselected in 1341.47s"; `test_cached_variants`, `test_evaluator`, `test_search_api`,
+`test_piece_centric_engine`, `test_network`, `test_perspective_engine`, `test_turn_state_engine` "251
+passed, 3 deselected in 914.82s" (a loaded machine). The default path bit for bit: a scratch probe's
+69 cases - the cached path's outputs along `test_cache`'s paths on every geometry, both C20 readings,
+causal, root and node epochs; C24's simulation; step-API searches' H15 digests, epochs and every
+evaluation, dense and cached, under the ply split, the tree and the flat form - identical at issue
+259's commit and here. Mutants killed: the dense mode batched otherwise (one position at a time, or
+through the cached evaluator's own dense pass - equivalent only on the synchronous arm, where every
+batch is one leaf), the dense epoch numbered 0, one dense epoch per root, `<=` for `<`, the cached half
+without the root refresh, the mode fixed at the evaluator's first root, the dense mode writing the
+store, a stale epoch across the crossing. `harness.py verify` as for issue 259 (every check ok but the
+two "kairos is not checked out").
+
+Spec: §7.10, §7.9, §8.5, §8.7 and §15.2's C26 row; register C2, C3, C14, C26, M18, A5 (its refusal
+unchanged); issues 260-266 and 272-275 (264 and 265 for the user); proposed edits 380 (§15.2's row:
+the dense search batched alike, bit for bit), 381 (§7.10: the shared dense epoch, C3 presumed) and
+382 (register C26: N\* the evaluator's until offset training, then the network's).
+
+### 2026-11-08 - The cached path's root refresh anchors at the root leaf's input (C3; issue 259)
+
+`start_epoch` (`python/t5d/engine/evaluator.py`) built the position it hands an evaluator's
+`start` - the anchor of C3's root refresh - with `Game.position`'s defaults: the pseudo-legal
+moves. The search expands every leaf, the root included, with `legal_moves_only` under its
+legality budget, and the moves decide the move graph and the typed relations the refresh's dense
+pass reads. So at a root whose pseudo-legal and legal moves differ, the refreshed history was
+conditioned on another input than the root leaf's, and the root leaf's cached evaluation missed
+the dense pass over it - by 2.4e-5 to 3.6e-4 on its logits at two such roots (FP32, 2 layers),
+against under 1e-6 once anchored right. The anchor is now the root expanded as the search expands
+its leaves: the search's expansion options and its legality policy (`legal_moves_only`,
+`legality_checks`, `legality_nodes`). Only the root refresh's values move: the causal epoch's
+frozen entries read no move or edge, and `state_digest` holds neither, so the epoch keys, the
+engine's epoch numbers and `start`'s shortcut are unchanged. Found by the C26/C27 design panel;
+C26 rests on it (section 7.9: at the root the two-level mask is the dense pass - the first cached
+search's root evaluation, C26's crossing).
+
+Tests (`python/tests/engine/test_cached_variants.py`): the position `start` gets has the first
+leaf's moves and edges under the ply split, the tree form and the flat form, at the default
+budget, exactly and on the pseudo-legal seam (non-vacuous: `Game.position()`'s default differs at
+those roots); the root leaf is the dense pass within 1e-5 under each split and both C20 readings,
+and in the test an epoch anchored on the pseudo-legal expansion misses by more. Both fail at main.
+MEASUREMENTS records how often the two move lists differ and the gaps.
+
+Checks: ruff "All checks passed!", "113 files already formatted"; with `T5D_REQUIRE_ENGINE=1`,
+`test_cached_variants.py`, `test_evaluator.py`, `test_leave.py` and the shared-cache epoch test
+"106 passed, 3 deselected in 2625.02s" (a loaded machine; the 3 slow); the engine built (main's merge
+brought engine tests only); `harness.py verify` every check ok but `pins` and the boundary's copy
+check, both "kairos is not checked out" in this worktree (not synced: `sync` would fetch Kairos from
+its upstream).
+
+Spec: §7.9 (the root refresh is the dense pass at the root - unchanged, now held on engine roots);
+register C3; issue 259. No part of the spec names the anchor's expansion: no edit proposed.
 
 ### 2026-11-08 - Kairos round 2 review fixes: the lineage table fails closed and its wiring is tested; what of Kairos is ftxi's, corrected
 

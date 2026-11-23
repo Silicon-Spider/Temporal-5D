@@ -22,6 +22,12 @@ outputs"):
   (``effort_difficulty``). ``None`` - the parent's outputs are absent - contributes
   nothing; the signal is never guessed and never taken from the node's own evaluation.
 
+Under D2's tree form (C27; section 7.9, "Inside a turn") the trigger is checked only at nodes
+the network evaluates, never at an inner submove node; the travel signal counts travel made at
+inner nodes toward the next evaluated node (``tree.travel_since_refresh`` walks through them),
+and "the parent's outputs" are the nearest evaluated ancestor's - an inner parent has none
+(``tree.evaluated_ancestor``; BUILD_LOG issue 269).
+
 **The rule** (every number a named ``CacheConfig`` parameter with a placeholder default -
 the spec gives none; spec issue, see ``CacheConfig``): a weighted sum of the signals,
 
