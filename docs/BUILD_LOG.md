@@ -81,10 +81,18 @@ where the spec is silent; each has its spec issue below.
 | 8 | Under graph search, a move that fires no gate makes its own path-local inherited node even where another ordering's gated move made an evaluated node of the same state; a path-local node a re-root makes the root joins the table | 729 |
 | 9 | Decision 13 masks an unscored game's outcome-derived targets with no exception, retiring issue 235(g)'s whole-blend reading to an arm | 731 |
 | 10 | The values are padded with the queries and keys (the CPU fast kernels need one width); the layer-shared bias is kept FP32 (bitwise) under a 2 GiB cap | 733 |
+| 11 | An unsettled choice's action under way is dropped from the record - its decisions, positions and resignation events - the game put back at that action's turn start (format version 2 holds whole actions) | 413 (b), 414 |
+| 12 | The rules come before the cap: a capped turn start the game loop's budget cannot settle ends the game unknown, not a drawn cap (Standard - Two Timelines at 256 nodes ends unknown where 4,096 nodes ends turn_cap) | 413 (c), 414 |
+| 13 | Match play's interim reading: until E11's clock, the engine's own turn takes the same budgeted verdict as self-play and ends unknown where it cannot settle (the ruling: "the engine's own turn needs no verdict") | 413 (f), 414 |
+| 14 | The verdict's witness (X2): a step the root had not instantiated is played as a child of its own, unvisited and known legal, recorded under the existing "verified_fallback" code; netplay's match play then drops its carried search | 414 |
+| 15 | An optional `unsettled` header key in an unscored generator record, without a record-version bump (as row 7's keys) | 414 |
 
 **For the user** (beside the review's own list, next section; four of these were answered the same
 day - "The user's answers", below):
 
+- **Decision 13's budget: keep the 2,000,000-node placeholder, or have the pilot run measure the
+  games ended unscored by board count and set it from that?** One test game ended unscored at 88
+  boards under it, near the generator's 80-board cap (issues 413, 414; MEASUREMENTS).
 - **May the human games seed self-play?** `data/t0database/README.md` and `PROVENANCE.md` call
   them measurement data only; registers I22 and I24 name them as a source of stored positions. The
   code takes any 5dpgn and reads none by default; the two documents were not touched.
@@ -757,10 +765,12 @@ pushed after every commit, taking main by merge, never rebase (re-check with `gi
 - `lane/engine` - merged 2026-11-23: MT-01, MT-02's record tool and MT-03 with their first review's
   fixes; issue 406 (exact legality's cost; a deadline reaching the rules engine's calls) with its
   review's fixes (H1 the cache's candidate digest, H2 issue 411 under Q3, M1-M5, L1-L8) and issue
-  412 found at the merge; the flat-form docs (issues 400-412, edits 300-305). Next, handed over
-  from the review's code round: decision 13 (the game loop's node-budgeted terminal test with
-  the unscored ending, `t5d_search_verify_budgeted`, both Python loops; with issue 408,
-  coordinated with `lane/search`'s turn-start verdict). MT-02's records into the corpus wait for
+  412 found at the merge; the flat-form docs (issues 400-412, edits 300-305). Since then, on
+  the lane: decision 13 built (issue 413, settling issue 408: the game loop's node-budgeted
+  terminal test and the unscored ending in the C++ loop, netplay and the generator,
+  `t5d_search_verify_budgeted`; edits 306-308) and its review fixed (issue 414: the verdict's
+  witness played where no child is known legal, `t5d_game_verdict`; the missing tests; edits
+  309-311) - to merge after the review round's report. MT-02's records into the corpus wait for
   the user (issue 405).
 - `lane/search` (from main 2b752ba, 2026-10-23) - E10 redone and merged (Hunt under 100
   boards, the settling scans under 50, the asset map - off in self-play until I2's steered
@@ -6643,7 +6653,10 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     stop the verdict in 3.8 s (MEASUREMENTS, "Exact move legality's cost"). So the placeholder ends
     some games well below the turn cap's 300 boards and near the generator's 80: for the pilot run,
     the share of games ended unscored per board-count range, from which the budget is set (§13:
-    unscored endings fall where large-board data is thinnest).
+    unscored endings fall where large-board data is thinnest). *For the user (the review of decision
+    13, X4):* keep the 2,000,000-node placeholder, or have the pilot run measure the games ended
+    unscored by board count and set the budget from that? One test game ended unscored at 88 boards
+    (MEASUREMENTS, "An unscored game at 88 boards").
     **Tests.** Engine: `capi_search_verifies_a_chosen_move_within_a_budget_h22`;
     `play_terminal_budget_is_the_searchs_own_and_refuses_none_h22`,
     `play_a_turn_start_the_budget_cannot_settle_ends_the_game_unscored_h22` and
@@ -6744,6 +6757,24 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     Tests: the binding's range; a record naming its budget; an unsettled verdict's game replayed
     parse-only, and a timeout a note; the generator's optional key; `on_decision` only for decisions
     kept; the pool's `--terminal-nodes`; t5d-play's header and summary.
+    **X3, X4, L1, L2, L9: the record.** X3: the readings that change training data are put to the
+    user - rows 11-15 of the readings table: (b) an unsettled choice's action under way dropped,
+    positions included; (c) the rules before the cap (Standard - Two Timelines at 256 nodes ends
+    unknown where 4,096 ends turn_cap); (f) match play's interim reading; and this round's two, X2's
+    off-tree witness step under "verified_fallback" and the optional `unsettled` header key - and
+    edits 310 (section 11.0: an unsettled choice's action under way is not recorded) and 311
+    (section 12.8) bring the text in line with (b). X4: the 88-board game is a MEASUREMENTS row with
+    its conditions ("An unscored game at 88 boards under the game loop's default budget"); edit 307
+    says "one test game ended unscored at 88 boards"; keeping the placeholder or having the pilot
+    measure unscored endings by board count is the user's question (issue 413, the "For the user"
+    list). L1: the stale passages - the generator's docstring ("no node budget yet"),
+    `t5d/selfplay.hpp` (the header comment, `verified_choices`), `engine/README.md`'s search
+    paragraph, this log's lane line. L2: the placeholder cites issue 413 where it is defined
+    (`kTerminalNodes`, `PlayParams::terminal_nodes`, `TERMINAL_NODES`, `PlayConfig.terminal_nodes`,
+    `GeneratorConfig.terminal_nodes`). L9 (docs only, no search change): `PlayParams::turn_cap` no
+    longer says the search scores capped positions as the game will - the search values a capped
+    node whose verdict is unknown as a draw where the game ends it unscored (values only: such a
+    game's targets are masked).
 
 402. **6f's settling scans: their wrapper is not on main** (§13.1 6f "verify the proof-export
     invariant under TT churn for Hunt and the settling scans (§11.3)"; §11.4 "df-pn at the
@@ -10091,8 +10122,9 @@ repository's copies, which upstream has still to take:
     turn-start verdict and the verification of a chosen move have each been measured past twenty to
     thirty minutes at ~190 boards ... The game loop's answer is a node budget and an unscored
     ending, never a guessed mate (§11.0): at the placeholder budget the 191-board verdict stops
-    unknown within 4 s, and the engine's own test games end unscored from 88 boards (BUILD_LOG issue
-    413) - the pilot run measures how often, by board count, and sets the budget." Why: issue 413.
+    unknown within 4 s, and one test game ended unscored at 88 boards (MEASUREMENTS) - how often, by
+    board count, is the pilot run's to measure." Why: issues 413, 414 (X4: reworded from "the
+    engine's own test games end unscored from 88 boards", one game of ten on a loaded machine).
 308. **§16 (H22 as built)**: now - under "Ruled in the 2026-11-15 review, and not yet built":
     "**H22**: the game loop's terminal test takes a node budget, and a turn start it cannot settle
     ends the game unscored (§11.0)." Proposed - remove it there (or keep only "H22 at match play:
@@ -10113,6 +10145,17 @@ repository's copies, which upstream has still to take:
     turn start's verdict found within the same budget, while the moves played are its prefix - and
     only once they have left it does the game end unscored." Why: issue 414 (X2) - the turn start
     was settled; the ruling's "a turn start it cannot settle" does not describe an unsettled choice.
+310. **§11.0's budget paragraph: an unsettled choice's action under way (review decision 13's X3)**:
+    now - "... ends the game *unscored*: its positions keep their search-derived targets and lose
+    their outcome-derived ones (§12.8) ..." Proposed - add after it: "A choice that leaves the game
+    unscored ends it at that action's turn start: the action under way is not recorded, its
+    positions with it (a record holds whole actions)." Why: issue 413's reading (b), now the user's
+    to confirm (the readings table, row 11); the text read as though every position of an unscored
+    game kept its search-derived targets.
+311. **§12.8: an unscored game's targets (review decision 13's X3)**: now - "A game that ends
+    unscored (§11.0) keeps its search-derived targets and masks its outcome-derived ones." Proposed
+    - "... masks its outcome-derived ones; a choice that ends it unscored leaves out the action
+    under way, which has no record (§11.0)." Why: as edit 310.
 
 <!-- A new list, so that the numbers from 137 render as written. -->
 

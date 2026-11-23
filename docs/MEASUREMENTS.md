@@ -2084,6 +2084,25 @@ points that no creation order realises, judged one by one because the abstract c
 at its step limit (4,096) on nearly every box. What would change them is algorithmic (issue
 407); whether the play loop's exact steps should carry a node budget is a decision (issue 408).
 
+### An unscored game at 88 boards under the game loop's default budget (indicative; one game; no threshold, no verdict)
+
+Build-log issues 413 and 414 (register H22, review decision 13). The engine's own test
+`selfplay_games_end_by_checkmate_stalemate_or_the_cap` (`engine/tests/test_selfplay.cpp`), its
+flat-form game from Very Small - Open: the material evaluator, 12 playouts per decision, seed 2, the
+turn cap 12 turns or 300 boards, self-play's root noise, the asset map off, the ladder's defaults,
+square features none; the game loop's node budget the default 2,000,000 (`kTerminalNodes`, a
+placeholder). `lane/engine` at 193b517 and again with the review's fixes (73e6430), `dev-r`, other
+lanes' jobs running - load 97-100%: wall-clock seconds are indicative. 2026-11-23/24.
+
+| Game | Actions | Final position | End | Its turn-start verdicts | The game |
+|---|---|---|---|---|---|
+| Very Small - Open, flat form, seed 2 | 18 | 88 boards | unknown (the verdict: unsettled within 2,000,000 nodes) | 2.94 s / 3.33 s | 54.6 s / 56.3 s |
+
+*Read.* One game of the test's ten, the only one that ended unscored; before the ruling its exact
+verdict ran until it settled (the suite's slowest test). It shows the placeholder can end a game
+well below the turn cap's 300 boards and near the generator's 80; how often, by board count, is the
+pilot run's to measure (issue 413, for the user).
+
 ### The cached path at engine roots - C3's anchor (issue 259) (numerics; no threshold, no verdict)
 
 **What it is.** How often a search root's pseudo-legal and legal move lists differ - where C3's root

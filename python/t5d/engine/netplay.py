@@ -102,7 +102,7 @@ MODES = ("self", "match")
 
 #: Register H22 (section 11.0; review decision 13, 2026-11-15): the game loop's node budget for
 #: its two exact questions - a turn start's verdict and the verification of a chosen move - in
-#: search nodes (deterministic: never a time limit). A PLACEHOLDER: the spec gives no figure; it
+#: search nodes (deterministic: never a time limit). A PLACEHOLDER (build-log issue 413): the spec gives no figure; it
 #: is the search's own ``mate_nodes`` default (``t5d/mcts.hpp``), the budget each fresh search's
 #: root check already runs under, so the loop and its searches cannot disagree (a test pins the
 #: two together), and the engine's ``kTerminalNodes`` (``t5d/selfplay.hpp``). ``T5D_NO_LIMIT``:
@@ -156,7 +156,7 @@ class PlayConfig:
     seed: int = 1
     max_actions: int = 200  # a safety stop, not a rule
     #: H22: the node budget of the turn-start verdict and of a chosen move's verification
-    #: (``TERMINAL_NODES``, a placeholder; 1 to ``T5D_NO_LIMIT``, which is exact).
+    #: (``TERMINAL_NODES``, a PLACEHOLDER - build-log issue 413; 1 to ``T5D_NO_LIMIT``, which is exact).
     terminal_nodes: int = TERMINAL_NODES
     #: A custom start instead of ``variant``'s: 5DFEN board strings (the player to move inferred
     #: from the present, Q9); the record then names the board "custom" and writes them.

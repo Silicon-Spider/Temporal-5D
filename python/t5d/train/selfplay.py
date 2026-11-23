@@ -78,8 +78,8 @@ writes, per decision, the record ``train.records`` defines (register I15, spec s
   record names its origin in the optional header key ``seeded_start`` (``train.records``), and
   ``replay_positions`` sets the start up from it. The generator's test-scale caps (``cap_turns``
   6, ``cap_boards`` 80) end a late or large stored position at once as ``turn_cap``: whoever seeds
-  such positions raises them - and the turn-start verdict has no node budget yet (H22, review
-  decision 13), which large positions wait on.
+  such positions raises them - and a turn-start verdict a large position's budget cannot settle
+  ends the game unscored (H22, review decision 13; ``terminal_nodes``).
 
 Nothing here trains (the untrained build's rule): the generator only plays and records.
 """
@@ -220,7 +220,7 @@ class GeneratorConfig:
     cap_boards: int = 80
     max_actions: int = 200  # a safety stop, not a rule (scored like I11's cap: unscored, "action_limit")
     #: Register H22 (review decision 13): the node budget of each turn start's verdict and of a chosen
-    #: move's verification (``netplay.TERMINAL_NODES``, a placeholder; 1 to ``T5D_NO_LIMIT``, exact). A
+    #: move's verification (``netplay.TERMINAL_NODES``, a PLACEHOLDER - build-log issue 413; 1 to ``T5D_NO_LIMIT``, exact). A
     #: question it leaves unsettled ends the game unscored ("unknown"; its outcome targets masked, I15).
     terminal_nodes: int = TERMINAL_NODES
     seed: int = 1

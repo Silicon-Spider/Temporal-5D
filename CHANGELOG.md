@@ -10,6 +10,20 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - Decision 13's review: the record (X3, X4, L1, L2, L9)
+
+From the review of decision 13 (build-log issue 414): the readings that change training data
+in the readings table for the user (X3: rows 11-15) and edits 310 and 311 for sections 11.0
+and 12.8; the 88-board game a MEASUREMENTS row with its conditions, edit 307 reworded to it,
+and the placeholder's future the user's question (X4; `docs/MEASUREMENTS.md`,
+`docs/BUILD_LOG.md`); stale passages brought in line and the placeholder citing issue 413
+where it is defined (L1, L2: `python/t5d/train/selfplay.py`, `python/t5d/engine/netplay.py`,
+`engine/README.md`, the build log's lane line; `t5d/selfplay.hpp` and L9's `turn_cap` comment
+came with the witness commit). Checks: ruff clean; verify ok; documents and comments only.
+
+Spec: §11.0 and §12.8 (an unsettled choice's action under way) - proposed edits 310, 311; §13
+- edit 307 reworded. No code path changed; the proof channel stays off.
+
 ### 2026-11-24 - Decision 13's review: netplay's replay, the binding's range, the records, the callback (X5, L3, L5, L7)
 
 From the review of decision 13 (build-log issue 414). X5: `netplay.replay_problems` replays a

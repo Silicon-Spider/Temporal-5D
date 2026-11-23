@@ -2673,8 +2673,8 @@ spec issue 46; each part a parameter):
 | (f) | training's policy target is built from the root's visits (`root_children` lists the instantiated children; the rest have none) by I2's pruning at target construction - the training loop's, from each child's visits, priors with and without the noise, values and steering counts (round 2c's side table); the network's move mask is a leaf's legal and unknown moves - every candidate its expansion kept - not the root's children | `RootChild` (`visits`, `prior`, `prior_noise_free`, ...); `Expansion::move_legality` (`t5d_leaf.legality`) |
 
 Every pruning renormalises the siblings' priors. Before a move is played, an unknown
-one is classified exactly (`Search::verify`; self-play does this, and plays only moves
-known legal). `legal_moves_only = false` is a test seam: pseudo-legal children, whose
+one is classified (`Search::verify`; the game loops do this within their node budget, H22 -
+"Self-play" below - and play only moves known legal). `legal_moves_only = false` is a test seam: pseudo-legal children, whose
 dead ends are pruned.
 
 **Terminals.** At a turn start, E4's `detect_mate` under `mate_nodes` and
