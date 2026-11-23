@@ -10,6 +10,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -56,8 +57,11 @@ PlayParams quick(TurnSplit split, std::uint64_t seed) {
 }
 
 // Replays a game through the state machine with E4's tests, and checks how it
-// ended. Returns the final state.
-GameState check_game(const GameRecord& g, const TurnCap& cap) {
+// ended - an Unknown end (H22, §11.0) only where the game loop's node budget
+// left a question unsettled: unscored, and at a turn start whose verdict that
+// budget does not reach (checked within it: exactly, it can take minutes).
+// Returns the final state.
+GameState check_game(const GameRecord& g, const TurnCap& cap, std::uint64_t terminal_nodes = kTerminalNodes) {
   GameState s = g.start;
   MoveList scratch;
   for (const std::vector<Move>& action : g.actions) {
@@ -73,6 +77,20 @@ GameState check_game(const GameRecord& g, const TurnCap& cap) {
     s.submit();
   }
   CHECK(s == g.final_state);
+  if (g.end == GameEnd::Unknown) {
+    CHECK_EQ(g.winner, -1);
+    CHECK_EQ(g.white_score(), -1.0);
+    CHECK_EQ(g.result(), std::string("*"));
+    if (g.unsettled == Unsettled::Verdict) {
+      SearchBudget budget = SearchBudget::nodes(terminal_nodes);
+      budget.max_bytes = PlayParams{}.search.mate_bytes;
+      CHECK(detect_mate(s, PlayParams{}.search.detector, budget).verdict == Outcome::Unknown);
+    } else {
+      CHECK(g.unsettled == Unsettled::Choice);
+    }
+    return s;
+  }
+  CHECK(g.unsettled == Unsettled::None);
   const Outcome verdict = detect_mate(s, Detector::Hypercuboid).verdict;
   switch (g.end) {
     case GameEnd::Checkmate:
@@ -89,7 +107,7 @@ GameState check_game(const GameRecord& g, const TurnCap& cap) {
       CHECK_EQ(g.winner, -1);
       CHECK_EQ(g.white_score(), 0.5);
       break;
-    case GameEnd::Unknown:
+    case GameEnd::Unknown:  // handled above
     case GameEnd::ActionLimit:
     case GameEnd::TimeLimit:
       CHECK(false);  // none may end these games
@@ -146,13 +164,21 @@ TEST(selfplay_games_are_legal_end_to_end_under_both_splits) {
 TEST(selfplay_games_end_by_checkmate_stalemate_or_the_cap) {
   // Small boards and a material evaluator make the rules end games; positions
   // one action from a mate and from a stalemate make sure both endings occur.
+  // Since H22 (§11.0, review decision 13) a turn start the game loop's node
+  // budget cannot settle ends a game unscored instead (Unknown, checked as
+  // such by check_game): Very Small - Open's games can branch far.
   int checkmates = 0;
   int stalemates = 0;
   int capped = 0;
+  int unscored = 0;
   const auto tally = [&](const GameRecord& g) {
     checkmates += g.end == GameEnd::Checkmate ? 1 : 0;
     stalemates += g.end == GameEnd::Stalemate ? 1 : 0;
     capped += g.end == GameEnd::TurnCap ? 1 : 0;
+    unscored += g.end == GameEnd::Unknown ? 1 : 0;
+    std::fprintf(stderr, "  %zu actions, %s%s%s, %zu boards, %.2f s (verdicts %.2f s)\n", g.actions.size(),
+                 game_end_name(g.end), g.unsettled == Unsettled::None ? "" : " - unsettled: ",
+                 unsettled_name(g.unsettled), g.final_state.multiverse().board_count(), g.seconds, g.seconds_verdicts);
   };
   const std::unique_ptr<Evaluator> material = make_evaluator(BuiltinEvaluator::Material);
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
@@ -190,7 +216,8 @@ TEST(selfplay_games_end_by_checkmate_stalemate_or_the_cap) {
   }
   CHECK(checkmates >= 2);
   CHECK(stalemates >= 2);
-  CHECK(checkmates + stalemates + capped == 10);
+  CHECK(checkmates + stalemates + capped + unscored == 10);
+  CHECK(unscored <= 1);  // one game, at 88 boards (the review of decision 13, L4)
 }
 
 TEST(selfplay_match_play_carries_the_tree) {

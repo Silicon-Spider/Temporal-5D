@@ -2005,8 +2005,8 @@ measurements); a fresh search's root check (the turn-start detector under `mate_
 (node-bounded). It is the C++ play loop's (`t5d-play --max-seconds`): the C API's
 `t5d_search_verify` and its step calls take no deadline, and Python's play loops set none.
 Self-play for training sets no deadline (it is not deterministic): there the turn-start
-verdict and the chosen move's verification stay exact with no node limit, as the documents
-have them (build-log issue 408). Tested (`tests/test_legality_cost.cpp`): a deadline leaves
+verdict and the chosen move's verification run within the game loop's node budget instead
+(H22, decision 13, settling build-log issue 408 - see "Self-play"). Tested (`tests/test_legality_cost.cpp`): a deadline leaves
 moves unknown and never misclassifies one; issue 406's root under the flat form with exact
 legality stops at a 0.5-second deadline (it ran past 17 minutes for 800 playouts); played with
 exact legality and a 1-second safety stop, its game ends with its actions legal - its
@@ -2673,8 +2673,8 @@ spec issue 46; each part a parameter):
 | (f) | training's policy target is built from the root's visits (`root_children` lists the instantiated children; the rest have none) by I2's pruning at target construction - the training loop's, from each child's visits, priors with and without the noise, values and steering counts (round 2c's side table); the network's move mask is a leaf's legal and unknown moves - every candidate its expansion kept - not the root's children | `RootChild` (`visits`, `prior`, `prior_noise_free`, ...); `Expansion::move_legality` (`t5d_leaf.legality`) |
 
 Every pruning renormalises the siblings' priors. Before a move is played, an unknown
-one is classified exactly (`Search::verify`; self-play does this, and plays only moves
-known legal). `legal_moves_only = false` is a test seam: pseudo-legal children, whose
+one is classified (`Search::verify`; the game loops do this within their node budget, H22 -
+"Self-play" below - and play only moves known legal). `legal_moves_only = false` is a test seam: pseudo-legal children, whose
 dead ends are pruned.
 
 **Terminals.** At a turn start, E4's `detect_mate` under `mate_nodes` and
@@ -2924,7 +2924,10 @@ fixes append `uncertainty_missing`, the nodes expanded without the chosen uncert
 signal where nothing reads it), `_child` (round 2 appends `d`,
 `evaluated`, `network_wdl`, `network_moves_left`, `network_error`; round 2c the root's
 side table - below),
-`_choose`, `_choose_by_visits`, `_verify`, `_advance`, `_advance_action`,
+`_choose`, `_choose_by_visits`, `_verify`, `_verify_budgeted` (within checks and search
+nodes - the game loops' node budget, H22), `t5d_game_verdict` (E4's verdict at a game's turn
+start within a node budget, with its witness - one legal action, each move recorded in the
+state it is made in; the game loops' X2), `_advance`, `_advance_action`,
 `_root_game`, `_set_epoch`, `_run` (built-in evaluators) and `_run_limits` (within a
 `t5d_search_limits`: playouts, evaluations, nodes, bytes; it reports the
 `T5D_STOP_*` reason), `_new_sharing` (a new search sharing another's evaluation cache:
@@ -2985,11 +2988,25 @@ and the root temperature's self-play value belong to the training generator (M21
 Python), which sets `root_policy_temperature` and the move temperature per decision; this
 tool's self-play keeps its step schedule and a root temperature of 1. Match play
 (`match_play`): one search carried across decisions, the final rule, noise off.
-Every turn start is judged first by E4's detector (checkmate, stalemate; unknown ends
-the game unjudged), then by the turn cap (scored a draw, counted:
-`GameRecord::cap_bound`, `search_turn_caps`). Every move is checked pseudo-legal and
-every submission legal before it is made; a chosen child the legality budget left unknown
-is classified exactly first (`GameRecord::verified_choices`), and the visits a decision's
+Every turn start is judged first by E4's detector within the game loop's node budget
+(`PlayParams::terminal_nodes`, `kTerminalNodes` = 2,000,000 - a placeholder, the search's
+own `mate_nodes` default; register H22, §11.0: a node budget, never a time limit):
+checkmate, stalemate, or a verdict the budget does not reach - the game ends `Unknown`,
+unscored, never a mate (`GameRecord::unsettled` = `Verdict`); then by the turn cap (scored a
+draw, counted: `GameRecord::cap_bound`, `search_turn_caps`). Every move is checked
+pseudo-legal and every submission legal before it is made; a chosen child the legality
+budget left unknown is classified first within the same budget
+(`GameRecord::verified_choices`) - still unknown, the most visited child known legal is
+played; with none, the next step of the turn-start verdict's witness while the action's moves
+are its prefix (review decision 13's X2: the verdict found that legal action within the same
+budget; a step the root has not instantiated is played as a child of its own, match play
+re-rooting on its moves; `GameRecord::witness_moves`); and otherwise the game ends `Unknown`
+at the action's turn start (`unsettled` = `Choice`; the action under way is not recorded;
+before the ruling it threw), the record's Termination saying which question went unanswered.
+An unsettled question's end follows the clock: `TimeLimit` once `max_seconds`' deadline has
+passed, `Unknown` before it, whatever stopped it (the review's L6). Python's play loops
+(`netplay`, the training generator) do the same through `t5d_search_verify_budgeted` and
+`t5d_game_verdict` (`netplay.TurnWitness`). The visits a decision's
 root already held (`reused_visits`: C12's reuse in match play, 0 in self-play) are
 counted. Under the board-move split an action is its
 moves and then a submit decision (never automatic); actions are counted at
@@ -3006,7 +3023,7 @@ t5d-play [--variant NAME] [--evaluator uniform|random|material] [--playouts N]
          [--e2] [--e3] [--proof-channel] [--batch N] [--synchronous] [--match]
          [--final visits|lcb]
          [--temperature T] [--temperature-decisions N] [--noise | --no-noise] [--cap-turns N]
-         [--cap-boards N] [--max-actions N] [--mate-nodes N]
+         [--cap-boards N] [--max-actions N] [--mate-nodes N] [--terminal-nodes N]
          [--max-seconds S] [--seed S] [--no-moves-after-shift] [--rules ENCODING]
 ```
 
@@ -3020,13 +3037,18 @@ self-play with root noise (`--no-noise`: none), the proof channel off (H41;
 hold 300 boards on 50 timelines, and with root noise time travel can hold the present
 back for good - a Standard game reached 509 boards on 110 timelines in 39 actions
 without passing turn 20). `--mate-nodes N` sets the search's terminal-check
-budget; `--max-actions` (checked at turn starts) and `--max-seconds` (checked before
+budget; `--terminal-nodes N` the game loop's (H22: 2,000,000; 18446744073709551615 exact) -
+a turn start or a choice it cannot settle ends the game unscored, `unknown` and `*`, the summary
+saying which question (`unknown (verdict)`), and a budget other than the default is named in a
+`TerminalNodes` header (the review of decision 13, L5);
+`--max-actions` (checked at turn starts) and `--max-seconds` (checked before
 every decision, each search's deadline, and the deadline of the game's turn-start verdicts
 and of a chosen move's exact verification - build-log issue 406: an action under way when
 it passes is not recorded; 1e9 or more is no stop) are safety stops - the record ends `*`,
 its Termination header naming the stop, and is printed (the review of 2026-11-09's H1 and M1
-made a stopped game throw at times, exit 1 with no record). Without `--max-seconds` a turn-start verdict has no limit but memory (H37):
-on large positions it can take many minutes (build-log issue 408). Every number is range-checked (never wrapped into a narrower type; reals finite):
+made a stopped game throw at times, exit 1 with no record). A turn-start verdict is bounded by
+`--terminal-nodes` (at about 190 boards 2,000,000 nodes took 3.8 s - docs/MEASUREMENTS.md, "Exact
+move legality's cost"; exact, it ran past twenty minutes: build-log issue 408). Every number is range-checked (never wrapped into a narrower type; reals finite):
 a bad one exits 2. The rules come through
 the tools' shared option reader (`tools::ruleset_option`), so the default is the
 engine's - Q4 as ruled, R8 - and `--no-moves-after-shift` (Q4's Guide-literal reading)

@@ -49,6 +49,10 @@ from .capi import (
     T5D_TO_MOVE_BLACK,
     T5D_TO_MOVE_INFER,
     T5D_TO_MOVE_WHITE,
+    T5D_VERDICT_CHECKMATE,
+    T5D_VERDICT_ONGOING,
+    T5D_VERDICT_STALEMATE,
+    T5D_VERDICT_UNKNOWN,
     CExpansion,
     CSquareLabels,
     ExpandOptions,
@@ -56,6 +60,7 @@ from .capi import (
     GameSummary,
     LabelOptions,
     Library,
+    MoveRecord,
     StateInfo,
     char_array,
     load_library,
@@ -66,6 +71,13 @@ from .expansion import SQUARE_FEATURES, Expansion, Move
 
 _PARITY = {"infer": T5D_PARITY_INFER, "odd": T5D_PARITY_ODD, "even": T5D_PARITY_EVEN}
 _TO_MOVE = {"infer": T5D_TO_MOVE_INFER, "white": T5D_TO_MOVE_WHITE, "black": T5D_TO_MOVE_BLACK}
+#: ``Game.verdict``'s answers by ``T5D_VERDICT_*``.
+VERDICTS = {
+    T5D_VERDICT_UNKNOWN: "unknown",
+    T5D_VERDICT_ONGOING: "ongoing",
+    T5D_VERDICT_CHECKMATE: "checkmate",
+    T5D_VERDICT_STALEMATE: "stalemate",
+}
 
 
 def relation_bits(relations: Iterable[str | int]) -> int:
@@ -447,6 +459,29 @@ class Game:
         """The moves the engine offers the player to move now, in its order - pseudo-legal
         (see the module docstring); empty once no move may be made (Q4)."""
         return self.expand(square_features="none").move_list()
+
+    def verdict(self, nodes: int = T5D_NO_LIMIT, *, bytes: int = T5D_NO_LIMIT) -> tuple[str, list[Move]]:  # noqa: A002
+        """E4's verdict at this turn start (``t5d_game_verdict``; H37) within ``nodes`` search nodes
+        and the memory ceiling ``bytes`` (``T5D_NO_LIMIT``: none): "ongoing", "checkmate",
+        "stalemate", or "unknown" where a budget stopped it (never a verdict) - and for an ongoing
+        one its witness, one legal action, its moves in an order in which they can be played, each
+        recorded in the state it is made in. Deterministic. The game loops' turn-start question and
+        the action its answer found (register H22; review decision 13's X2). A game in mid-action
+        is refused (``EngineArgumentError``)."""
+        for name, value in (("nodes", nodes), ("bytes", bytes)):
+            if not 0 <= int(value) <= T5D_NO_LIMIT:
+                raise ValueError(f"{name}: 0 to T5D_NO_LIMIT, not {value}")
+        verdict, count = c_int32(), c_size_t()
+        capacity = 256  # moves: one action's - more than any position here plays in one turn
+        buf = (MoveRecord * capacity)()
+        with self._lock:
+            args = (self._live(), c_uint64(int(nodes)), c_uint64(int(bytes)), byref(verdict))
+            self._lib.call("t5d_game_verdict", *args, buf, c_size_t(capacity), byref(count), error=True)
+            n = int(count.value)
+            if n > capacity:  # a longer witness: once more with room (deterministic: the same answer)
+                buf = (MoveRecord * n)()
+                self._lib.call("t5d_game_verdict", *args, buf, c_size_t(n), byref(count), error=True)
+        return VERDICTS[int(verdict.value)], [Move.from_record(buf[i]) for i in range(n)]
 
     def position(
         self,
