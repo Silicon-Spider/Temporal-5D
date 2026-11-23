@@ -11244,3 +11244,7 @@ entry changes in the same edit as its code, which the standing rule defers to up
     and flagging); M3's Python test; M4 (the duplicate cut to the persistent deadline's reach, the
     cheap-tiers equality and the mating turn start added); L2; L3 (a 0 s bound 1e-9 s in Python).
     H1 part 5 left to `lane/engine`'s decision 13 (issue 456). Issues 456, 458, 467; edit 346.
+  - The reviewers' survivors re-run on the reconciled tree (this lane's runner; ten adapted to
+    the rewritten code): 37 killed, Y02 obsolete (decision 12 removed its refusal), L02
+    equivalent (issue 406's per-move gate before every search; the root's single search given no
+    time left settles nothing) - the M4 test gained the reviewers' 120-board position for it.

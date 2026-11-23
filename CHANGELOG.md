@@ -10,6 +10,22 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - E11/E8 review, phase 2: the reviewers' survivors re-run on the reconciled tree
+
+The review's 39 survivors re-run with this lane's copy of the reviewers' runner (each mutant
+applied to the worktree, the engine rebuilt, the tests that should see it run, the file restored);
+the ones whose code the merge or the fixes rewrote were adapted to the new text (T05, C10, Y03,
+Y04, M01, L01, L02, L03, S05, S07). 37 KILLED - the phase-1 tests, M3's (T04, T05, C10, Y03,
+Y04), M4's and issue 406's (M01, L01; M03 and L03 by lane/engine's lazy-verification and tier-3
+tests, which run long under them), the seam's (S05, S07). Y02 is obsolete: decision 12 removed
+the refusal it mutated (the hook is now taken; tested). L02 (a tier-3 search started past the
+deadline) survives as EQUIVALENT: since the merge issue 406's own gate stops every per-move search
+past the deadline (`legal.cpp`'s loop), and the one other caller, the root's single search, is given
+no time left and settles nothing - the M4 test's four positions (120 boards of random play added,
+the reviewers' own) classify alike with and without it.
+
+Spec: none - tests and their record. No proposed edit; no measured figure.
+
 ### 2026-11-24 - E11/E8 review fixes, phase 2: match play's hard bound held after the search, never a throw for want of a move, the deadline's reach tested where issue 406's tests stop
 
 The review of the E11/E8 change, phase 2 on the reconciled tree (after main d4c7fb9's merge):

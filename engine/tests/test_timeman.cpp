@@ -1920,7 +1920,7 @@ TEST(timeman_past_the_deadline_the_classification_is_the_cheap_tiers_alone) {
   // tier-2 check is taken - checks, destination scans, greedy tries - and no
   // tier-3 search starts, so an exact classification is, move by move, the
   // classification with no check and no node at all (budgeted(0, 0)). On
-  // three positions, each with moves the cheap tiers leave open (the review's
+  // four positions, each with moves the cheap tiers leave open (the review's
   // M4: L01, L02).
   const auto late = [] {
     LegalityOptions o = LegalityOptions::exact();
@@ -1931,6 +1931,11 @@ TEST(timeman_past_the_deadline_the_classification_is_the_cheap_tiers_alone) {
   positions.push_back(game({"[4k3/8/8/8/8/8/4r3/4K3:0:1:w]"}, BoardSize{8, 8}));
   positions.push_back(q3_flat_node());
   positions.push_back(t5d_test::v3::mate_in_two());
+  synthetic::Spec spec;  // the review's probe position: 120 boards of random play
+  spec.target_boards = 120;
+  spec.target_active = 6;
+  spec.seed = 5;
+  positions.push_back(synthetic::play_until_reached(spec).state);
   for (const GameState& s : positions) {
     MoveList all;
     generate_moves(s, all);
