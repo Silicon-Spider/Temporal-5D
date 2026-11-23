@@ -10,6 +10,37 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-23 - C26/C27's review: the survivors re-run, and the checks (no code)
+
+**The mutation pass's 8 survivors**, re-run with its runner on a fresh copy of b48b356. T12 was
+re-anchored on the gate call that L8 moved into its own statement, and each survivor's killing test
+was added to its first node ids. All 8 are KILLED:
+
+| Mutant | Killed by |
+|---|---|
+| T03 | `test_visits_are_counted_at_inner_and_dense_nodes` |
+| T05 | `test_rung_1_reads_a_segment_of_two_inner_nodes` |
+| T12 | `test_the_gate_is_asked_on_the_edge_with_the_childs_multiverse` |
+| C17 | `test_the_dense_epoch_checks_the_networks_format[root_epoch]` |
+| C23 | `test_the_dense_epoch_checks_the_networks_format[evaluate]` |
+| E07 | `test_the_default_max_batch_is_the_dense_evaluators` |
+| E15 | `test_the_root_refresh_anchors_at_the_root_leafs_input` (its binding budget) |
+| E19 | `test_every_root_refresh_has_its_own_engine_number` |
+
+E16 is killed by the anchor test too, and the adopted binding-budget test kills E15 and E16 on its
+own. This round's own fixes were also mutated back (M2's release and its guard, L15's shortcut, L5,
+L6, L8), and each was killed by its test.
+
+**Checks on b48b356**, the engine built in the worktree, `t5d` and `t5d.dll` loaded from it:
+- ruff: "All checks passed!", "138 files already formatted";
+- the change's five test files, slow included, with `test_search_api.py` and `test_cache.py`
+  (`T5D_REQUIRE_ENGINE=1`, 3 threads): "483 passed in 3507.36s (0:58:27)";
+- verify: every check ok;
+- gate commit, with ftxi and notation built in the worktree, offline: "oracle layer [commit]: ok",
+  "SMOKE TEST - PASSED", 0 declined, "proof channel: DISABLED".
+
+Spec: none. This entry is evidence, and no part of the spec describes it.
+
 ### 2026-11-23 - C26/C27's review: the missing tests (M3, M4, L11-L14) and R6b's per-leaf and root-leaf bounds (L1, L10)
 
 The mutation pass's 50 mutants left 8 survivors. Each now has a test that kills it; the re-run is

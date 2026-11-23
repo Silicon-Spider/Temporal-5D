@@ -10312,3 +10312,16 @@ entry changes in the same edit as its code, which the standing rule defers to up
     leaf (L1: smallest gap 5.35e-2) and at `ROOT_DENSE_BOUND` for the root leaf (L10). The C26
     entry's per-leaf figure is corrected in place. Checks: ruff clean; the new tests with R6b, R6c
     and the anchor test: "18 passed in 74.88s".
+  - **The survivors and the checks.** The 8 survivors were re-run with the mutation runner on a
+    fresh copy of b48b356, T12 re-anchored, and all 8 are KILLED, each by its named test (the table
+    is in CHANGELOG). E16 is killed too, and this round's own fixes were mutated back and caught.
+    Checks: ruff "All checks passed!", "138 files already formatted"; the five test files of the
+    change, slow included, with `test_search_api.py` and `test_cache.py`: "483 passed in 3507.36s
+    (0:58:27)"; verify ok; gate commit "oracle layer [commit]: ok", SMOKE TEST - PASSED (41
+    compared, 0 declined), proof channel DISABLED. ftxi and notation were built in the worktree
+    with local tools, nothing downloaded. **For the main loop:**
+    - issue 264 is the user's to rule, (a) or (b); (b) is engine work in `reroot` and `set_epoch`;
+    - edit 385 goes upstream;
+    - issue 269 stays the user's question;
+    - the lane's line under "Current state" now has C26/C27 built and reviewed, which is not
+      edited here.
