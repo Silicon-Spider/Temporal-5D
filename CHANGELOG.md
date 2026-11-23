@@ -10,6 +10,13 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - Round 3 of lane/search, verified: the checks
+
+The round's two items (MT-03's part 5; round 2's two weak tests), checked on its final tree.
+Checks on 22d980e: engine 876 of 876 (`--werror`); the long twin added (`long_ladder_settling_scans_keep_their_facts_in_the_stores_under_tt_churn_6f`) passed, its figures as measured; the Lazy SMP test x3, owed by the ladder's seam (1 thread 293 each run, 5 threads 313 / 312 / 317; the engine lane's E12 work beside, load 9 / 13 / 20% before, 7 / 7 / 28% after - the table); verify ok (exit 0; its note of 17 problems in the required sets of the proof channel's tiers, which it does not fail on, as before); gate commit "oracle layer [commit]: ok", SMOKE TEST - PASSED (baseline 41 compared, 0 declined), proof channel DISABLED. No Python changed (no ruff or pytest owed); no truth source (the nightly not owed).
+
+Spec: none - checks and their record. No proposed edit; no measured figure.
+
 ### 2026-11-24 - Round 2's two weak tests made strong: L1's charge and L8's capped Guard
 
 Round 2 left two LOW fixes without a test that tells the fix from its fault.
