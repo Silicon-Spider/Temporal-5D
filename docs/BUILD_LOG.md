@@ -181,7 +181,7 @@ standing rule binds every other session as before. What follows from it:
   target builder does not write it, nothing trains on it, and no existing module imports it. The
   rest of the work the review implies is listed below; none of it is started.
 - **Nothing was committed or pushed.** The working tree still holds the uncommitted merge of
-  `lane/fix535` (staged; MERGE_HEAD d44a7af - 8c4f905 since the history rewrite of 2026-11-16),
+  `lane/fix535` (staged; MERGE_HEAD 8c4f905 - 8c4f905 since the history rewrite of 2026-11-16),
   exactly as the session found it. The review's edits sit unstaged beside it: the two design
   documents, this log and `CHANGELOG.md`. To keep the two apart, conclude the merge first (`git
   commit`), then add and commit the review. *(2026-11-23: the build's main-loop session concluded
@@ -1352,20 +1352,20 @@ threads reach at least one thread's sum (one retry on a shared machine).
 | 2026-10-23 | E10 review fixes (the search lane: the ladder's decisions, Hunt beside the settling scan, the boost rule; before review) | lane/search f0b8e22 + the review fixes, the tree before the commit | dev-r, 24 logical; other lanes' jobs running; load 100% before and after | 32 | 292 / 292 / 292 | 309 / 303 / 308 | none | pass x3 |
 | 2026-10-23 | engine ABI round 3 (B11's pin and check relations, D4's per-square labels; reviewed, 5760a36) | main 188707a + lane/engine 5760a36, merged tree before the commit | dev-r, 24 logical; the network lane's flat head finishing and the search lane's E10 reviews starting; load 80-88% before, 85-91% after | 32 | 292 / 293 / 293 | 309 / 313 / 307 | none | pass x3; the nightly gate passed in 570 s (Half Reflected and Reversed Royalty gated, as before) |
 | 2026-10-23 | main 529098d into lane/search | lane/search 703ca97 + main 529098d, merged tree before the commit | dev-r, 24 logical; this merge's whole pytest suite (serial) and other lanes' jobs running; load 99% before and after | 32 | 291 / 289 / 291 | 311 / 301 / 311 | none | pass x3 |
-| 2026-10-23 | MT-01 (the solver against df-pn; tests and tools only, no scanner or search code changed) | lane/engine 710921a + MT-01, the tree before the commit | dev-r, 24 logical; other lanes and this lane's long twin running; load 99% before, 96% after | 32 | 292 / 292 / 292 | 304 / 303 / 306 | none | pass x3 |
-| 2026-10-23 | MT-03 (H19 under TT churn; prover and Hunt tests only, no scanner, prover or search code changed) | lane/engine 0e8303a + MT-03, the tree before the commit | dev-r, 24 logical; other lanes running; load 94% before, 99% after | 32 | 292 / 293 / 293 | 306 / 305 / 303 | none | pass x3 |
-| 2026-10-23 | MT-02's engine side (t5d-proof-records; tools and tests only, no scanner, prover or search code changed) | lane/engine 7f4096e + MT-02, the tree before the commit | dev-r, 24 logical; other lanes and this lane's pytest running; load 99% before, 94% after | 32 | 291 / 292 / 292 | 304 / 302 / 310 | none | pass x3 |
+| 2026-10-23 | MT-01 (the solver against df-pn; tests and tools only, no scanner or search code changed) | lane/engine 03f4253 + MT-01, the tree before the commit | dev-r, 24 logical; other lanes and this lane's long twin running; load 99% before, 96% after | 32 | 292 / 292 / 292 | 304 / 303 / 306 | none | pass x3 |
+| 2026-10-23 | MT-03 (H19 under TT churn; prover and Hunt tests only, no scanner, prover or search code changed) | lane/engine 8b53d43 + MT-03, the tree before the commit | dev-r, 24 logical; other lanes running; load 94% before, 99% after | 32 | 292 / 293 / 293 | 306 / 305 / 303 | none | pass x3 |
+| 2026-10-23 | MT-02's engine side (t5d-proof-records; tools and tests only, no scanner, prover or search code changed) | lane/engine 48a13a5 + MT-02, the tree before the commit | dev-r, 24 logical; other lanes and this lane's pytest running; load 99% before, 94% after | 32 | 291 / 292 / 292 | 304 / 302 / 310 | none | pass x3 |
 | 2026-10-24 | E10 (the search wiring and H44's audit lane; reviewed, 703ca97; main 529098d merged in, fcedc2e) | main bf5ef64 + lane/search fcedc2e, merged tree before the commit | dev-r, 24 logical; the engine, network and gate lanes running; load 90-99% before, 84-99% after | 32 | 292 / 292 / 291 | 309 / 308 / 310 | none | pass x3; the lane's merge of main ran the nightly gate (525 s, Half Reflected and Reversed Royalty gated) on the same engine code |
-| 2026-11-01 | main 7483103 into lane/engine (E10 and the rest of main; the step-2 solver searches with the ladder off) | lane/engine ee9456e + main 7483103, merged tree before the commit | dev-r, 24 logical; other lanes' jobs and this lane's measurements running; load 100% before and after | 32 | 288 / 289 / 289 | 300 / 299 / 301 | none | pass x3 |
+| 2026-11-01 | main b73d073 into lane/engine (E10 and the rest of main; the step-2 solver searches with the ladder off) | lane/engine d2fcc88 + main b73d073, merged tree before the commit | dev-r, 24 logical; other lanes' jobs and this lane's measurements running; load 100% before and after | 32 | 288 / 289 / 289 | 300 / 299 / 301 | none | pass x3 |
 | 2026-11-02 | issue 535's fix (the search's exception safety, issue 600; the scanner untouched; before review) | lane/fix535 on main d8a54d3, the tree before the commit (its final `--werror` build) | dev-r, 24 logical; other lanes' jobs (a node process on about 11 cores, two pytest runs) and this branch's serial pytest; load 100% before and after | 32 | 289 / 288 / 289 | 211 / 210 / 297 | runs 1 and 2 (5 threads 198 < 287, 225 < 288) | fail, fail, pass - the 5 threads starved: see the next two rows |
 | 2026-11-02 | issue 535's fix, again, run alternately with the control below | the same tree | dev-r, 24 logical; the same jobs; load 100% before and after | 32 | 290 / 290 / 290 | 311 / 305 / 298 | none | pass x3 |
 | 2026-11-02 | control for the two rows above: the base, main d8a54d3 (the scanner identical), run alternately with the fix | main's own build of d8a54d3 | dev-r, 24 logical; the same jobs; load 100% before and after | 32 | 292 / 288 / 289 | 304 / 211 / 307 | run 2 (5 threads 196 < 288) | pass, fail, pass - the base fails the same way under this load: the failures above are the machine's, not the change's |
-| 2026-11-02 | issue 406 (deadlines reach the rules engine's calls: legality, the search's in-batch calls, the play loop; t5d-legality-cost) | lane/engine 0e39099 + issue 406, the tree before the commit | dev-r, 24 logical; other lanes' jobs and this lane's pytest running; load 100% before and after | 32 | 290 / 292 / 292 | 303 / 309 / 312 | none | pass x3 |
+| 2026-11-02 | issue 406 (deadlines reach the rules engine's calls: legality, the search's in-batch calls, the play loop; t5d-legality-cost) | lane/engine efdb8bd + issue 406, the tree before the commit | dev-r, 24 logical; other lanes' jobs and this lane's pytest running; load 100% before and after | 32 | 290 / 292 / 292 | 303 / 309 / 312 | none | pass x3 |
 | 2026-11-08 | issue 535's fix with main 03eca7a taken in (a fast-forward; before review) | lane/fix535: main 03eca7a + the fix, the tree before the commit (its final `--werror` build) | dev-r, 24 logical; this branch's Python suite in two shards, another lane's pytest, two other lanes' engine runs, mutation runs; load 100% before and after | 32 | 290 / 289 / 290 | 305 / 311 / 304 | none | pass x3 |
-| 2026-11-08 | MT-01/02/03 review fixes (the prover's TT refuses solved entries, behaviour-preserving; tests and tools) | lane/engine 573dc88 + the review fixes, the tree before the commit | dev-r, 24 logical; other lanes' jobs and this lane's long twins running; load 100% before and after | 32 | 292 / 291 / 289 | 301 / 299 / 304 | none | pass x3 |
+| 2026-11-08 | MT-01/02/03 review fixes (the prover's TT refuses solved entries, behaviour-preserving; tests and tools) | lane/engine 7a6fefb + the review fixes, the tree before the commit | dev-r, 24 logical; other lanes' jobs and this lane's long twins running; load 100% before and after | 32 | 292 / 291 / 289 | 301 / 299 / 304 | none | pass x3 |
 | 2026-11-09 | issue 535's fix into main (the main loop's merge battery) | main faaa64e + lane/fix535 8c4f905 (pre-rewrite 05afde5 + d44a7af), merged tree before the commit | dev-r, 24 logical; the engine and search lanes' fix rounds running | 32 | 293 | 317 / 315 / 315 | none | pass x3 |
-| 2026-11-09 | The review round's deadline path (H1, M1, M2: the cache's candidate digest, the flat form's re-listing, run()'s deadline through deadline_after) | lane/engine 2c12be8 + group 1, the tree before the commit | dev-r, 24 logical; load 12% before, 14% after | 32 | 293 / 293 / 293 | 316 / 314 / 315 | none | pass x3 |
-| 2026-11-09 | The review's H2 (prover.cpp's list_children not complete under Q3; certificate.cpp's Q3 defender check) | lane/engine 46a121a + H2, the tree before the commit | dev-r, 24 logical; other lanes' jobs starting; load 53% before, 87% after | 32 | 293 / 292 / 291 | 311 / 311 / 312 | none | pass x3 |
+| 2026-11-09 | The review round's deadline path (H1, M1, M2: the cache's candidate digest, the flat form's re-listing, run()'s deadline through deadline_after) | lane/engine c58a574 + group 1, the tree before the commit | dev-r, 24 logical; load 12% before, 14% after | 32 | 293 / 293 / 293 | 316 / 314 / 315 | none | pass x3 |
+| 2026-11-09 | The review's H2 (prover.cpp's list_children not complete under Q3; certificate.cpp's Q3 defender check) | lane/engine 3bb8ffa + H2, the tree before the commit | dev-r, 24 logical; other lanes' jobs starting; load 53% before, 87% after | 32 | 293 / 292 / 291 | 311 / 311 / 312 | none | pass x3 |
 | 2026-11-23 | the review's code round into main (the tree form under graph search, G11's network side; the main loop's check) | main d760019 + the round, the working tree before its commit | dev-r, 24 logical; the engine lane's and search lane's checks running | 32 | 293 / 289 / 291 | 301 / 303 / 304 | none | pass x3 |
 | 2026-11-23 | The review round's final tree (issue 411's truth sources; main af0c19b merged) | lane/engine e79ea70 | dev-r, 24 logical; load 26% before, 18% after | 32 | 293 / 293 / 293 | 318 / 317 / 318 | none | pass x3 |
 | 2026-11-23 | the engine lane into main (issue 411's truth sources, issue 412; the main loop's merge battery) | main 4e9267e + lane/engine 76501de, merged tree before the commit | dev-r, 24 logical; the net lane's fixer running | 32 | 293 | 317 / 315 / 315 | none | pass x3 |
@@ -6178,7 +6178,7 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     comparison guards only a collision between two (position, depth) keys - the memo test pins
     the depth-keyed answer. Docs corrected: edit 301, the H19 and H17 rows, engine/README.md
     (step 2), the MT entries in CHANGELOG.md (inline review corrections).
-410. **The review of `lane/engine` 0e7d2ed..d86f363 (issue 406's deadlines, the flat-form docs,
+410. **The review of `lane/engine` 65c14a4..e8cbfa3 (issue 406's deadlines, the flat-form docs,
     the MT-01/02/03 review fixes): what it found and what changed** (§8.5, §8.6, §8.7, §15.2's
     purity row, §13.1 6f, §11.3, §15.4; register C14, E7, H19, H37, H41; issues 406-409; edits
     301, 304, 305). The review (2026-11-09; three passes, every finding checked twice) kept 2 HIGH,
@@ -6346,7 +6346,7 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     Win, and holds a sample of each store's facts (its first entries; a Draw as E4's stalemate)
     to the game tree, "beyond" its budget meaning the tree's overflow alone (scoped after the
     review of 2026-11-09, L3: it said "every stored fact", and every Unknown counted beyond).
-    **E10 merged into `lane/engine` (2026-11-01, main 7483103):** part 5 is no longer
+    **E10 merged into `lane/engine` (2026-11-01, main b73d073):** part 5 is no longer
     blocked; not written in the merge. The merge turned E10's ladder off in the step-2
     solver searches (MT-01's df-pn check, `t5d-solver-check`, `t5d-proof-records`): with the
     proof channel on, its proofs entered the tree as injected proofs no solved subtree
@@ -10276,7 +10276,7 @@ entry changes in the same edit as its code, which the standing rule defers to up
   pytest 1700 passed / 3 failed / 1 skipped (`T5D_REQUIRE_ENGINE=1`, serial, 3817 s) before the
   test fix, `test_flat_head.py` 8 of 8 after it; ruff clean; verify ok; gate commit ok; gate
   nightly ok in 525 s (Half Reflected and Reversed Royalty gated; proof channel DISABLED).
-- **2026-11-01 - main 7483103 merged into `lane/engine`** (M23; E10, D2's flat head and flat
+- **2026-11-01 - main b73d073 merged into `lane/engine`** (M23; E10, D2's flat head and flat
   target, MT-04, G9, the design documents and CHECKPOINT 9's plan, into the step-2 lane). Conflicts
   in CHANGELOG (the merge's entry, the lane's three MT entries, then main's), engine/README.md
   (main's E10 section beside step 2) and BUILD_LOG (both sides; the register rows H13, H14, H43, H44
@@ -10289,7 +10289,7 @@ entry changes in the same edit as its code, which the standing rule defers to up
   verify ok (exit 0), gate commit ok (oracle layer ok; engine differential smoke test passed; proof
   channel DISABLED). The lane changes nothing Python-visible here (main's own changes were run
   through pytest on main); the whole pytest suite runs with issue 406's commit on this tree.
-- **2026-11-01 - main 1c085ac merged into `lane/engine`** (M23; Kairos pinned and wired as two pending
+- **2026-11-01 - main cb72413 merged into `lane/engine`** (M23; Kairos pinned and wired as two pending
   sources in no tier, CHECKPOINT 9's brief read in). One conflict, CHANGELOG (the lane's entries above
   main's); nothing under `engine/` changed, so the engine was not rebuilt or re-run. The worktree's
   Kairos checkout came from the main checkout's copy of the pinned commit (`git submodule update
@@ -10298,7 +10298,7 @@ entry changes in the same edit as its code, which the standing rule defers to up
   each named Kairos not checked out), gate commit ok (oracle layer ok; engine differential smoke test
   passed; proof channel DISABLED).
 - **2026-11-01/02 - issue 406, exact legality's cost** (`lane/engine`; issues 407-408, edits
-  303-304 from the block 400-449 / 300-329). Main 28a102b (the CHECKPOINT 10 design documents) merged
+  303-304 from the block 400-449 / 300-329). Main 01ebbe5 (the CHECKPOINT 10 design documents) merged
   first (M23; one conflict, CHANGELOG; nothing under `engine/` or `oracles/`; verify ok).
   Characterised with `t5d-legality-cost` and four fixtures (`engine/testdata/legality-cost/`;
   docs/MEASUREMENTS.md): every budget honoured, the minutes from exact questions - tier 3's
@@ -10320,7 +10320,7 @@ entry changes in the same edit as its code, which the standing rule defers to up
   with the MT-01/02/03 review fixes (prover.hpp, prover.cpp) and with issue 411 (prover.cpp,
   certificate.cpp); the nightly gate is owed before the lane merges into main, and the lane
   runs it on its final tree.)
-- **2026-11-02 - main 2cb107d merged; the flat-form docs** (`lane/engine`). Main's two Linux build
+- **2026-11-02 - main d8a54d3 merged; the flat-form docs** (`lane/engine`). Main's two Linux build
   fixes (a std::uint64_t constant in mcts.cpp, two in the tests) merged first (M23; one conflict,
   CHANGELOG; engine 695 of 695, verify ok, gate commit ok). Then issue 241(g): `capi_search.h`,
   `mcts.hpp`, the built-in evaluators' header and the README no longer say the network gives no
@@ -10526,6 +10526,7 @@ entry changes in the same edit as its code, which the standing rule defers to up
   replaced (mapped by tree and author date from the reflogs, 346 commits; the 121 ids it shares
   with `lane/net`'s replacement all equal); five lines quoting an old id "before the rewrite"
   keep it. Still to take it: `lane/engine` and `lane/search`, once their rounds are committed.*
+  *`lane/engine`'s own text took it on main after its merge (2026-11-23): 46 ids; `lane/search` updated its own (eb7353b).*
 - **2026-11-23 - four answers from the user** (to this session, after the code round's report;
   "Where things stand", top): the padding's default stays 1 with 8 on the compiled GPU kernel
   (issue 732, edit 414); the human games are not training data, so not a source of seeded starts
@@ -10540,7 +10541,7 @@ entry changes in the same edit as its code, which the standing rule defers to up
   Fixed: `_same(..., values=)` in `tests/net/test_params.py`, used by `test_displacement_far.py`;
   `timeout-minutes: 60` in `.github/workflows/engine.yml`. `tests/net/test_params.py` and
   `test_displacement_far.py`: 48 passed; ruff clean. Left unstaged for the main loop to commit.
-- **2026-11-08 - main c8a9c49 merged into `lane/engine`** (M23; A5's piece-centric tokens behind
+- **2026-11-08 - main 03eca7a merged into `lane/engine`** (M23; A5's piece-centric tokens behind
   their flag, the network CI job in four shards). Conflicts in CHANGELOG and BUILD_LOG only (both
   sides kept); nothing under `engine/` changed; verify ok, gate commit ok. A hazard met on the way,
   for every lane: the repository's stash is one for all worktrees (refs/stash), so a `git stash pop`
@@ -10564,7 +10565,7 @@ entry changes in the same edit as its code, which the standing rule defers to up
   changed: 1 thread 292 / 291 / 289, 5 threads 301 / 299 / 304, load 100%); verify ok; gate commit
   ok (engine differential smoke test passed, proof channel DISABLED); no pytest - nothing
   Python-visible changed (no C API change).
-- **2026-11-08 - main 0e7d2ed merged into `lane/engine`** (M23; Kairos round 2 - the two-oracle bar
+- **2026-11-08 - main 65c14a4 merged into `lane/engine`** (M23; Kairos round 2 - the two-oracle bar
   counted by lineage, CHECKPOINT 10; the done-means audit and its corrections; the network job's
   shards as whole test files, issue 601; three upstream drafts). Conflicts in CHANGELOG (the lane's
   entries above main's; the network entry under the heading main gave it) and the session log (both
@@ -10576,12 +10577,12 @@ entry changes in the same edit as its code, which the standing rule defers to up
   gate commit ok (oracle layer ok; engine differential smoke test passed, baseline 41 compared, 0
   declined; calibration 1.52x; proof channel DISABLED). No engine source changed in the merge
   (main's engine changes are tests), so no long twin and no Lazy SMP run.
-- **2026-11-09 - main 05afde5 merged into `lane/engine`** (M23; the network job's three Linux-only
-  failures, issue 602), before the review round of 0e7d2ed..d86f363. One conflict, CHANGELOG (the
+- **2026-11-09 - main faaa64e merged into `lane/engine`** (M23; the network job's three Linux-only
+  failures, issue 602), before the review round of 65c14a4..e8cbfa3. One conflict, CHANGELOG (the
   lane's entries above main's); nothing under `engine/` changed, so the engine was not rebuilt.
   Checks: verify ok (exit 0); gate commit ok (oracle layer ok; engine differential smoke test
   passed, baseline 41 compared, 0 declined; proof channel DISABLED).
-- **2026-11-09 - The review of 0e7d2ed..d86f363, the deadline's path** (`lane/engine`; issue 410,
+- **2026-11-09 - The review of 65c14a4..e8cbfa3, the deadline's path** (`lane/engine`; issue 410,
   edits 304 (scoped) and 305; the block 410-449 / 305-329). H1: the evaluation cache and the batch
   match the candidate list (`candidate_digest`) - a classification the deadline cut is another
   network input, and served another list's evaluation it threw. M1: a fallback listing the deadline

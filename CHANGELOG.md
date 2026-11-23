@@ -49,7 +49,7 @@ unchanged in what it says. The merge brings main's spec and register as main has
 truth source changed (`T5D_TRUTH_SOURCES`; `mcts.cpp` is not one, and main changed none since
 af0c19b), so the nightly gate run on e79ea70 stands for this tree's code signature.
 
-### 2026-11-23 - The review of 0e7d2ed..d86f363, verified: the survivors re-run, the probes re-run, the round's final checks
+### 2026-11-23 - The review of 65c14a4..e8cbfa3, verified: the survivors re-run, the probes re-run, the round's final checks
 
 The review round (build-log issue 410) closed with its verification, recorded in
 `docs/BUILD_LOG.md` (issue 410, the session log), and one test added for M09,
@@ -106,7 +106,7 @@ Royalty gated as before; proof channel DISABLED; 15 minutes) - the nightly owed 
 
 Spec: none - the round's edits 304 and 305 stand as proposed; the proof channel stays off (H41).
 
-### 2026-11-23 - The review of 0e7d2ed..d86f363, the rest: the truth sources recorded, C01 and C14 killed, "beyond" an overflow only, the long MT-01 twin floored, the solver check's per-rule counts shown (M5, L1, L3, L4, L8)
+### 2026-11-23 - The review of 65c14a4..e8cbfa3, the rest: the truth sources recorded, C01 and C14 killed, "beyond" an overflow only, the long MT-01 twin floored, the solver check's per-rule counts shown (M5, L1, L3, L4, L8)
 
 The review's remaining findings (build-log issue 410), fixed as the main loop decided - resumed
 after the account's weekly limit stopped the round on 2026-11-09 (the history rewrite of
@@ -156,7 +156,7 @@ invariant's checks) - nothing proposed: the tests now hold what edits 300 and 30
 on the build's own rule (the nightly when a truth source changes), no spec text. The proof
 channel stays off (H41).
 
-### 2026-11-09 - The review of 0e7d2ed..d86f363, the deadline's tests: each place the deadline reaches held where the call would run long (M3, M4, L6)
+### 2026-11-09 - The review of 65c14a4..e8cbfa3, the deadline's tests: each place the deadline reaches held where the call would run long (M3, M4, L6)
 
 The review (build-log issue 410) found the deadline's places barely tested: the search test's
 root classified in 240 nodes, so its deadline never met a costly classification; the play test
@@ -202,7 +202,7 @@ the time measured unmutated and below the mutant's, both numbers in the test:
 Spec: no spec text describes these tests; they hold issue 406's deadline (§8.6 and register E7
 bear on it, unchanged - L7) and MEASUREMENTS' rows. The proof channel stays off (H41).
 
-### 2026-11-09 - The review of 0e7d2ed..d86f363, H2: under Q3 no verdict from E4's listing of action keys - the prover, check_certificate, loss_confirmed and MT-01's checker
+### 2026-11-09 - The review of 65c14a4..e8cbfa3, H2: under Q3 no verdict from E4's listing of action keys - the prover, check_certificate, loss_confirmed and MT-01's checker
 
 Under Q3's play activation two orders of one set of moves can reach two states under one action
 key, and E4's listing keeps one. The review of 2026-11-09 (H2; build-log issue 411, crediting
@@ -256,9 +256,9 @@ COUNTING does. prover.cpp and certificate.cpp are truth sources (engine/CMakeLis
 code signature moves and the nightly gate is owed at the merge into main. The proof channel
 stays off (H41).
 
-### 2026-11-09 - The review of 0e7d2ed..d86f363, the deadline's path: a cut candidate list kept apart by the cache and the batch, a cut fallback listing re-listable, 1e9 s or more no deadline
+### 2026-11-09 - The review of 65c14a4..e8cbfa3, the deadline's path: a cut candidate list kept apart by the cache and the batch, a cut fallback listing re-listable, 1e9 s or more no deadline
 
-The review of `lane/engine` 0e7d2ed..d86f363 (2026-11-09; build-log issue 410) found the
+The review of `lane/engine` 65c14a4..e8cbfa3 (2026-11-09; build-log issue 410) found the
 deadlines issue 406 sent into the rules engine's calls could crash timed searches and games.
 Fixed as the main loop decided - H1, M1, M2 and the play loop's L2, L5 and L7:
 
@@ -389,7 +389,7 @@ issue 409):
   MT entries below ("Review correction" notes where their claims change).
 - Linux: `DfpnChecker::ask`'s memo key multiplied by an unsigned long long literal beside a
   `std::uint64_t` cast from the signed depth - the pattern Linux g++ 13/14 report under
-  `-Wsign-conversion` (main's b5ab406, 2cb107d) - now a `std::uint64_t{...}` literal, its value
+  `-Wsign-conversion` (main's 04ceab1, d8a54d3) - now a `std::uint64_t{...}` literal, its value
   unchanged; the new test's key the same form.
 - `engine/include/t5d/prover.hpp`, `engine/src/prover.cpp`, `engine/tools/solver_proofs.{hpp,cpp}`,
   `engine/tools/t5d_proof_records.cpp`, `engine/tests/test_mcts.cpp`, `test_solver_refs.hpp`,
@@ -497,9 +497,9 @@ bound is inviolable", "held tight at high N") and register E7, unchanged - it is
 stop, not E7's hard bound, and the flat generator stands outside it; and, through the cache,
 on §8.5, §8.7 and C14 - edit 305, issue 410.)
 
-### 2026-11-01 - main (7483103) merged into lane/engine: the step-2 solver searches with E10's ladder off
+### 2026-11-01 - main (b73d073) merged into lane/engine: the step-2 solver searches with E10's ladder off
 
-Main since 710921a (D2's flat head and the flat form's policy target, MT-04, G9's AMD attempt,
+Main since 03f4253 (D2's flat head and the flat form's policy target, MT-04, G9's AMD attempt,
 the upstream design documents and CHECKPOINT 9's plan, E10: verification v3 wired into the
 search and H44's audit-lane tooling) merged into `lane/engine` (M23: merged, never rebased).
 Conflicts in three documents only, each resolved keeping both sides: `CHANGELOG.md` (the
