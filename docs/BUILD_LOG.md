@@ -10308,3 +10308,7 @@ entry changes in the same edit as its code, which the standing rule defers to up
     read-only, the engine path refuses the ladder at every `start`, the dense dispatch checks the
     network's format, and the gate must answer with a bool. Checks: ruff clean; the new and changed
     tests with the fixture's trigger tests: "13 passed in 14.83s".
+  - **The missing tests** (M3, M4, L11-L14; the C17 and C23 tests came with L6). R6b now holds per
+    leaf (L1: smallest gap 5.35e-2) and at `ROOT_DENSE_BOUND` for the root leaf (L10). The C26
+    entry's per-leaf figure is corrected in place. Checks: ruff clean; the new tests with R6b, R6c
+    and the anchor test: "18 passed in 74.88s".

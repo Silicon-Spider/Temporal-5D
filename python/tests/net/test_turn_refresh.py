@@ -28,10 +28,12 @@ per board (with its past and its perspective, register A7) and epoch, and shared
   first computes; a sibling acting for the other colour computes its own, once; after a refresh
   above the inner node the entry is computed once more, under the new epoch, and shared again.
 * The triggers (C3a rung 1, C24) only at evaluated nodes: an inner node never refreshes, rung 1
-  reads a branching travel move on the segment from the nearest evaluated node (per path - issue
-  268), C24's travel counts inner travel and its effort is the nearest evaluated ancestor's (issue
-  269); an inner node is never evaluated or refreshed. The gate must answer with a bool. With every
-  node evaluated (``evaluates`` None, or always true) the fixture is what it was.
+  reads a branching travel move on the segment from the nearest evaluated node, through every inner
+  node of it (per path - issue 268), C24's travel counts inner travel and its effort is the nearest
+  evaluated ancestor's (issue 269); an inner node is never evaluated or refreshed, and its visits
+  count (a dense epoch's too). The gate is asked once per new node, with the node's own multiverse,
+  and must answer with a bool. With every node evaluated (``evaluates`` None, or always true) the
+  fixture is what it was.
 
 FP32, 2 layers, random weights at initialisation scale (``test_cache.py``'s networks and
 tolerances); bitwise between the two arms, which run the same code on the same entries.
@@ -403,6 +405,53 @@ def test_rung_1_fires_only_at_evaluated_nodes():
     e2 = deep.child(i2, ("physical", sorted(i2.universe.heads())[1]))
     assert e1.branched and not e1.inner and i2.inner and not segment_branched(e2)
     assert not any(deep.visit(e2) for _ in range(6)), "the branch is E1's, not E2's segment's"
+
+
+def test_rung_1_reads_a_segment_of_two_inner_nodes():
+    """Rung 1's segment runs up through every inner node (V = 3): root -> I1 (inner, the branching
+    jump) -> I2 (inner, a physical move) -> E: the branch is on E's segment, two inner nodes up; E
+    refreshes at its third visit, I1 and I2 never."""
+    model = _model(670)
+    root = _root("standard", 7)
+    cfg = CacheConfig(node_refresh=True, refresh_visit_threshold=3)
+    tree = SearchTree(CachedEvaluator(model, cfg), root, evaluates=_inner_at(1, 2))
+    i1 = tree.child(tree.root, _branching(root))
+    i2 = tree.child(i1, ("physical", sorted(i1.universe.heads())[0]))
+    e = tree.child(i2, ("physical", sorted(i2.universe.heads())[1]))
+    assert i1.inner and i2.inner and not e.inner and i1.branched and not i2.branched and not e.branched
+    assert segment_branched(e)
+    assert not any(tree.visit(n) for n in (i1, i2, i1, i2, i1, i2))
+    assert [tree.visit(e) for _ in range(3)] == [False, False, True] and e.refreshed_by == "rung1"
+    assert not i1.refreshed and not i2.refreshed
+
+
+def test_visits_are_counted_at_inner_and_dense_nodes():
+    """The search's statistics are kept at every node: an inner node's visits and a dense epoch's
+    count, though no trigger fires there."""
+    model = _model(672)
+    root = _root("standard", 9)
+    tree = SearchTree(CachedEvaluator(model, CacheConfig(node_refresh=True, refresh_visit_threshold=1)), root, evaluates=_inner_at(1))
+    i = tree.child(tree.root, _branching(root))
+    assert i.inner and not any(tree.visit(i) for _ in range(4)) and i.visits == 4
+    dense = SearchTree(CachedEvaluator(model, CacheConfig(root_refresh=True, phase_form=True, phase_boards=1000)), root)
+    d = dense.child(dense.root, _branching(root))
+    assert not any(dense.visit(d) for _ in range(3)) and d.visits == 3
+
+
+def test_the_gate_is_asked_on_the_edge_with_the_childs_multiverse():
+    """``evaluates(parent, move, universe)`` gets the new node's multiverse - a gate reading the
+    position the move makes (a capture, a check, the present moving) decides on it - once, when the
+    node is made."""
+    model = _model(673, layers=1)
+    root = _root("standard", 9)
+    seen = []
+    tree = SearchTree(CachedEvaluator(model), root, evaluates=lambda parent, move, u: seen.append((parent, move, u)) or True)
+    move = ("physical", sorted(root.heads())[0])
+    child = tree.child(tree.root, move)
+    assert len(seen) == 1 and seen[0][0] is tree.root and seen[0][1] == move
+    assert seen[0][2] is child.universe and seen[0][2].digest() != root.digest()
+    tree.child(tree.root, move)
+    assert len(seen) == 1, "decided once, when the node is made"
 
 
 def test_c24_counts_inner_travel_at_the_next_evaluated_node():

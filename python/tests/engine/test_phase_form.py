@@ -19,17 +19,17 @@ refresh (C3). "The dense search" is read as the same network's dense pass, batch
   (``_PerNodeSwitch``: each leaf's mode by its own board count) builds another search on every arm.
 * Rooted at or above N* (R6b): every node cached - the search is the cached path's with the root
   refresh, bit for bit; every leaf the two-level reference anchored at the root; the root leaf the
-  dense pass (issue 259's anchor); the other leaves more than 1e-3 from it; the search not the dense
-  one.
+  dense pass (issue 259's anchor), within ``ROOT_DENSE_BOUND``; every other leaf more than 1e-3 from
+  its own dense pass; the search not the dense one.
 * The boundary (R6c), one evaluator across crossings (R6d), the evaluation cache shared across the
   crossing (R6e, C14), a carried search crossing it (R6f, C12 - under graph search a cached path
   transposes into a carried node evaluated dense, BUILD_LOG issue 264, pinned), whole games crossing
   it (R6g), F1 in BF16 (R6h, slow).
-* Units: N*'s placeholder is ``token_counts.N_STAR``'s; the dense epoch's engine number; the dense
-  dispatch is ``NetworkEvaluator``'s, bit for bit, with either prior and the leave logits; its
-  ``max_batch``; it checks the network's format; the start shortcut; the refusal of node refreshes,
-  after construction too; A5 still refused first; the store keeps only the live search's epoch
-  (issue 273).
+* Units: N*'s placeholder is ``token_counts.N_STAR``'s; the dense epoch's engine number, and every
+  root refresh's its own; the dense dispatch is ``NetworkEvaluator``'s, bit for bit, with either
+  prior and the leave logits; its ``max_batch``, by default the dense evaluator's; it checks the
+  network's format; the start shortcut; the refusal of node refreshes, after construction too; the
+  store keeps only the live search's epoch (issue 273); A5 still refused first.
 
 FP32, 2 layers, random weights at initialisation scale, the v1 defaults (B15, B16, A6, A7); the
 verification ladder off in every search (from Python it never changes the tree, H41, and it costs
@@ -62,7 +62,7 @@ from t5d.engine.evaluator import (
 from t5d.net import NetConfig, build_model, synthetic_state
 from t5d.net.cache import CacheConfig, CachedEvaluator, KVStore, reference_output, state_digest
 from tests.engine.helpers import ENGINE_VARIANTS, requires_engine
-from tests.engine.test_cached_variants import THREE_VARIANTS, _evals_close, _logit_gap, _search_root
+from tests.engine.test_cached_variants import ROOT_DENSE_BOUND, THREE_VARIANTS, _evals_close, _logit_gap, _search_root
 
 R1, R2 = "past_and_epoch_history", "causal_past"
 SEEDS = (0, 1)
@@ -98,7 +98,7 @@ COUNTS = (
     "generated_turns",
 )
 #: The largest gaps met (printed at the module's end under ``-s``).
-GAPS = {"cached leaf vs reference": 0.0, "cached root leaf vs dense": 0.0, "cached leaf vs dense (smallest max)": math.inf}
+GAPS = {"cached leaf vs reference": 0.0, "cached root leaf vs dense": 0.0, "cached leaf vs dense (smallest)": math.inf}
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -305,7 +305,7 @@ def _check_cached(root: Game, model, n_star: int, flags: dict, what, against_den
     number = engine_epoch(ev.epoch)
     assert {v[2] for v in p.views} == {number} and number != engine_epoch(ev.cached.dense_epoch), what
     dense = _dense(model)
-    far = 0.0
+    assert len(p.evals) > 1, what
     for i, (pos, out) in enumerate(zip(p.positions, p.evals, strict=True)):
         state = state_of(pos)
         ref = _split(reference_output(model, state, anchor=anchor), [state])[0]
@@ -313,11 +313,11 @@ def _check_cached(root: Game, model, n_star: int, flags: dict, what, against_den
         gap = _logit_gap(out, dense([pos])[0])
         if i == 0:  # a fresh search's first leaf is its root: the refresh pass is the dense pass
             assert state_digest(state) == state_digest(anchor), what
-            assert gap < 1e-4, (what, "the root leaf is the dense pass", gap)
+            assert gap < ROOT_DENSE_BOUND, (what, "the root leaf is the dense pass", gap)
             GAPS["cached root leaf vs dense"] = max(GAPS["cached root leaf vs dense"], gap)
-        far = max(far, gap)
-    assert len(p.evals) > 1 and far > 1e-3, (what, "the cached leaves are not the dense pass", far)
-    GAPS["cached leaf vs dense (smallest max)"] = min(GAPS["cached leaf vs dense (smallest max)"], far)
+        else:  # every other leaf: cached, conditioned on the root, not its own dense pass
+            assert gap > 1e-3, (what, i, "a cached leaf is not the dense pass", gap)
+            GAPS["cached leaf vs dense (smallest)"] = min(GAPS["cached leaf vs dense (smallest)"], gap)
     if against_dense:
         _, _, d_digest = _search(root, _dense(model), playouts, **flags)
         assert p_digest != d_digest, (what, "the search is not the dense one")
@@ -755,6 +755,17 @@ def test_the_dense_epochs_engine_number():
     assert a.epoch is a.cached.dense_epoch and a.epoch is not b.epoch and a.epoch.key == b.epoch.key == "dense"
 
 
+def test_every_root_refresh_has_its_own_engine_number():
+    """``engine_epoch`` hashes the epoch's whole key: two root refreshes - of two roots, or of one root
+    twice - carry different engine numbers, so a shared evaluation cache (C14) never serves one
+    refresh's evaluations to another; the dense number is none of them."""
+    model = _model(7)
+    a, b = synthetic_state(70, 6, n_timelines=3), synthetic_state(71, 7, n_timelines=3)
+    cached = _phase(model, 1).cached
+    numbers = [engine_epoch(cached.root_epoch(s)) for s in (a, b, a)]
+    assert len(set(numbers)) == 3 and engine_epoch(_phase(model, 1000).cached.dense_epoch) not in numbers
+
+
 @pytest.mark.parametrize("policy", ["normal", "optimistic"])
 def test_the_dense_dispatch_is_the_dense_evaluator(policy):
     """Under N* the evaluator's evaluations are ``NetworkEvaluator(scope="dense")``'s bit for bit on the
@@ -776,6 +787,21 @@ def test_the_dense_dispatch_is_the_dense_evaluator(policy):
         assert all(e.board_logits is not None and e.board_logits.shape == (s.n_boards,) for e, s in zip(got, states, strict=True))
         assert ev.dense.batches == dense.batches == math.ceil(len(states) / max_batch)
         assert ev.positions_by_mode == {"dense": len(states), "cached": 0} and _empty(ev.cached.store)
+
+
+def test_the_default_max_batch_is_the_dense_evaluators():
+    """Built with defaults, the phase form's dense mode batches as the default dense evaluator does -
+    one forward for 9 positions - so a default-built search under N* is the default dense search."""
+    from t5d.train.smoke import with_actions
+
+    model = _model(8)
+    states = with_actions([synthetic_state(90 + i, 3 + i % 3, n_timelines=2) for i in range(9)])
+    ev = CachedNetworkEvaluator(CachedEvaluator(model, CacheConfig(root_refresh=True, phase_form=True, phase_boards=1000)))
+    dense = NetworkEvaluator(model, scope="dense")
+    ev.start(states[0])
+    got, want = ev(states), dense(states)
+    assert ev.dense.max_batch == dense.max_batch and ev.dense.batches == dense.batches == 1
+    assert all(_same(a, b) for a, b in zip(got, want, strict=True))
 
 
 def test_the_engine_path_refuses_node_refreshes():

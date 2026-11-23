@@ -10,6 +10,35 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-23 - C26/C27's review: the missing tests (M3, M4, L11-L14) and R6b's per-leaf and root-leaf bounds (L1, L10)
+
+The mutation pass's 50 mutants left 8 survivors. Each now has a test that kills it; the re-run is
+the next entry.
+- **M3** (T05): `test_rung_1_reads_a_segment_of_two_inner_nodes`. Rung 1's segment runs up through
+  two inner nodes.
+- **M4** (E15; E16 had died only by chance): `test_cached_variants.py`'s `LEGALITY` gains a binding
+  budget (0 full checks, 10 nodes). Under it the anchor test asserts that the leaf's moves are
+  neither the exact expansion's nor the swapped budget's. At the two anchor roots it gives 51 moves
+  against 50 and 50, and 114 against 112 and 112. Also adopted from the review:
+  `test_the_anchor_follows_a_binding_legality_budget`.
+- **L11** (T12): `test_the_gate_is_asked_on_the_edge_with_the_childs_multiverse`.
+- **L12** (T03): `test_visits_are_counted_at_inner_and_dense_nodes`.
+- **L13** (E07): `test_the_default_max_batch_is_the_dense_evaluators`.
+- **L14** (E19): `test_every_root_refresh_has_its_own_engine_number`.
+- **L1**: R6b asserts each non-root leaf more than 1e-3 from its own dense pass, as its docstring
+  said; it had asserted only each search's largest gap. The smallest gap met is 5.35e-2 (the
+  review's probe found 5.36e-2). The C26 entry's "the other leaves at least 1.3e-1 from it" was the
+  smallest search maximum, and it is corrected in place.
+- **L10**: R6b's root leaf is held at `ROOT_DENSE_BOUND` (1e-5) instead of 1e-4, the bound issue
+  259's test sets between the right anchor (under 1e-6) and the stale one (2.4e-5 and more).
+- The three changed test modules' docstrings name what they now hold.
+- The C17 and C23 tests came with L6 (previous entry).
+
+MEASUREMENTS: the per-leaf row of the phase form's table and the root leaf's bound.
+
+Spec: section 15.2's C26 and C27 rows (register C26, C27, C3a, C3) are now tested more closely. No
+spec text changes, so no edit.
+
 ### 2026-11-23 - C26/C27's review: the guards - switches are bools, the configuration is fixed, the ladder is refused at every start, the dense dispatch checks the format, the gate answers with a bool (L5-L8)
 
 - **L5**: `CacheConfig.validate` refuses a switch that is no bool. This covers `root_refresh`,
@@ -289,7 +318,9 @@ for bit as before):
   and on all 16 variants under the ply split and the tree form; a per-node switch (the mode by each
   leaf's own board count, N\* one above the root) builds another search on every arm; rooted at or
   above N\* every node is the cached path's, the two-level reference's (largest gap 1.31e-6), the root
-  leaf the dense pass (9.54e-7), the other leaves at least 1.3e-1 from it. Beside it: the boundary at
+  leaf the dense pass (9.54e-7), every other leaf at least 5.35e-2 from it (each search's largest gap
+  at least 1.3e-1). *(Review correction, 2026-11-23, finding L1: "the other leaves at least 1.3e-1"
+  gave the smallest search maximum as every leaf's gap; the test now asserts each leaf.)* Beside it: the boundary at
   the root's board count (a random-play root, a mid-action root past the shift, Turn Zero's T0 board
   counted, the PGN of boards alike but for their past), a branching jump's child exactly at N\*, one
   evaluator across two crossings, one shared evaluation cache across the crossing (the epoch changes,

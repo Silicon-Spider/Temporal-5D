@@ -401,13 +401,16 @@ def test_two_orders_of_one_action_through_the_step_api(variant):
 # --- C3's anchor: the root leaf's input (issue 259) -------------------------------------------------
 
 #: The splits a search expands its leaves under, and its legality settings: the default budget,
-#: exact, and the pseudo-legal seam (``legal_moves_only`` off: the leaves' moves are the
-#: pseudo-legal ones, ``Game.position``'s default).
+#: exact, the pseudo-legal seam (``legal_moves_only`` off: the leaves' moves are the pseudo-legal
+#: ones, ``Game.position``'s default), and a budget that binds (no full check, 10 nodes: at these
+#: roots its moves are neither the exact ones nor those of the budget with its two numbers swapped).
 SPLITS = {"ply": T5D_SPLIT_BOARD_MOVE, "tree": T5D_SPLIT_TREE, "flat": T5D_SPLIT_FLAT}
+BINDING = {"legality_checks": 0, "legality_nodes": 10}
 LEGALITY = {
     "budgeted": {},
     "exact": {"legality_checks": T5D_NO_LIMIT, "legality_nodes": T5D_NO_LIMIT},
     "pseudo-legal-seam": {"legal_moves_only": 0},
+    "binding": BINDING,
 }
 ANCHOR_VARIANTS = ("Standard - Two Timelines", "Misc - Timeline Battleground")
 
@@ -472,12 +475,17 @@ def test_the_root_refresh_anchors_at_the_root_leafs_input(variant):
     gathered leaf's - the root's - candidate moves (source, destination and promotion, in order),
     its edges (the move graph and the typed relations) and every input ``state_digest`` covers, and
     the epoch is anchored at it. Non-vacuous: at these roots ``Game.position()``'s default
-    expansion - the pseudo-legal moves - is not the leaf's (mutant: the anchor built from it)."""
+    expansion - the pseudo-legal moves - is not the leaf's (mutant: the anchor built from it), and
+    under the binding budget the leaf's moves are neither the exact expansion's nor the swapped
+    budget's (mutants: the anchor's budget dropped, or its two numbers swapped)."""
     from t5d.engine.search import search_params
 
     model = _model(3)
     with _differing_root(variant) as root:
         pseudo = root.position().state
+        exact = root.position(legal_moves=True, legality_checks=T5D_NO_LIMIT, legality_nodes=T5D_NO_LIMIT).state.moves
+        swapped = root.position(legal_moves=True, legality_checks=BINDING["legality_nodes"], legality_nodes=BINDING["legality_checks"])
+        swapped = swapped.state.moves
         checked = 0
         for split, flag in SPLITS.items():
             for name, legality in LEGALITY.items():
@@ -487,10 +495,33 @@ def test_the_root_refresh_anchors_at_the_root_leafs_input(variant):
                 assert state_digest(a) == state_digest(b) == ev.inner.epoch.anchor, what
                 if split != "flat":  # the flat form's leaves offer no submit (the generator ends turns)
                     assert (a.submit_possible, a.submit_legal) == (b.submit_possible, b.submit_legal), what
-                differs = pseudo.moves.shape != b.moves.shape or not np.array_equal(pseudo.moves, b.moves)
-                assert differs == (name != "pseudo-legal-seam"), what
+                if name == "binding":  # the budget binds, and each of its numbers is read as itself
+                    assert not np.array_equal(b.moves, exact) and not np.array_equal(b.moves, swapped), what
+                else:
+                    assert (not np.array_equal(pseudo.moves, b.moves)) == (name != "pseudo-legal-seam"), what
                 checked += 1
         assert checked == len(SPLITS) * len(LEGALITY)
+
+
+def test_the_anchor_follows_a_binding_legality_budget():
+    """C3's anchor under a legality budget that changes the moves: at Two Timelines' differing root
+    the budget (checks 0, nodes 10) binds - its leaf has 51 candidates where the pseudo-legal
+    expansion has 52, the exact one 50 and the budget with its numbers swapped (10, 0) 50 - so the
+    anchor has the leaf's moves only when ``start_epoch`` passes both numbers, each to its own
+    parameter. Under the ply split and the tree form."""
+    from t5d.engine.search import search_params
+
+    model = _model(3)
+    with _differing_root("Standard - Two Timelines") as root:
+        exact = root.position(legal_moves=True, legality_checks=T5D_NO_LIMIT, legality_nodes=T5D_NO_LIMIT).state.moves
+        swapped = root.position(legal_moves=True, legality_checks=10, legality_nodes=0).state.moves
+        for split in (T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_TREE):
+            params = search_params(seed=3, split=split, eval_cache_entries=0, batch_size=4, **BINDING)
+            ev = _first_leaf(model, root, params)
+            a, b = ev.started, ev.first
+            assert not np.array_equal(b.moves, exact) and not np.array_equal(b.moves, swapped), "the budget binds (non-vacuous)"
+            assert np.array_equal(a.moves, b.moves) and np.array_equal(a.edges, b.edges), split
+            assert state_digest(a) == state_digest(b) == ev.inner.epoch.anchor
 
 
 def _logit_gap(a, b) -> float:
