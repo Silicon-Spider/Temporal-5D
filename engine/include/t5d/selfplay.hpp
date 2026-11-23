@@ -52,7 +52,18 @@
 // search, the choice and the exact verification of a chosen move - or, on the
 // model clock, its work at the cost model's price (deterministic). A side whose
 // clock runs out has lost on time (GameEnd::Flag: scored, not a rule - "*" in
-// the record). Self-play never runs a clock: its budgets are PCR's (§12.5).
+// the record) - only then: a decision whose search cannot produce a move with
+// time left ends the game unscored (GameEnd::Unknown, Unsettled::Search; the
+// E11 review's S1). After the search a decision keeps inside its hard bound
+// (the chosen move verified within what it leaves, the most visited child
+// known legal played where that is cut) but for two exceptions: a root with no
+// visited child searches on until one has a visit, and where no child is known
+// legal (nor the turn-start verdict's witness continues) the children are
+// verified in visit order against the side's remaining clock, within the game
+// loop's node budget - none shown legal with time left: unscored
+// (Unsettled::Choice), never a throw. The turn-start verdict is charged to
+// neither side (issue 456). Self-play never runs a clock: its budgets are
+// PCR's (§12.5).
 //
 // SELF-PLAY RUNS WITHOUT THE ASSET MAP (the E10 review; build-log spec issues
 // 179, 189): PlayParams' default search has asset_map OFF - a named placeholder
@@ -89,7 +100,8 @@ enum class GameEnd : std::uint8_t {
   Unknown,        ///< unscored (H22): a question the game loop's budget left unsettled (GameRecord::unsettled)
   ActionLimit,    ///< PlayParams::max_actions: a safety stop, not a rule
   TimeLimit,      ///< PlayParams::max_seconds: a safety stop, not a rule
-  Flag,           ///< stage E11: the side to move's clock ran out (PlayParams::clock) - a loss, not a rule
+  Flag,           ///< stage E11: the side to move's clock ran out (PlayParams::clock) - a loss, not a rule;
+                  ///< only a clock run out: a search that cannot move with time left is Unknown (Unsettled::Search)
 };
 const char* game_end_name(GameEnd end) noexcept;
 
@@ -97,9 +109,14 @@ const char* game_end_name(GameEnd end) noexcept;
 /// loop's two exact questions an Unknown game ended on - the turn start's
 /// verdict, or the choice: the chosen move was not shown legal within the
 /// budget, no other is known legal, and the moves played have left the
-/// verdict's witness. None for every other end.
-enum class Unsettled : std::uint8_t { None = 0, Verdict, Choice };
-const char* unsettled_name(Unsettled u) noexcept;  ///< "", "verdict", "choice"
+/// verdict's witness (on a match clock also where every child's verification
+/// against the side's clock stopped, the budget or the memory ceiling, with
+/// time left). Stage E11 (the E11 review's S1, in decision 13's family):
+/// Search - a clocked decision's search could not produce a move with time
+/// left on the side's clock (no root child visited, and detail::cannot_move),
+/// never a flag, never a throw. None for every other end.
+enum class Unsettled : std::uint8_t { None = 0, Verdict, Choice, Search };
+const char* unsettled_name(Unsettled u) noexcept;  ///< "", "verdict", "choice", "search"
 
 /// H22: the game loop's node budget for its exact questions, in search nodes
 /// (SearchBudget's - deterministic, never a time limit). A PLACEHOLDER (build-log
@@ -338,6 +355,25 @@ struct GameRecord {
 
 /// Plays one game from `start` (a turn start).
 GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayParams& params);
+
+namespace detail {
+
+/// Stage E11 (the E11 review's S1): batches without a root child's visit, on a
+/// clock that did not advance across them (the model clock, a test's), before
+/// a clocked decision's search is called unable to move. A PLACEHOLDER
+/// (build-log spec issue 480); on a clock that advances, the side's clock ends
+/// the loop instead (its flag). netplay's _NO_VISIT_ROUNDS is the same.
+inline constexpr int kNoVisitRounds = 16;
+
+/// A clocked decision's no-visit loop, after a batch that left no root child
+/// visited: whether the decision's search cannot produce a move with time left
+/// (the game then ends unscored, Unsettled::Search) - the batch added no
+/// playout, or found a root with no edge and left it so, or it is the
+/// kNoVisitRounds-th such batch on a clock that did not advance across it
+/// (`idle` counts those; a batch on a clock that advanced is not counted).
+bool cannot_move(bool added_playouts, bool still_edgeless, bool clock_advanced, int& idle) noexcept;
+
+}  // namespace detail
 
 }  // namespace t5d::mcts
 

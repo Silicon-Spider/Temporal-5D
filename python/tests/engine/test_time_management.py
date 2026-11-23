@@ -347,6 +347,111 @@ def test_a_clocked_turn_start_verdict_is_uncharged_within_the_node_budget(nets, 
         assert res.clock_remaining == [60.0, 60.0]
 
 
+@pytest.mark.parametrize("model", [True, False])
+def test_netplay_a_search_that_cannot_move_with_time_left_ends_unscored(model):
+    """The E11 review's S1 (its spec pass's setup, SS-F2): the flat form, a generator stopped before
+    its first turn and no fallback listing - a root that can get no visit - on a 60 s clock: the
+    game ends unscored ("unknown", its question "search", "*"), never raising, both clocks untouched
+    - never a flag scored as a loss (before S1)."""
+    from t5d.engine.netplay import UNSETTLED_NOTES
+    from t5d.net.config import NetConfig
+
+    over = (("generator_nodes", 1), ("flat_fallback", 0))
+    cfg = PlayConfig(
+        split="flat",
+        mode="match",
+        hunt=False,
+        settling=False,
+        asset_map=False,
+        max_actions=2,
+        search_overrides=over,
+        time=60.0,
+        model_clock=model,
+    )
+    res = play_game(UniformEvaluator(), cfg, net_cfg=NetConfig())
+    assert (res.end, res.unsettled, res.winner, res.result, res.actions) == ("unknown", "search", None, "*", [])
+    assert res.clock_remaining == [60.0, 60.0] and res.decisions == 0 and res.timed_decisions == 1
+    assert f'[Termination "unknown{UNSETTLED_NOTES["search"]}"]' in res.record
+
+
+def _fake_no_visit_search(monkeypatch, limit: int):
+    """A search whose batches add playouts but never a root child's visit (the mutation pass's
+    probe, adopted): ``run_search`` stubbed, each call counted."""
+    import types
+
+    import t5d.engine.netplay as netplay
+
+    class FakeSearch:
+        def __init__(self):
+            self.p = 0
+
+        def children(self):
+            return [types.SimpleNamespace(visits=0, legality=T5D_LEGALITY_LEGAL, index=0)]
+
+        def info(self):
+            return types.SimpleNamespace(playouts=self.p)
+
+    calls: list[int] = []
+
+    def fake_run_search(search, evaluator, *, playouts, batch_size, self_play, **regs):
+        calls.append(playouts)
+        if len(calls) > limit:
+            raise RuntimeError("no end: the loop ran on")
+        search.p += playouts
+        return ServeStats(), None
+
+    monkeypatch.setattr(netplay, "run_search", fake_run_search)
+    return FakeSearch(), calls
+
+
+def test_netplay_the_no_visit_cap_holds_on_a_clock_that_does_not_advance_only(monkeypatch):
+    """S1 (and M1): on the model clock, which no idle loop advances, a decision whose batches add
+    playouts but never a visit cannot move after ``_NO_VISIT_ROUNDS`` batches - unscored
+    (``_NoMove``), never a flag, never a hang; on the wall clock the cap does not apply - the
+    side's clock ends the loop, and that is its flag."""
+    import t5d.engine.netplay as netplay
+    from t5d.engine.netplay import _choose, _DecisionClock, _NoMove, _OutOfClock
+
+    cfg = PlayConfig(mode="match", batch_size=4)
+    res = GameResult(config=cfg, record="", actions=[], end="", winner=None)
+    fake, calls = _fake_no_visit_search(monkeypatch, 100)
+    model = _DecisionClock(d0=time.perf_counter(), hard=1e9, remaining=1e9, model=True)
+    with pytest.raises(_NoMove):
+        _choose(fake, cfg, res, ServeStats(), None, {}, None, clock=model)
+    assert len(calls) == 1 + netplay._NO_VISIT_ROUNDS
+    assert netplay._NO_VISIT_ROUNDS == 16  # the placeholder (issue 480), the engine's kNoVisitRounds
+    fake, calls = _fake_no_visit_search(monkeypatch, 10**7)
+    wall = _DecisionClock(d0=time.perf_counter(), hard=0.01, remaining=0.05, model=False)
+    with pytest.raises(_OutOfClock):
+        _choose(fake, cfg, res, ServeStats(), None, {}, None, clock=wall)
+    assert len(calls) > 1 + netplay._NO_VISIT_ROUNDS
+
+
+def test_netplay_an_out_of_clock_decision_is_the_flag(monkeypatch):
+    """S1 (the mutation pass's probe, adopted): a decision whose side runs out of clock before it
+    has a move (``_OutOfClock``) flags the side even where the decision's charge leaves its clock
+    positive (the model clock); one whose search cannot move (``_NoMove``) ends the game unscored,
+    uncharged."""
+    import t5d.engine.netplay as netplay
+    from t5d.net.config import NetConfig
+
+    cfg = PlayConfig(
+        mode="match", playouts=8, batch_size=4, cap_turns=2, cap_boards=30, hunt=False, settling=False, time=600.0, model_clock=True
+    )
+    for exc, end in ((netplay._OutOfClock, "flag"), (netplay._NoMove, "unknown")):
+
+        def stub(*args, exc=exc, **kwargs):
+            raise exc
+
+        monkeypatch.setattr(netplay, "_choose", stub)
+        res = play_game(UniformEvaluator(), cfg, net_cfg=NetConfig())
+        assert res.end == end and res.actions == []
+        if end == "flag":
+            assert res.winner == 1 and res.clock_remaining[0] > 0  # the charge alone would not have flagged
+        else:
+            assert res.winner is None and res.unsettled == "search" and res.clock_remaining == [600.0, 600.0]
+
+
 def _clocked_game(nets, **kw):
     """A match game on the model clock (the reviewers' probe configuration)."""
     cfg, evaluators = nets

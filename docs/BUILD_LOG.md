@@ -8309,6 +8309,9 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     (the clock is the match's convention, not a rule, as I11's cap is), scored for the other
     side. `MatchClock`'s defaults - `base_seconds` 60, `increment_seconds` 0 - are placeholders
     no driver reads (t5d-play and netplay set their own; added at E11's review, L9). Edit 338.
+    *(The E11 review's S1, 2026-11-24:* the flag falls only when the side's clock has run out; a
+    decision whose search cannot produce a move with time left ends the game unscored -
+    `Unsettled::Search`, uncharged - not a loss on time: issue 480.)
     *The turn-start verdict (phase 2, 2026-11-24; the review's H1 part 5):* not charged to either
     side - it decides the game's result, so it is the referee's work, not a side's (a reading the
     documents allow: it is not a decision). The documents give it decision 13's node budget (the
@@ -8346,8 +8349,11 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     where it is cut; the forced slice runs without the bound inside it, so that the root's listing
     completes; and a SECOND exception - no child known legal once the verification is cut: the
     children verified in visit order against the side's remaining clock, the side flagging if it
-    runs out, never a throw. "Held tight" covered `run_timed`'s slices only until then.) Edits
-    333, 342, 346.
+    runs out, never a throw. "Held tight" covered `run_timed`'s slices only until then.) (The E11
+    review's S1, 2026-11-24: none shown legal with time left - every verification stopped by the
+    node budget or the memory ceiling - ends the game unscored, `Unsettled::Choice`, where it threw;
+    no visited child and a search that cannot get one: unscored, `Unsettled::Search` - issue 480.)
+    Edits 333, 342, 346.
 459. **The stop signals' definitions** (§8.6's "visit gap unbridgeable", "root visit
     distribution stops changing"). Built (placeholders): smart pruning - the lead of the most
     visited child (path visits, MCGS) over the second exceeds the remaining evaluations (to
@@ -8534,6 +8540,34 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     `TimeParams::proof_volatility`, off; since decision 12 taken with the proof channel off,
     extend-only - issue 470); the raise-a-prior hook is not - `hunt_suggest` carries Hunt's
     partial lines, never a proof (issue 478). Edit 345.
+480. **When a clocked decision's search cannot move** (the E11 review's S1, 2026-11-24; §8.6, §12.3
+    and register I3 say nothing of it). Before: a clocked decision whose root child got no visit
+    flagged - after 16 batches without one, or one that added no playout - its clock nearly full,
+    scored as a loss on time (the review's probe: 59.9995 of 60 s left). Built (the main loop's
+    decision): the flag falls only when the side's clock has run out; a search that cannot produce
+    a move with time left ends the game unscored, in decision 13's family (`GameEnd::Unknown`,
+    `Unsettled::Search`, `*`, uncharged, a Termination note; netplay's "search"), never a throw.
+    `detail::cannot_move` is the rule after a batch with no visit: no playout added, or a root
+    with no edge that gains none - at once; batches that add playouts but no visit only on a clock
+    that did not advance across them (the model clock, a test's), the 16th ending it -
+    `detail::kNoVisitRounds` and netplay's `_NO_VISIT_ROUNDS`, a PLACEHOLDER: on a clock that
+    advances the side's clock ends the loop instead. Where every child's verification against the
+    side's clock stops with time left (the node budget or the memory ceiling), the end is decision
+    13's unsettled choice (`Unsettled::Choice`) - the same question as unclocked. The switch
+    match's tally already left unknown ends out of the score, counted apart (now tested, with a
+    flag scored).
+481. **A root the proof channel solves before any child has a visit** (the E11 review's S1,
+    observation 2; H23, H41: the proof channel is on only in experiments). With the proof channel
+    on, the game's verification ladder can solve a root - the review's probe: mate in one, the root
+    after the mating move solved by Hunt's line before its submission child has a node - and the
+    search, which does not search a solved node, never visits a child. On a clock the game now ends
+    unscored (`Unsettled::Search`, issue 480), never a flag; unclocked `play_game` throws "no
+    visited child to choose" (decision 13's loop: the throw predates this lane, and the same throw
+    ends the review's stuck-root setup unclocked). Playing the proven move instead (the decision:
+    "only if it is local") needs the proof's line at the root - the ladder's verdict, or the
+    injected path's first step - which `Search` does not expose (`RootChild::lo` is -1 for a child
+    with no node): not local. Open, for the proof channel's sign-off (H23) and, for the unclocked
+    throw, the main loop (decision 13's family would end it unscored too).
 600. **Issue 535 resolved - D2's flat form, a node's creation and a re-root made
     exception-safe under an allocation failure - and two defects of its kind found beside
     it, fixed with it** (section 15.4's invariants under failure: visit counts consistent,
@@ -11951,3 +11985,7 @@ entry changes in the same edit as its code, which the standing rule defers to up
   `test_time_management`, `test_terminal_budget`, `test_switch_match`, `test_search_api`,
   `test_netplay`, `test_decision_log` and the train files `test_generator_budget`, `test_unscored` -
   all passed (T5D_REQUIRE_ENGINE=1). The round's full checks run at its end.
+  - **S1** (HIGH): the flag only when the side's clock has run out; a search that cannot move with
+    time left unscored (`Unsettled::Search`, issue 480; the no-visit cap only on a clock that does
+    not advance); every verification stopped with time left unscored (`Unsettled::Choice`); the
+    proof channel's solved root not local to play (issue 481). Tests in C++ and netplay.

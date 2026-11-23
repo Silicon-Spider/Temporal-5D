@@ -43,11 +43,15 @@ mirrors the engine's ``play_game`` (``src/selfplay.cpp``; ``t5d-play``) step for
   time (search, choice, verification), or on ``model_clock`` its work at the cost model's price
   (deterministic). A side whose clock runs out loses on time (``end`` "flag", result ``*``: the
   clock is the match's convention, not a rule), as the engine's ``play_game`` does - the flagged
-  decision's work counted in the totals. The steps after the search follow the engine's policy
-  (the E11 review's H1): the search re-run a batch at a time, the chosen move verified within the
-  hard bound (``Search.verify(index, seconds)``), the most visited child known legal played where
-  it is cut; with none known legal, the children verified in visit order against the side's
-  remaining clock - the flag falls if it runs out, never a throw (M1). Self-play takes no clock.
+  decision's work counted in the totals - and only then: a decision whose search cannot produce a
+  move with time left ends the game unscored ("unknown", ``unsettled`` "search"; the E11 review's
+  S1), uncharged. The steps after the search follow the engine's policy (the E11 review's H1):
+  the search re-run a batch at a time, the chosen move verified within the hard bound
+  (``Search.verify(index, seconds=...)``) and the game loop's node budget, the most visited child
+  known legal played where it is cut, then the turn-start verdict's witness; with none of them,
+  the children verified in visit order against the side's remaining clock - the flag falls if it
+  runs out, and none shown legal with time left ends the game unscored ("choice"), never a throw
+  (M1). The turn-start verdict is charged to neither side (issue 456). Self-play takes no clock.
 * **6e's steering switches** (H13, H43; spec section 11.2: "an on/off test of its own at match
   play"): ``asset_map`` (on) and ``hunt_suggest`` (off) for every search; ``search_overrides``,
   further ``t5d_search_params`` fields by name; ``side_overrides``, White's and Black's own (match
@@ -135,6 +139,7 @@ TERMINAL_NODES = 2_000_000
 UNSETTLED_NOTES = {
     "verdict": " (the turn start's verdict stayed unknown within the game loop's budget, H22: unscored; never a mate)",
     "choice": " (the chosen move was not shown legal within the game loop's budget and no other is known legal, H22: unscored)",
+    "search": " (the side's search produced no move with time left on its clock: unscored, not a loss on time)",
 }
 
 #: A small network for end-to-end play on a CPU (random weights; nothing is trained): two
@@ -269,8 +274,10 @@ class GameResult:
     actions: list[list[Move]]
     end: str  # "checkmate", "stalemate", "turn_cap", "unknown", "action_limit", "flag" (E11: lost on time)
     winner: int | None  # 0 white, 1 black (checkmate; or a flag: the side whose clock still ran)
-    #: An "unknown" end's question (H22): "verdict" (a turn start the budget could not settle) or
-    #: "choice" (no move shown legal within it); "" for every other end.
+    #: An "unknown" end's question (H22): "verdict" (a turn start the budget could not settle),
+    #: "choice" (no move shown legal within it) or - stage E11, the E11 review's S1 - "search" (a
+    #: clocked decision's search produced no move with time left: never a flag); "" for every
+    #: other end.
     unsettled: str = ""
     decisions: int = 0
     #: Moves played as steps of the turn-start verdict's witness where no root child was known legal
@@ -703,11 +710,13 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                     )
                 dclock = None if timed is None else _DecisionClock(d0, timed.plan.hard_seconds, res.clock_remaining[mover], cfg.model_clock)
                 step = partial(witness.step, played=action, flat=cfg.split == "flat")
-                out_of_clock = False
+                out_of_clock, unsettled = False, "choice"
                 try:
                     pick = _choose(search, cfg, res, stats, evaluator, regs, rng, step, dclock)
                 except _OutOfClock:
                     pick, out_of_clock = None, True  # the side's flag falls (charged below)
+                except _NoMove:
+                    pick, unsettled = None, "search"  # unscored, uncharged (the E11 review's S1)
                 if cfg.decision_log and pick is not None:
                     res.decision_log.append(_decision_entry(game, search, pick, len(res.actions), res.decisions, action, start.even))
                 after = search.info()
@@ -731,7 +740,8 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                     res.carried_turn_starts[mover] += int(before.root_visits > 0)
                 if timed is not None and (pick is not None or out_of_clock):
                     # The decision charged to the side's clock: its whole wall time, or its model time
-                    # (an unsettled choice ends the game unscored, uncharged, as play_game's does).
+                    # (an unsettled choice, or a search that cannot move, ends the game unscored and
+                    # uncharged, as play_game's does).
                     spent = timed.seconds if cfg.model_clock else time.perf_counter() - d0
                     if spent > timed.plan.hard_seconds:
                         res.hard_overruns += 1
@@ -739,8 +749,8 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                     if res.clock_remaining[mover] <= 0 or out_of_clock:
                         flagged = True  # the side's flag fell during its action: not recorded
                         break
-                if pick is None:  # H22: no move shown legal within the budget - the game ends unscored
-                    res.end, res.unsettled = "unknown", "choice"
+                if pick is None:  # H22 (or S1: no move with time left) - the game ends unscored
+                    res.end, res.unsettled = "unknown", unsettled
                     break
                 child = pick if isinstance(pick, RootChild) else search.child(pick)
                 submitted = False
@@ -947,7 +957,15 @@ def decision_log_lines(res: GameResult, *, demotion_share: float = 0.3) -> list[
 
 
 class _OutOfClock(Exception):
-    """The side's clock ran out before it had a move (stage E11, the review's H1 and M1)."""
+    """The side's clock ran out before it had a move (stage E11, the review's H1 and M1): the
+    side's flag falls - only then (the E11 review's S1)."""
+
+
+class _NoMove(Exception):
+    """A clocked decision's search could not produce a move with time left on the side's clock (no
+    root child visited, and no batch adds a playout - or, on a clock that does not advance,
+    ``_NO_VISIT_ROUNDS`` batches add no visit): the game ends unscored ("unknown", its question
+    "search"; the E11 review's S1), never a flag."""
 
 
 @dataclass
@@ -970,8 +988,10 @@ class _DecisionClock:
         return not self.model and time.perf_counter() - self.d0 >= self.remaining
 
 
-#: A clocked decision's batches without a visit before its flag falls, where its clock does not
-#: advance (the model clock): the engine's play_game's kNoVisitRounds.
+#: A clocked decision's batches without a root child's visit, on a clock that does not advance (the
+#: model clock), before its search is called unable to move (``_NoMove``): the engine's play_game's
+#: kNoVisitRounds - a placeholder (build-log spec issue 480). On the wall clock the side's clock
+#: ends the loop instead.
 _NO_VISIT_ROUNDS = 16
 
 
@@ -988,7 +1008,10 @@ def _choose(
     policy, the E11 review's H1): the search re-run one batch at a time; the verification within
     the hard bound, then the most visited child known legal, then the witness; with none of them,
     the children verified in visit order against the side's remaining clock, within the same node
-    budget; ``_OutOfClock`` when the clock runs out first - never a throw for want of a move."""
+    budget; ``_OutOfClock`` when the clock runs out first, ``_NoMove`` when the search cannot
+    produce a move with time left - never a throw for want of a move (the proof channel, which
+    would let a root solved before any visit play its proven win as play_game does, is reserved
+    here: never on)."""
 
     def visited() -> bool:
         return any(c.visits > 0 for c in search.children())
@@ -1001,16 +1024,23 @@ def _choose(
     def choose_now() -> int:
         if not visited():  # children were removed: search again (a clocked decision: one batch)
             search_more(cfg.batch_size if clock is not None else cfg.playouts)
-            rounds = 0
+            idle = 0
             while clock is not None and not visited():
-                # M1: never a throw for want of a visit - on, a batch at a time, until the clock runs out
+                # M1, S1: never a throw for want of a visit - on, a batch at a time; the flag only
+                # when the side's clock runs out, unscored when the search cannot move with time left
+                if clock.out():
+                    raise _OutOfClock
                 before = search.info().playouts
-                if clock.out() or rounds >= _NO_VISIT_ROUNDS:
-                    raise _OutOfClock
+                edgeless = not search.children()
                 search_more(cfg.batch_size)
-                if not visited() and search.info().playouts == before:
-                    raise _OutOfClock
-                rounds += 1
+                if visited():
+                    break
+                if search.info().playouts == before or (edgeless and not search.children()):
+                    raise _NoMove
+                if clock.model:  # a clock that does not advance: the cap
+                    idle += 1
+                    if idle >= _NO_VISIT_ROUNDS:
+                        raise _NoMove
         if cfg.mode == "match":
             return search.choose()[0]
         t = cfg.temperature if res.decisions < cfg.temperature_decisions else 0.0

@@ -1888,6 +1888,118 @@ TEST(timeman_a_clocked_turn_start_verdict_is_uncharged_within_the_node_budget) {
   }
 }
 
+// The E11 review's S1 (its spec pass's setup, SS-F2): the flat form, a
+// generator stopped before its first turn (generator_nodes 1) and no fallback
+// listing - a root that can get no visit - in match play on a 60 s clock.
+PlayParams stuck_root_clocked(bool model) {
+  PlayParams p;
+  p.search = quiet_params();
+  p.search.split = TurnSplit::Flat;
+  p.search.generator_nodes = 1;
+  p.search.flat_fallback = 0;
+  p.match_play = true;
+  p.max_actions = 2;
+  p.clock.enabled = true;
+  p.clock.base_seconds = 60;
+  p.clock.model_clock = model;
+  return p;
+}
+
+TEST(timeman_a_search_that_cannot_move_with_time_left_ends_unscored_never_a_flag) {
+  // S1: a side whose search cannot produce a move, its clock nearly full, has
+  // not lost on time - the game ends unscored (Unknown, its question the
+  // search, "*"), with no throw and both clocks untouched (the decision is not
+  // charged, as an unsettled choice is not), on the model clock and the wall
+  // clock alike. Before S1 it was a flag, scored as a loss.
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  for (const bool model : {true, false}) {
+    const PlayParams p = stuck_root_clocked(model);
+    GameRecord g(variant("Standard"));
+    CHECK_NOTHROW(g = play_game(variant("Standard"), *uniform, p));
+    CHECK(g.end == GameEnd::Unknown);
+    CHECK(g.unsettled == Unsettled::Search);
+    CHECK_EQ(g.winner, -1);
+    CHECK_EQ(g.result(), std::string("*"));
+    CHECK_EQ(g.white_score(), -1.0);
+    CHECK(g.actions.empty());
+    CHECK_EQ(g.decisions, std::uint64_t{0});
+    CHECK_EQ(g.timed_decisions, std::uint64_t{1});
+    CHECK_EQ(g.clock_remaining[0], 60.0);
+    CHECK_EQ(g.clock_remaining[1], 60.0);
+    CHECK_EQ(std::string(unsettled_name(g.unsettled)), std::string("search"));
+    CHECK(tools::play_record(g, "Standard")
+              .find("[Termination \"unknown (the side's search produced no move with time left on its clock: unscored, "
+                    "not a loss on time)\"]") != std::string::npos);
+  }
+}
+
+TEST(timeman_a_stuck_search_whose_clock_runs_out_flags) {
+  // S1's other half: the same stuck root on a clock that moves 100 s at every
+  // read - the side's 60 s run out by the time its no-visit loop looks - flags
+  // (a loss on time, Black the winner), never unscored, never TimeLimit.
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  ManualClock clock;
+  clock.step = 100;
+  PlayParams p = stuck_root_clocked(false);
+  p.clock.clock = &clock;
+  GameRecord g(variant("Standard"));
+  CHECK_NOTHROW(g = play_game(variant("Standard"), *uniform, p));
+  CHECK(g.end == GameEnd::Flag);
+  CHECK_EQ(g.winner, 1);
+  CHECK_EQ(g.decisions, std::uint64_t{1});
+  CHECK(g.clock_remaining[0] <= 0);
+  CHECK(g.actions.empty());
+}
+
+TEST(timeman_cannot_move_caps_only_a_clock_that_does_not_advance) {
+  // S1 (detail::cannot_move, the no-visit loop's rule): a batch that adds no
+  // playout, or leaves a root with no edge so, cannot move at once; batches
+  // that add playouts but no visit count only on a clock that did not advance
+  // across them, the kNoVisitRounds-th ending it - on a clock that advances
+  // the side's clock ends the loop instead (its flag).
+  int idle = 0;
+  CHECK(mcts::detail::cannot_move(false, false, true, idle));
+  CHECK(mcts::detail::cannot_move(true, true, true, idle));
+  CHECK_EQ(idle, 0);
+  for (int i = 0; i < 1000; ++i) CHECK(!mcts::detail::cannot_move(true, false, true, idle));
+  CHECK_EQ(idle, 0);
+  for (int i = 1; i < mcts::detail::kNoVisitRounds; ++i) {
+    CHECK(!mcts::detail::cannot_move(true, false, false, idle));
+    CHECK_EQ(idle, i);
+  }
+  CHECK(mcts::detail::cannot_move(true, false, false, idle));
+  CHECK_EQ(idle, mcts::detail::kNoVisitRounds);
+  CHECK_EQ(mcts::detail::kNoVisitRounds, 16);  // the placeholder (issue 480), netplay's _NO_VISIT_ROUNDS
+}
+
+TEST(timeman_a_root_solved_before_any_visit_is_unscored_on_a_clock_never_a_flag) {
+  // S1, observation 2 (the mutation pass's probe, adopted as the code stands):
+  // with the proof channel on (experiments only, H23) the game's ladder can
+  // solve a root - here mid-action, after the mating move, Hunt's line ending
+  // in the submission - before any child has a visit; its search then cannot
+  // produce a move. On a clock that ends the game unscored (Unsettled::Search)
+  // with time left, never a flag. Playing the proven move instead needs the
+  // proof's line at the root, which the search does not expose: issue 481.
+  PlayParams pp;
+  pp.search = quiet_params();
+  pp.search.synchronous = true;
+  pp.search.hunt = true;
+  pp.search.proof_channel = true;
+  pp.match_play = true;
+  pp.turn_cap.turns = 3;
+  pp.clock.enabled = true;
+  pp.clock.model_clock = true;
+  pp.clock.base_seconds = 10;
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  GameRecord g(t5d_test::v3::mate_in_one());
+  CHECK_NOTHROW(g = play_game(t5d_test::v3::mate_in_one(), *uniform, pp));
+  CHECK(g.end == GameEnd::Unknown);
+  CHECK(g.unsettled == Unsettled::Search);
+  CHECK_EQ(g.winner, -1);
+  CHECK(g.clock_remaining[0] > 0);
+  CHECK(g.actions.empty());
+}
+
 TEST(timeman_a_flat_root_whose_listing_a_deadline_cut_never_throws_out_of_play) {
   // M1, E11's part (the re-listing itself is issue 406's, tested on main): a
   // clocked flat game whose every node falls back to the listing

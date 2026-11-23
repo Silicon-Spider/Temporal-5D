@@ -65,6 +65,7 @@ const char* unsettled_name(Unsettled u) noexcept {
     case Unsettled::None: return "";
     case Unsettled::Verdict: return "verdict";
     case Unsettled::Choice: return "choice";
+    case Unsettled::Search: return "search";
   }
   return "?";
 }
@@ -93,6 +94,12 @@ SearchParams self_play_search_defaults() {
   p.root_noise = true;
   p.asset_map = false;  // until I2's steered visits are validated (issues 179, 189)
   return p;
+}
+
+bool detail::cannot_move(bool added_playouts, bool still_edgeless, bool clock_advanced, int& idle) noexcept {
+  if (!added_playouts || still_edgeless) return true;
+  if (clock_advanced) return false;
+  return ++idle >= kNoVisitRounds;
 }
 
 GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayParams& params) {
@@ -220,6 +227,7 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
     bool timed_out = false;
     bool flagged = false;
     bool unsettled_choice = false;
+    bool unsettled_search = false;  // no move with time left (the E11 review's S1): Unknown, not a flag
     for (bool submitted = false; !submitted;) {
       // The safety stop before every decision, not only at turn starts; a
       // partial action is not recorded (the record ends at the turn start).
@@ -343,24 +351,27 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
           search->run(evaluator, limits);
           if (!visited() && deadline_passed()) return std::nullopt;
           // A clocked decision never throws for want of a visit (the E11
-          // review's M1): it searches on, a batch at a time, against the
-          // side's clock, and its flag falls when the clock runs out - or
-          // where no batch adds a visit (a search that cannot move), or after
-          // kNoVisitRounds batches without one (a clock no idle loop
-          // advances: the model clock, a test's).
-          constexpr int kNoVisitRounds = 16;
-          for (int round = 0; timed && !visited(); ++round) {
+          // review's M1 and S1): it searches on, a batch at a time, against
+          // the side's clock, and its flag falls only when that clock runs
+          // out. A search that cannot produce a move with time left
+          // (detail::cannot_move) ends the game unscored (Unsettled::Search).
+          for (int idle = 0; timed && !visited();) {
             if (deadline_passed()) return std::nullopt;
-            if (clock_out() || round >= kNoVisitRounds) {
+            if (clock_out()) {
               out_of_clock = true;
               return std::nullopt;
             }
             const std::uint64_t p = search->stats().playouts;
+            const bool edgeless = search->root_children().empty();
+            const double read = clock != nullptr ? clock->now() : 0.0;
             const std::optional<SteadyPoint> stop = on_clock(clock_at_start);
             limits.seconds = stop ? std::max(std::chrono::duration<double>(time_left(*stop)).count(), 1e-6) : 0.0;
             search->run(evaluator, limits);
-            if (!visited() && search->stats().playouts == p) {
-              out_of_clock = true;
+            if (visited()) break;
+            const bool advanced = clock != nullptr && clock->now() > read;
+            if (detail::cannot_move(search->stats().playouts != p, edgeless && search->root_children().empty(),
+                                    advanced, idle)) {
+              unsettled_search = true;
               return std::nullopt;
             }
           }
@@ -707,8 +718,9 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
     }
     if (timed_out) {
       s = action_start;
-      g.end = unsettled_choice ? GameEnd::Unknown : GameEnd::TimeLimit;
+      g.end = unsettled_choice || unsettled_search ? GameEnd::Unknown : GameEnd::TimeLimit;
       if (unsettled_choice) g.unsettled = Unsettled::Choice;
+      if (unsettled_search) g.unsettled = Unsettled::Search;  // the E11 review's S1: unscored, not a flag
       break;
     }
     if (mc.enabled) g.clock_remaining[static_cast<std::size_t>(side)] += mc.increment_seconds;

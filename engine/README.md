@@ -4666,7 +4666,9 @@ without the bound inside it so that the root's listing completes (the review's M
 bound cut elsewhere is re-listed later - issue 406); (2) where no child is known legal once the
 bound's verification is cut, the children are verified in visit order against the side's
 remaining clock, the first shown legal played, and the side flags if the clock runs out first -
-never a throw, from `play_game` or netplay (which verifies through `t5d_search_verify_within`).
+never a throw, from `play_game` or netplay (which verifies through `t5d_search_verify_within`);
+none shown legal with time left (every verification stopped by the node budget or the memory
+ceiling) ends the game unscored (`Unsettled::Choice`).
 Each of those verifications takes the game loop's node budget (decision 13, H22:
 `PlayParams::terminal_nodes`) with the deadline beside it, and the verdict's witness is played
 before the search against the clock. The turn-start verdict is the unclocked loop's - within
@@ -4740,7 +4742,15 @@ actions (Fischer's - a reading: the 5D match clock is unspecified, issue 456), i
 `TimeManager`. A decision is charged its whole wall time - search, choice, the exact
 verification of a chosen move - or on the model clock its work at the model's price. A side
 whose clock runs out loses on time: `GameEnd::Flag`, the action under way not recorded,
-result `*` (the clock is the match's convention, not a rule), scored for the other side.
+result `*` (the clock is the match's convention, not a rule), scored for the other side - and
+only a clock run out (the E11 review's S1): a decision whose search cannot produce a move with
+time left - no root child visited, and a batch that adds no playout, or a root with no edge that
+gains none, or `kNoVisitRounds` (16, a placeholder - issue 480) batches without a visit on a
+clock that does not advance (the model clock, a test's) - ends the game unscored
+(`GameEnd::Unknown`, `Unsettled::Search`, `*`, uncharged; the Termination header says so),
+never a throw. The switch match leaves such games out of its score and counts them apart. With
+the proof channel on, a root the ladder solves before any child has a visit is such a search
+(playing its proven move needs the proof's line at the root - issue 481).
 `GameRecord` counts each side's time left, the stops by kind, the extensions and the
 decisions charged more than their hard bound. `MatchClock::clock` puts a clock in place of the
 steady one (tests: a virtual clock): the decisions are run, charged and Guard's re-search
@@ -4792,7 +4802,10 @@ it, `run()`'s own deadline inside the persistent one, the C API's deadline clear
 infinity; past the deadline an exact classification equal, move by move, to one with no check
 and no node, and a mating turn start not terminal; match play at issue 406's Q3 node on the clock
 seam - the verification cut inside the bound and a child known legal played, the second
-exception finding a legal move against the clock or flagging, never a throw; the clocked
+exception finding a legal move against the clock or flagging, never a throw; a search that
+cannot move with time left unscored on the model and the wall clock (C++ and netplay: the
+review's stuck-root setup), flagging where its clock has run out, the no-visit rule capping only a
+clock that does not advance, a root the ladder solved unscored, never a flag; the clocked
 turn-start verdict uncharged within the node budget, unsettled ending the game unscored with
 the clocks untouched (C++ on a clock that moves at every read, netplay on both clocks); a flat game whose
 listings the bound cuts never throwing, and a carried child re-listed; `t5d_search_verify_within`

@@ -175,3 +175,20 @@ def test_the_switch_match_command_line(capsys):
     assert len(games) == 2 and [g["on_side"] for g in games] == [0, 1]
     assert last["totals"]["games"] == 2
     assert "random" in last["conditions"]["weights"]
+
+
+def test_a_flag_is_scored_and_an_unscored_game_left_out():
+    """The E11 review's S1 (and the mutation pass's Y25 probe): a flag is scored for the side whose
+    clock still ran; an unscored game - a search that could not move with time left, or a question
+    the budget left unsettled - is left out of the score and counted apart."""
+    from t5d.engine.netplay import GameResult
+    from t5d.engine.switch_match import SwitchMatch, _tally
+
+    cfg = PlayConfig(mode="match")
+    m = SwitchMatch(switch="asset_map")
+    _tally(m, GameResult(config=cfg, record="", actions=[], end="flag", winner=1), 0, "asset_boosted_edges")
+    _tally(m, GameResult(config=cfg, record="", actions=[], end="flag", winner=0), 0, "asset_boosted_edges")
+    for why in ("search", "choice", "verdict"):
+        _tally(m, GameResult(config=cfg, record="", actions=[], end="unknown", winner=None, unsettled=why), 0, "asset_boosted_edges")
+    assert (m.wins, m.losses, m.draws, m.capped, m.unscored) == (1, 1, 0, 0, 3)
+    assert m.score == 0.5

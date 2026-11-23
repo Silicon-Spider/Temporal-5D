@@ -53,8 +53,9 @@
 // --allocator (the moves-left integral by default), --no-signals (the
 // stop/extend table off); --model-clock prices each decision's work by the
 // cost model instead of the wall clock (deterministic). A side whose clock runs
-// out loses on time ("flag", result "*"); a side whose search cannot produce a
-// move with time left ends the game unscored ("unknown (search)"). The turn
+// out loses on time ("flag", result "*") - only then: a side whose search cannot
+// produce a move with time left ends the game unscored ("unknown", the
+// Termination header saying why; the E11 review's S1). The turn
 // starts' verdicts are the referee's: uncharged, within --terminal-nodes.
 // Self-play takes no clock.
 // --difficulty-weighting switches E8 on (a prototype, off): the plan weighted by

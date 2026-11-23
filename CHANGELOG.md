@@ -10,6 +10,43 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - E11 review round 2, S1: a flag only when the clock has run out; a search that cannot move ends the game unscored
+
+The review of E11/E8 phases 1, 1B and 2 (`rv-search2`), its HIGH finding. A clocked decision whose
+root child got no visit "flagged" with its clock nearly full (59.9995 of 60 s in the review's
+probe), scored as a loss on time.
+- **The flag** (`engine/src/selfplay.cpp`, `python/t5d/engine/netplay.py`): it falls only when the
+  side's clock has run out (`clock_out()`, or the clock's deadline passed).
+- **A search that cannot produce a move with time left** ends the game unscored, in decision 13's
+  family: `GameEnd::Unknown` with a new reason, `Unsettled::Search` ("search"), result `*`,
+  uncharged, a Termination note; never a throw. `detail::cannot_move` is the no-visit loop's rule:
+  a batch that adds no playout, or a root with no edge that gains none, ends it at once; batches
+  that add playouts but no visit count only on a clock that did not advance across them, the 16th
+  ending it (`detail::kNoVisitRounds`, netplay's `_NO_VISIT_ROUNDS`: a named placeholder, issue
+  480). On a clock that advances, the side's clock ends the loop instead.
+- **Every verification stopped with time left** (the node budget or the memory ceiling) ends as
+  decision 13's unsettled choice (`Unsettled::Choice`, the merge's resolution), never the old throw.
+- **The switch match** already left unknown ends out of its score, counted apart; now tested, a
+  flag scored for the side whose clock still ran (the mutation pass's Y25).
+- **The proof channel's solved root** (observation 2): with the channel on, a root the game's
+  ladder solves before any child has a visit ends the game unscored on a clock, never a flag.
+  Playing its proven move needs the proof's line at the root, which the search does not expose -
+  not local, so issue 481 records it, with the unclocked loop's throw in the same case.
+- **Tests**: the review's stuck-root setup (the flat form, `generator_nodes` 1, `flat_fallback` 0,
+  match play, 60 s) unscored with both clocks untouched on the model and the wall clock, in C++ and
+  netplay; the same root flagging once a clock moving 100 s a read has run out; `cannot_move` (B10,
+  B11: the cap only on a clock that does not advance); netplay's cap on the model clock and none on
+  the wall clock; an out-of-clock decision flagging, a no-move one unscored; the proof channel's
+  solved root (the B19 probe, adopted as the code stands); the tally.
+- Docs: `selfplay.hpp` (`GameEnd::Flag`, `Unsettled`, the clock's comment now stating exception
+  (2) and the unscored ends - SS-F8), the README, t5d-play's comment, netplay's docstring; issues
+  456 and 458 updated, 480 and 481 new.
+
+Spec: §8.6 and §12.3, registers E7, I3 and H22 (the unscored end is H22's family; the clock's
+reading, issue 456, now says a flag needs the clock run out - no edit: §12.3's clock is issue 456's
+reading, edit 338 unchanged); register H23 (issue 481: the proof channel's solved root, left for
+its sign-off). No proposed edit; no measured figure.
+
 ### 2026-11-24 - main (b18a7b3) merged into lane/search: decision 13's game loops with E11's clock, H1 part 5
 
 Main's decision 13 (`lane/engine`: the game loop's terminal test within a node budget, the
