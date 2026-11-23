@@ -10,6 +10,37 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-23 - E11/E8 review fixes 5: placeholders placed, the Spec: line completed, the ladder's time and E8's readings stated
+
+Review of the E11/E8 change, phase 1, findings L9-L13 - documents and comments only:
+- **L9**: `min_evaluations` (8) into issue 455, `disagreement_margin` (0.5) into issue 470,
+  `MatchClock`'s defaults (60 s, no increment - read by no driver) into issue 456; the header
+  comments name the issues.
+- **L10**: E11's `Spec:` line completed below (a review correction); issue 461 records that
+  §12.4's own volatility prediction - the per-board tactical-volatility head - is not read (no
+  field in the engine's evaluations; its target masked until proofs exist).
+- **L11**: "the ladder's jobs sit inside the hard bound by construction" was wrong - nothing at
+  the hard bound or the time manager's stop ends them; they end with the ladder's decision (the
+  re-root after the move) or their own budgets, and cost the move no time because nothing waits
+  for them. Reworded in `timeman.hpp`, the engine README, the H14 and E7 rows and issue 466, with
+  edit 343 revising edit 336; the synchronous mode on a wall clock noted (its inline jobs can
+  carry a batch past the hard bound).
+- **L12**: issue 467's "not covered" list (and the README's hard-bound paragraph) adds the
+  synchronous mode's inline ladder jobs, `hunt_suggest`'s wait for the root's Hunt, `place()`'s
+  exact verification with the proof channel on and the asset map's quiescence; "time management
+  reads no proof" is now "directly", cross-referring issue 186(a), in issue 470, issue 180's E11
+  note, the README and the header. Where this lane's text cites issue 180 it notes the spec review
+  of 2026-11-15's decision 12 (awaiting the user's confirmation; nothing changed for it).
+- **L13**: E8's readings stated in issues 464, 471 and 472, the README and the header - the
+  extensions' "original plan" is E8's weighted plan (an easy call extends in proportion); the
+  log-mean reference makes the spend non-neutral; reading A plans `hard_multiple(N)` x E7's plan,
+  above the clamp.
+
+Spec: §8.6 ("Guards"' second bullet, the closing paragraph) - edit 343 revises edit 336 (applied
+upstream in the spec review of 2026-11-15, not yet on main); §11.0 item 3, H37, H15, A6, D4, I4
+named in E11's Spec: line, nothing new proposed for them; issues 180 (decision 12 noted), 186(a),
+455, 456, 461, 464, 466, 467, 470-472. No measured figure.
+
 ### 2026-11-23 - E11/E8 review fixes 4: the fresh-root exception stated as it is, a bound on moves-left, the KLD by step
 
 Review of the E11/E8 change, phase 1, findings L1, L4 and L5; each mutant written for them is killed
@@ -253,7 +284,11 @@ unstated number a named placeholder with a build-log spec issue (452-470).
 Spec: §8.6 (allocation, the stop/extend table, Guards), §11.4 (knock-ons), §12.3 (the match
 configuration), §13.1 (6o), §15.4 (invariants); register E7, H14, H41, H42, I3, M13, M22. Proposed
 edits 331-338 (and edits 203, 204, already proposed); issues 452-470, 180 and 306 (readings
-built). No measured figure.
+built). No measured figure. (Review correction, 2026-11-23: the change also bears on §11.0 item 3
+and H37 - `LegalityOptions::deadline`, Unknown never a verdict - on H15 - the model clock's
+determinism, cited beside the synchronous debug mode -, on A6 - the action's mandatory boards in
+the per-decision split -, on D4 - the moves-left head - and on I4 - the hard bound outside the
+soft budget's redistribution; nothing new is proposed for them.)
 
 ### 2026-11-09 - The network job's three Linux-only failures: t5d-audit built, two tolerances fitted to what they measure
 

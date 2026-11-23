@@ -100,8 +100,8 @@ SearchParams self_play_search_defaults();
 /// placeholder.
 struct MatchClock {
   bool enabled = false;
-  double base_seconds = 60;      ///< each side's time at the start
-  double increment_seconds = 0;  ///< added after each of a side's actions
+  double base_seconds = 60;      ///< each side's time at the start (a placeholder no driver reads: issue 456)
+  double increment_seconds = 0;  ///< added after each of a side's actions (issue 456)
   TimeParams time{};             ///< each side's time manager (6o's arms: allocator, signals)
   /// The model clock (run_timed with no clock): deterministic - for tests and
   /// reproducible runs; the wall clock otherwise.

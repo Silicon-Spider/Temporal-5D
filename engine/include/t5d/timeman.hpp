@@ -56,7 +56,12 @@
 //           6m); the second source, a proof from Hunt or the settling scans
 //           that contradicts the net, is a HOOK, OFF (proof_volatility) and
 //           refused without the proof channel: whether those proofs may drive
-//           time before the sign-off is open (build-log spec issue 180). With
+//           time before the sign-off is open (build-log spec issue 180; the
+//           spec review of 2026-11-15's decision 12 awaits the user's
+//           confirmation - a proof may then extend the search, never stop it).
+//           Time management reads no proof directly; with hunt_suggest on, a
+//           proven mate reaches the signals through the root's visits (issue
+//           186(a)). With
 //           both read, a calm net and an alarmed prover - DISAGREEMENT - extends
 //           hardest;
 //   extend  a falling eval: the root's value below the previous decision's by
@@ -92,10 +97,14 @@
 // issue 306). Guard's hook, if an experiment switches it on, re-searches with
 // what the hard bound leaves (t5d/selfplay.hpp). THE LADDER'S JOBS (stage E10,
 // t5d/ladder.hpp) - Hunt under 100 boards, the settling scans under 50 - run on
-// their own worker and threads (M13's five cores) beside the search: their
-// wall time overlaps the decision's, and the decision's end cancels them, so
-// they sit inside the hard bound by construction; the allocation deducts
-// nothing for them (a reading: issue 466). §11.4's knock-on ("time management
+// their own worker and threads (M13's five cores) beside the search, and
+// nothing waits for them, so they cost the move no time; they end with the
+// ladder's decision - the re-root after the move is played (or a new decision,
+// or the search's end) - or at their own budgets, not at the hard bound or the
+// time manager's stop; the allocation deducts nothing for them (a reading:
+// issue 466). In the synchronous mode they run inline, by nodes (no clock, no
+// cancel): on a wall clock a job can carry a batch past the hard bound - that
+// mode is the model clock's (issues 466, 467). §11.4's knock-on ("time management
 // loses the scanner as a second volatility source above 50 boards") is moot
 // while the proof source is off.
 //
@@ -118,7 +127,11 @@
 // plan - and the ladder's budgets (Hunt's, the settling scans': the v3 form of
 // "the root-rule scan") are never read or changed (I4: it redistributes the
 // soft budget, never the confidence-independent layer). Off, the plan is E7's
-// bit for bit. Match play only, as E7 (§12.5: no difficulty-biasing of which
+// bit for bit. Under E8 "the plan" the extensions take their shares of is
+// E8's weighted plan, so an easy call is corrected in proportion (at factor
+// 0.25, to at most half of E7's plan); the reference is a log-mean, so the
+// spend is not neutral over a game; and reading A plans hard_multiple(N) x
+// E7's plan - above the factor's clamp (issues 464, 471, 472). Match play only, as E7 (§12.5: no difficulty-biasing of which
 // self-play moves get full searches). Readings: build-log spec issues 471-475.
 //
 // CLOCKS AND DETERMINISM (H15). A Clock gives the time; WallClock is the
@@ -243,7 +256,8 @@ struct TimeParams {
   double expected_optional_moves = 0.25;
   /// Per action: the clock's overhead (the move's transmission, the driver).
   double overhead_seconds = 0.05;
-  /// No decision is planned below this many evaluations (inside the hard bound).
+  /// No decision is planned below this many evaluations (inside the hard
+  /// bound; a placeholder - issue 455).
   double min_evaluations = 8;
   /// A simulation that needs no evaluation (a cache hit, a terminal) still
   /// costs: the decision's WORK is max(evaluations, playouts / this) - what the
@@ -291,7 +305,9 @@ struct TimeParams {
   /// proofs read as an alarm where the proven value lies disagreement_margin or
   /// more from the network's. Refused unless the search's proof channel is on
   /// (issue 180: whether those proofs may drive time before the sign-off is
-  /// open; until it is ruled, they may not).
+  /// open; until it is ruled - decision 12 of the spec review of 2026-11-15
+  /// awaits the user's confirmation - they may not). disagreement_margin: a
+  /// placeholder (issue 470).
   bool proof_volatility = false;
   double disagreement_margin = 0.5;
   double extend_disagreement = 1.0;  ///< "disagreement extends hardest"

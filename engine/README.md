@@ -4174,8 +4174,10 @@ that would end past it; inside a batch, `run_timed` on the steady clock gives th
 bound as its deadline (`Search::set_deadline`): the turn starts' mate checks and the flat
 form's fallback listing (`SearchBudget::max_time`), the legality classification and the
 verification of unknown edges (`LegalityOptions::deadline`, new) stop at it and answer
-Unknown - never a verdict (H37). The flat form's turn generator is node-budgeted only
-(issue 467). The one exception: a root with no visited child runs on, whatever the clock
+Unknown - never a verdict (H37). The deadline does not reach the flat form's turn generator
+(node-budgeted only), the synchronous mode's inline ladder jobs, `hunt_suggest`'s wait for the
+root's Hunt, `place()`'s exact verification with the proof channel on, or the asset map's
+quiescence (issue 467). The one exception: a root with no visited child runs on, whatever the clock
 says, until one has a visit (a move needs a visit) - from an unevaluated root that takes up to
 two evaluator calls, the root's own leaf and then its children's (one slice in the batched mode,
 two one-leaf slices in the synchronous mode), so a fresh root's decision can end that much past
@@ -4194,7 +4196,7 @@ function (`smart_pruning_stop`, `visit_kld`, `value_overlap`, `unstable`), judge
 | Root solved - play at once | ONLY with the proof channel on (H41); off, nothing is solved and the stop is void |
 | Overlap and churn - extend | the top two children's own network categoricals (read from the evaluation cache, the root player's view: `Search::root_child_value`) intersect by `overlap_threshold` (0.5) or more AND the last KLD per visit is at least `churn_kld_threshold` (2e-4) |
 | Volatility - extend | the root's uncertainty signal (6m's: the categorical's variance by default) at least `variance_threshold` (0.2) |
-| Disagreement - extend hardest | a HOOK, OFF (`proof_volatility`): a Hunt or settling-scan proof whose value lies `disagreement_margin` (0.5) from the network's, with a calm net; refused unless the search's proof channel is on - whether those proofs may drive time before the sign-off is open (issue 180). Python refuses it, as it refuses the channel |
+| Disagreement - extend hardest | a HOOK, OFF (`proof_volatility`): a Hunt or settling-scan proof whose value lies `disagreement_margin` (0.5) from the network's, with a calm net; refused unless the search's proof channel is on - whether those proofs may drive time before the sign-off is open (issue 180; the spec review of 2026-11-15's decision 12, awaiting the user's confirmation: before the sign-off a proof may raise a prior or extend the search, never stop, prune, select or enter a store). Python refuses it, as it refuses the channel. Time management reads no proof directly; with `hunt_suggest` on, a proven mate still reaches the signals through the root's visits (issue 186(a)) |
 | Falling eval - extend | the root's backed-up value below the previous decision's by `fall_margin` (0.1); a rising eval never extends |
 | Instability - extend | the most visited child changed within the last `instability_window` (0.25) of the root's visits, from `instability_min_visits` (32) |
 
@@ -4210,9 +4212,12 @@ are the effort label's sources for the records (I15).
 one named consumer, Guard's re-search (§11.4), and Guard runs in no range (H42): none is
 held (issue 306). Guard's hook, if an experiment switches it on, re-searches with what the
 hard bound leaves. The verification ladder's jobs (stage E10) run on their own worker and
-threads (M13's five cores) beside the search: their wall time overlaps the decision's and
-the decision's end cancels them, so they sit inside the hard bound; the allocation deducts
-nothing for them (issue 466).
+threads (M13's five cores) beside the search, and nothing waits for them, so they cost the
+move no time; they end with the ladder's decision - the re-root after the move is played - or
+at their own budgets (`hunt_ms`, `settling_ms`), not at the hard bound or the time manager's
+stop; the allocation deducts nothing for them (issue 466). In the synchronous mode they run
+inline, by nodes, with no clock and no cancel: on a wall clock a job can carry a batch past
+the hard bound, so that mode belongs with the model clock (issues 466, 467).
 
 **E8 - difficulty-weighted allocation, behind its flag** (register E8, a prototype;
 `difficulty_weighting`, OFF; 6v). The root's predicted search effort - D4's effort head, 16
@@ -4227,7 +4232,10 @@ weight 4 decisions), clamped to [0.25, 4], floored at 32 evaluations
 the default) or stays E7's (`WontResolve::CapAtPlan`), and the overlap-with-churn extension -
 which chases convergence - is not taken. The guards are code paths: the ex-post extensions
 still correct an "easy" plan; the floor; the hard bound and the ladder's budgets are never read
-or changed (I4). Off, the plan is E7's bit for bit (tested). Issues 471-475.
+or changed (I4). Off, the plan is E7's bit for bit (tested). Under E8 the extensions' "original
+plan" is E8's weighted plan (an easy call at x0.25 extends to at most half of E7's); the
+reference is a log-mean, so the spend is not neutral over a game; reading A plans
+`hard_multiple(N)` x E7's plan, above the clamp (5x at 50 boards, 2x at 400). Issues 471-475.
 
 **Clocks.** `WallClock` is the steady clock. With none (`nullptr`; Python's
 `model_clock=True`; C's `elapsed` NaN) the MODEL CLOCK stands in: a decision's time is its
