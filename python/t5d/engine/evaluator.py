@@ -258,6 +258,16 @@ def _check_policy(model: T5DNet, policy: str) -> None:
         raise ValueError("an optimistic evaluator needs a network with D9's head (NetConfig.optimistic_policy)")
 
 
+def _refuse_ladder(cached: CachedEvaluator) -> None:
+    """The engine path refuses the refresh ladder (BUILD_LOG issue 271): see ``CachedNetworkEvaluator``."""
+    if cached.config.node_refresh or cached.config.complexity_refresh:
+        raise NotImplementedError(
+            "the engine's search has no refresh ladder: it opens one epoch per search and refreshes no node, so "
+            "CacheConfig.node_refresh (C3a rung 1) and complexity_refresh (C24) would be ignored on this path - they run "
+            "in the search-tree fixture (net/tree.py) only (BUILD_LOG issue 271)"
+        )
+
+
 def policy_source(evaluator) -> str:
     """The prior an evaluator delivers (``POLICY_SOURCES``): its ``policy``, or ``"normal"`` for
     one that names none."""
@@ -336,8 +346,9 @@ class CachedNetworkEvaluator:
 
     The engine's search opens one epoch per search and never refreshes a node, so a cached
     evaluator configured for C3a's node refreshes (``CacheConfig.node_refresh``) or C24's
-    (``complexity_refresh``) is refused here: the refresh ladder runs in the search-tree fixture
-    (``net/tree.py``) only (BUILD_LOG issue 271).
+    (``complexity_refresh``) is refused here - at construction and again at every ``start``, which
+    also refuses a cached evaluator swapped in afterwards: the refresh ladder runs in the
+    search-tree fixture (``net/tree.py``) only (BUILD_LOG issue 271).
 
     ``start`` reuses the current epoch only for a root whose whole network input is the epoch's
     anchor's - its moves and edges included (``input_digest``; BUILD_LOG issue 274) - and, when it
@@ -349,12 +360,7 @@ class CachedNetworkEvaluator:
         if cached.model.cfg.piece_centric:
             raise NotImplementedError("the cached path refuses a piece-centric network (A5; BUILD_LOG issue 252)")
         _check_policy(cached.model, policy)
-        if cached.config.node_refresh or cached.config.complexity_refresh:
-            raise NotImplementedError(
-                "the engine's search has no refresh ladder: it opens one epoch per search and refreshes no node, so "
-                "CacheConfig.node_refresh (C3a rung 1) and complexity_refresh (C24) would be ignored on this path - they run "
-                "in the search-tree fixture (net/tree.py) only (BUILD_LOG issue 271)"
-            )
+        _refuse_ladder(cached)
         self.policy = policy
         self.cached = cached
         self.epoch: Epoch | None = None
@@ -382,6 +388,7 @@ class CachedNetworkEvaluator:
         from the store (``CachedEvaluator.release``; issue 273). Under C26's phase form a root under
         N* boards gets the dense epoch - one object, with no anchor, so this asks the cached
         evaluator again, at no cost."""
+        _refuse_ladder(self.cached)
         state = self._fit(state_of(root))
         started = input_digest(state)
         if self.epoch is not None and self.epoch.anchor is not None and self._started == started:
@@ -397,6 +404,7 @@ class CachedNetworkEvaluator:
         if self.epoch is None:
             raise RuntimeError("no search is open: call start(root) first")
         if self.epoch.mode == "dense":  # C26: a search rooted under N* is the dense search
+            self.cached._check_format()  # as every cached epoch and evaluation does (G8's switch in place)
             results = self.dense(positions)
             self.positions_by_mode["dense"] += len(positions)
             return results

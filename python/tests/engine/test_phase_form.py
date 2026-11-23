@@ -27,8 +27,9 @@ refresh (C3). "The dense search" is read as the same network's dense pass, batch
   it (R6g), F1 in BF16 (R6h, slow).
 * Units: N*'s placeholder is ``token_counts.N_STAR``'s; the dense epoch's engine number; the dense
   dispatch is ``NetworkEvaluator``'s, bit for bit, with either prior and the leave logits; its
-  ``max_batch``; the start shortcut; A5 still refused first; the store keeps only the live search's
-  epoch (issue 273).
+  ``max_batch``; it checks the network's format; the start shortcut; the refusal of node refreshes,
+  after construction too; A5 still refused first; the store keeps only the live search's epoch
+  (issue 273).
 
 FP32, 2 layers, random weights at initialisation scale, the v1 defaults (B15, B16, A6, A7); the
 verification ladder off in every search (from Python it never changes the tree, H41, and it costs
@@ -780,13 +781,42 @@ def test_the_dense_dispatch_is_the_dense_evaluator(policy):
 def test_the_engine_path_refuses_node_refreshes():
     """The engine's search opens one epoch per search and refreshes no node (BUILD_LOG issue 271), so
     its evaluator refuses a cached evaluator configured for node refreshes - C3a's rung 1 or C24's -
-    rather than ignore them; the root refresh and the phase form are its own and accepted."""
+    rather than ignore them; the root refresh and the phase form are its own and accepted. The
+    refusal holds after construction: the cached evaluator's configuration cannot be swapped, and a
+    cached evaluator swapped in for another is refused at ``start``."""
     model = _model(9)
     for cfg in (CacheConfig(node_refresh=True), CacheConfig(complexity_refresh=True), CacheConfig(root_refresh=True, node_refresh=True)):
         with pytest.raises(NotImplementedError, match="issue 271"):
             CachedNetworkEvaluator(CachedEvaluator(model, cfg))
     for cfg in (CacheConfig(), CacheConfig(root_refresh=True), CacheConfig(root_refresh=True, phase_form=True)):
         CachedNetworkEvaluator(CachedEvaluator(model, cfg))
+    ev = CachedNetworkEvaluator(CachedEvaluator(model, CacheConfig(root_refresh=True)))
+    with pytest.raises(AttributeError):
+        ev.cached.config = CacheConfig(root_refresh=True, node_refresh=True)
+    ev.cached = CachedEvaluator(model, CacheConfig(root_refresh=True, node_refresh=True))
+    with pytest.raises(NotImplementedError, match="issue 271"):
+        ev.start(synthetic_state(72, 5, n_timelines=2))
+    assert ev.epoch is None
+
+
+def test_the_dense_dispatch_checks_the_networks_format():
+    """Every epoch and evaluation checks the network's format (G8's switch in place; spec issue 238),
+    the dense dispatch too: a network switched to another trunk format after ``start`` is refused
+    before the dense evaluator runs it."""
+    from t5d.train.smoke import with_actions
+
+    model = build_model(NetConfig(n_layers=1, trunk_dtype="fp32", attn_scope="block_causal"), seed=0).eval()
+    states = with_actions([synthetic_state(60 + i, 3, n_timelines=2) for i in range(2)])
+    ev = CachedNetworkEvaluator(CachedEvaluator(model, CacheConfig(root_refresh=True, phase_form=True, phase_boards=1000)))
+    ev.start(states[0])
+    ev(states)
+    model.set_trunk_quant("fp8_e4m3")
+    try:
+        with pytest.raises(RuntimeError, match="format changed"):
+            ev(states)
+        assert ev.dense.batches == 1, "refused before the dense evaluator ran"
+    finally:
+        model.set_trunk_quant("none")
 
 
 def test_a5_is_refused_first_under_the_phase_form():

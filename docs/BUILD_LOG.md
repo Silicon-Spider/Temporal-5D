@@ -10304,3 +10304,7 @@ entry changes in the same edit as its code, which the standing rule defers to up
     Checks: ruff clean; the three new tests with the tests that start one evaluator more than once
     (R6d, R6e, the anchor tests, `test_one_cached_evaluator_follows_its_search_to_a_new_root`, the
     dense dispatch, the dense epoch's number): "12 passed in 40.06s".
+  - **The guards** (L5-L8). The switches are validated as bools, `CachedEvaluator.config` is
+    read-only, the engine path refuses the ladder at every `start`, the dense dispatch checks the
+    network's format, and the gate must answer with a bool. Checks: ruff clean; the new and changed
+    tests with the fixture's trigger tests: "13 passed in 14.83s".

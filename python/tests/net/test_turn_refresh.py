@@ -30,8 +30,8 @@ per board (with its past and its perspective, register A7) and epoch, and shared
 * The triggers (C3a rung 1, C24) only at evaluated nodes: an inner node never refreshes, rung 1
   reads a branching travel move on the segment from the nearest evaluated node (per path - issue
   268), C24's travel counts inner travel and its effort is the nearest evaluated ancestor's (issue
-  269); an inner node is never evaluated or refreshed. With every node evaluated (``evaluates`` None,
-  or always true) the fixture is what it was.
+  269); an inner node is never evaluated or refreshed. The gate must answer with a bool. With every
+  node evaluated (``evaluates`` None, or always true) the fixture is what it was.
 
 FP32, 2 layers, random weights at initialisation scale (``test_cache.py``'s networks and
 tolerances); bitwise between the two arms, which run the same code on the same entries.
@@ -460,6 +460,21 @@ def test_an_inner_node_is_never_evaluated_or_refreshed():
     dense = SearchTree(CachedEvaluator(model, CacheConfig(root_refresh=True, phase_form=True, phase_boards=1000)), root)
     with pytest.raises(ValueError, match="no cache to refresh"):
         dense.refresh(dense.child(dense.root, ("physical", sorted(root.heads())[0])))
+
+
+def test_the_gate_answers_with_a_bool():
+    """The gate decision is a bool: read by truthiness, a gate returning None would make every node
+    inner, and the fault would surface far from it - so anything else is refused when the node is
+    made, and no node is made; a NumPy bool is a bool."""
+    model = _model(673, layers=1)
+    root = _root("standard", 9)
+    move = ("physical", sorted(root.heads())[0])
+    for answer in (None, 0, 1, "yes"):
+        bad = SearchTree(CachedEvaluator(model), root, evaluates=lambda parent, move, u, a=answer: a)
+        with pytest.raises(TypeError, match="bool"):
+            bad.child(bad.root, move)
+        assert not bad.root.children, "no node made"
+    assert SearchTree(CachedEvaluator(model), root, evaluates=lambda parent, move, u: np.bool_(False)).path([move]).inner
 
 
 def test_with_every_node_evaluated_the_fixture_is_what_it_was():

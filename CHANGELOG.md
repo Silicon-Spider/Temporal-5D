@@ -10,6 +10,24 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-23 - C26/C27's review: the guards - switches are bools, the configuration is fixed, the ladder is refused at every start, the dense dispatch checks the format, the gate answers with a bool (L5-L8)
+
+- **L5**: `CacheConfig.validate` refuses a switch that is no bool. This covers `root_refresh`,
+  `node_refresh`, `complexity_refresh` and `phase_form` (a NumPy bool is a bool). Before,
+  `phase_form="no"` passed validation and `mode` read it as on.
+- **L6**: `CachedNetworkEvaluator`'s dense dispatch checks the network's format, as every cached
+  epoch and evaluation does. Before, G8's switch in place after `start` went on being evaluated in
+  the new format. The test of `root_epoch`'s and `evaluate`'s dense branches is adopted from the
+  review (`test_the_dense_epoch_checks_the_networks_format`), and a test of the dispatch is added.
+- **L7**: `CachedEvaluator.config` is read-only (validated at construction). The engine path refuses
+  the refresh ladder again at every `start`, so a cached evaluator swapped in after construction is
+  refused too (issue 271).
+- **L8**: `SearchTree`'s gate predicate must return a bool (`TypeError` otherwise, before a node is
+  made). Read by truthiness, a gate returning None would make every node inner.
+
+Spec: no part of the spec describes these checks. Register C26 and C27 and spec issue 271 bear on
+the behaviour they guard, which is unchanged.
+
 ### 2026-11-23 - C26/C27's review: the K/V store drops a past search's root refresh, and `start` reuses an epoch only for the same input (M2, L15; issues 273, 274)
 
 - **M2 (issue 273, which C26 made larger)**: nothing called `KVStore.drop_epoch`. The review measured

@@ -260,6 +260,11 @@ class CacheConfig:
         return "dense" if self.phase_form and int(n_boards) < self.phase_boards else "cached"
 
     def validate(self) -> None:
+        for name in ("root_refresh", "node_refresh", "complexity_refresh", "phase_form"):
+            # A switch is a bool: "no" or 0 would read as on or off by truthiness, and mode() would
+            # answer for a configuration nobody wrote.
+            if not isinstance(getattr(self, name), (bool, np.bool_)):
+                raise ValueError(f"{name} must be a bool, not {getattr(self, name)!r}")
         if isinstance(self.phase_boards, bool) or not isinstance(self.phase_boards, numbers.Integral) or self.phase_boards < 1:
             raise ValueError("phase_boards (C26's N*) must be a positive integer")
         if self.phase_form and not self.root_refresh:
@@ -529,8 +534,9 @@ class CachedEvaluator:
         #: round the refusal above and mix formats in one store, so every epoch and evaluation
         #: checks it (``_check_format``).
         self._format = (trunk_format(cfg), cfg.frozen_kv_format)
-        self.config = CacheConfig() if config is None else config
-        self.config.validate()
+        config = CacheConfig() if config is None else config
+        config.validate()
+        self._config = config  # read-only (``config``): validated here, and callers' refusals read it
         self.store = KVStore() if store is None else store
         self._epochs = itertools.count()
         #: The keys of the refreshed epochs this evaluator made: the ones ``release`` may drop - a
@@ -538,6 +544,13 @@ class CachedEvaluator:
         self._made: set[str] = set()
         # C26: the one dense epoch every search rooted under N* shares (``dense_epoch``).
         self._dense_epoch = Epoch("dense", "dense")
+
+    @property
+    def config(self) -> CacheConfig:
+        """The cache's switches - fixed at construction: ``CacheConfig.validate`` ran on them then,
+        and ``CachedNetworkEvaluator``'s refusal of the refresh ladder reads them (BUILD_LOG issue 271),
+        so a configuration swapped in afterwards would get past both. Build a new evaluator instead."""
+        return self._config
 
     def _check_format(self) -> None:
         """Refuse a network whose format changed since the cache took it (``__init__``)."""
