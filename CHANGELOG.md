@@ -10,6 +10,214 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-23 - The review's code: B15's far tables, the completed-Q arm, board-count coverage, the pilot's trainer, the self-play pool, G11's count, G11's padding and once-per-forward structure, and the tree form under graph search
+
+After the spec review (next entry) the user asked this session to "make the changes to code" it
+left. The work was planned item by item, built by one agent per item in this working tree, and
+each result checked before the next. Every new behaviour is behind a flag whose default is the
+as-built behaviour, except B15's per-axis far tables, whose ruling (review decision 1) changes the
+default network: **the v1 is now 22,969,139 parameters** (F2's arm 46,900,275), and
+`disp_far_axis=False` gives the earlier network bit for bit. The spec and the register were not
+edited: the edits they need are proposed in `docs/BUILD_LOG.md` (402-413), whose "Where things
+stand" (top) has the full record, and its findings are spec issues 719-733. Three engine-side
+items went to the main loop's lanes by agreement with that session, because their lanes are
+rewriting the same code: decision 13's game-loop node budget, the H13/H43 match-test switches, and
+Gumbel root search (register E10).
+
+**Network** (`python/t5d/net/`):
+
+- **A8's FFN at 1x**, 6p's second arm: named `6p-layout-ff1` beside `6p-layout-ff8`
+  (`config.PRESETS`, `bench.CONFIGS`); 1,709,824 parameters, 0.29% of the counted forward at 44
+  boards; run through the flag-off, cached = dense and A7-mirror rows.
+- **B15's two per-axis far tables** (decision 1; `NetConfig.disp_far_axis`, on): every pair of
+  board tokens beyond the exact classes adds B6's signed Delta-time (19 buckets) and absolute
+  Delta-timeline (8) scalars per head per layer - 3,456 parameters from a generator of their own,
+  so no other draw moved; on every attention path through the structure, with no change to
+  `cache.py`. **Ablation 2's layer-shared arm** (`disp_layer_shared`, off): 101,664 parameters.
+  New `tests/net/test_displacement_far.py`; the pinned totals in `test_params.py` and
+  `test_layout.py` move by +3,456 (F2 +5,184).
+- **G11's count** (`net/opcount.py`, `python -m t5d.net.opcount`): the operators and
+  attention-kernel calls one eager forward dispatches on the CPU graph, with constancy checks. As
+  built the default block-sparse path dispatches 76,443 operators (44,128 compute) in 46 kernel
+  calls a layer at 44 boards, growing with the board count; the one-block path 7,812 and 2 a layer
+  at every size.
+- **G11's widths and structure**: `NetConfig.attn_pad_multiple` (default 1; decision 15's 8 an
+  arm, spec issue 732) zero-pads the kernel's query, key and value widths (45/33 -> 48/40), the
+  forward bit for bit; and what no layer changes is now built once per forward (`attention.py`,
+  `structure.py`, `displacement.py`: per-forward memos), with B15's layer-shared bias assembled
+  once per forward at inference - every output bit for bit against the tree before, and at 44
+  boards 76,443 operators a forward -> 50,071 on the default path, 7,812 -> 6,055 on the one-block
+  path. The count gained call paths (`--sites`); new `tests/net/test_kernel_pad.py` and
+  `test_once_per_forward.py`; `bench.CONFIGS` names for B15's arms and the padding.
+
+**Training and self-play** (`python/t5d/train/`, `python/t5d/engine/pool.py`):
+
+- **The completed-Q target in the builder** (register I21): `TargetConfig.completed_q` ("off";
+  "full", "cheap", "all"), stored and batched beside the policy target; its loss on the main
+  policy head (weight 0; `losses.completed_q_arm` moves the policy's weight onto it); `python -m
+  t5d.train.smoke --completed-q`; `train/target_arms.py` - the target arms, the record-level
+  comparison (`python -m t5d.train.target_arms`) and a held-out yardstick. The ranking itself
+  waits for the pilot run.
+- **Board-count coverage** (I22): floors on each range's share of training compute
+  (`SamplerConfig.range_floors`, off; water-filled over the window's per-range pools) and seeded
+  starts (`GeneratorConfig.seeded_starts`, off; `train/seeded.py` - a 5dpgn record and the actions
+  replayed, opened by the engine's own reader; the header's optional `seeded_start`).
+- **The pilot's trainer** (I23; `train/recipe.py`): batches to a budget of padded tokens within
+  the board-count ranges, a linear warm-up, step drops; `PILOT_RECIPE` of placeholders; the
+  default stays the smoke recipe.
+- **The self-play pool** (G12): `engine/pool.py` - a padded-token batch planner, a shared
+  evaluator with one service thread, a pool of game threads - and `train/selfplay_pool.py`
+  (`python -m t5d.train.selfplay_pool`). A pooled game writes the alone game's record byte for
+  byte with an exact evaluator or merging off; under merged forwards of a network, to the
+  batch-equivalence tolerance (measured, MEASUREMENTS).
+- **Decision 13's target side**: a game that ended unscored has no outcome-derived target, so no
+  deblunder blend applies in it; `TargetConfig.unscored_whole_blend` (off) keeps the earlier
+  reading as an arm.
+- `python -m t5d.train.smoke` adds a nine-board position, so B15's far tables take a gradient.
+
+**Engine** (`engine/src/mcts.cpp`): **the tree form under graph search** (decision 10). The
+refusal is gone; only evaluated nodes are graph nodes - a move whose gate fires leads to a graph
+node, one whose gate does not to a path-local inherited node, never merged. With every gate firing
+it is the ply split's graph search bit for bit. No C field or default changed; six tests added
+(t5d-tests 724).
+
+**Not built**: C17 with A5 (after `lane/net`'s cache rewrite); I3's moves-left steering (after the
+moves-left head is trained); the three items handed to the lanes (above); every ranking, tuning
+and GPU figure the new arms exist for.
+
+**Documents**: `docs/MEASUREMENTS.md` gains dated, counted sections - B15's parameters, A8 at 1x,
+G11's operator counts, G12's batch numerics, and G11's widths, operator attribution and
+once-per-forward figures; `engine/README.md` the tree form under MCGS. `docs/BUILD_LOG.md`: the
+round's record, the register status rows (new: G11, G12, I21-I24, register E10, M25-M27), spec
+issues 719-733, proposed edits 402-413, a session entry; and two dated notes in the review's
+section - the merge concluded by the main loop (d33a5c0), and the user's answer, as that session
+reported it, that the review's decisions are rulings the build builds on.
+
+**Checks** (2026-11-23, `dev-r`): on the finished tree, the whole Python suite in four shards with
+the engine required (`T5D_REQUIRE_ENGINE=1`): 2,290 passed, 1 skipped (the opt-in `T5D_RECORDS`
+corpus), none failed - 572 + 572 + 573 + 573; it was 1,990 and 1 before the round. `ruff check`
+and `ruff format --check` clean over the whole Python tree (134 files). The engine up to date
+(`engine/build.py --werror`: no work to do) - no engine source changed after the tree-form agent's
+full `--werror --test` run, t5d-tests 724 of 724 (718 before). `python oracles/harness.py verify`
+ok (the 17 `proof-channel-vacuous` notes of issue 576, as before); `rulebook` ok; `gate --tier
+commit` ok in 62 s - ftxi 8,256 of 8,256 and notation 3,012 of 3,012 required values reproduced,
+SMOKE TEST - PASSED, 41 records compared with the last green run and 0 declined, calibration
+1.21x, proof channel DISABLED. The suite's first run on the finished tree was stopped by Claude
+Code when the machine ran low on memory - the main loop's lanes were testing beside it - with one
+shard finished (572 passed); that shard's result was kept, since no source changed after it, and
+the other three were run again whole. Before it, each agent ran its own files and their
+directories whole on its final code: tests/net 1,588 of 1,588 (six shards, after G11's last edit),
+tests/train 283 of 283 (after I22's and I23's), tests/engine 394 passed and 1 skipped, the tree
+form's Python files 156 and 190 passed; and after decision 13's target side the target-builder
+files 129 of 129. Wall times are of a loaded machine and are not measurements.
+
+Spec: sections 4.1, 7.8, 8.4, 8.5, 9.2, 10.2, 12, 12.2, 12.8, 13.1, 15.2, 15.3, 15.7 and 16;
+register A8, B6, B15, C11, D2, E10, F1, F2, G11, G12, H22, I15, I21, I22, I23, M24, M25, M26, M27.
+Not edited here: proposed edits 402-413 in `docs/BUILD_LOG.md` (B15's built form and section 4.1's
+example; the new totals; G11's counted figure; A8 at 1x; the pool; the completed-Q arm; coverage;
+the pilot's trainer; the tree form under MCGS; decision 13's target side; register E10's name;
+G11's widths and structure), with spec issues 719-733.
+
+### 2026-11-15 - The spec review: the design spec and the register improved in the repository, on the user's instruction
+
+The user asked this session to read the spec and improve it, with full access to change anything.
+`docs/design/5d-chess-transformer-design.md` and `docs/design/5d-chess-decisions.md` were
+therefore edited here - the one departure from the rule above and in `AGENTS.md`, made on that
+instruction and for that request only. The repository's copies are now ahead of upstream's, which
+takes them as its base before its next revision. One module was added and no existing code
+changed; nothing was committed. `docs/BUILD_LOG.md` ("Where things stand", top) carries the full
+record: what was done, the twenty-three decisions the review made for the user to confirm, what it
+left to the user, and the work it leaves each lane.
+
+**Why.** The spec had drifted from what the build knows. 145 edits the build had proposed were
+waiting - a hundred of them as-built details of committed-class decisions - and the documents
+contradicted themselves and the measurements in places: the register's H1 said "Guard at every
+size" and "Guard in no range" in one row; section 1 called 100-600 boards normal against a
+measured median of 44; the cost model, the capacity ladder and the build order were still priced
+at the 240-board premise CHECKPOINT 5 overturned.
+
+**What changed in the spec.**
+
+- **The proposed edits, applied**: 123 from the build log and 22 from the three unmerged lanes'
+  logs (dispositions in the build log, "Proposed spec edits").
+- **The cost model re-based on the measured sizes** (section 9.2: cost by board count from 10 to
+  600, the 44-board position, where the median game ends, as the reference - 0.262 TF by the
+  formula, 0.28-0.32 TF counted on the v1 - and the capacity ladder priced at 44 and at 240
+  boards; sections 7.4, 7.5, 9.1, 10.1, 13.0 and the summary follow).
+- **The inference path's speed as a requirement** (section 10.2): the bounded AMD run measured the
+  eager network at twenty to two hundred times its own card's kernel arithmetic, so the spec now
+  states what the compiled path must do - structure built once per forward, nothing of size T^2
+  outside the kernel, a constant and counted number of launches per layer, kernel widths in
+  multiples of 8 - with a fallback ladder and its trigger.
+- **Batching at the measured sizes** (section 7.8): "batching buys 1.2-1.5x" holds at 240 boards
+  only; where the games are the engine is batch-bound, so self-play runs a pool of concurrent
+  games behind one evaluator.
+- **Two prototype arms for few simulations against many moves** (sections 8.4, 12.2, 12.5): the
+  completed-Q policy target, ranked on stored records with no new self-play, and Gumbel root
+  search with sequential halving. The target does not read visit counts, so steering cannot bias
+  it.
+- **Coverage across board counts** (section 12): seeded starts, and a floor on each board-count
+  range's share of training compute.
+- **The path from "done" to serious self-play** (new section 15.7): five gates in order, the pilot
+  run pre-registered, "node-starved" defined.
+- **As-built forms pinned in a new section 16; retired design text moved to a new Appendix A**:
+  sections 11.1-11.2 now hold what is in force.
+- **Open design questions ruled** - the tree form under graph search, proofs before the sign-off,
+  the game loop's terminal test under a budget, moves-left steering and early endings, A5's
+  decision rule and its tokens under the cache, B15's far classes, and the rest of the build log's
+  list.
+
+**What changed in the register.** About 170 operations: the rows those sections bear on brought in
+line; new rows E10, G11, G12, I21, I22, I23, I24, M25, M26, M27; reversals 34-41; the status
+vocabulary completed; part K's open items for the user, H48's stop (issue 576) among them with a
+proposal and no ruling.
+
+**Reviewed before it was reported.** Three independent read-only passes went over the revision -
+the figures against `docs/MEASUREMENTS.md`, the spec against the register, the spec against
+itself - and what they found was fixed in the same working tree (the build log lists it; spec
+issues 714-718). Among it: "44 boards" is where the median game ends, not the typical position
+(the median position has about 24); the network as built counts 7-23% more FLOPs than the formula
+at 44 boards; a table the review had added to section 15.6 used the formula M16 replaced; two
+in-force prover rules had been left only in the appendix; and four pieces of arithmetic that
+predated the review were wrong (section 3.3's axial figures, the cached ratios, a throughput row,
+the stand-pat rate).
+
+**Code.** `python/t5d/train/completed_q.py` (new): register I21's completed-Q policy target as a
+function of one decision's record - Gumbel AlphaZero's `softmax(logit + sigma(completed q))` over
+the candidate moves and submit, from the raw logits, the root's raw WDL and each root child's
+visits and backed-up value. `python/tests/train/test_completed_q.py` (new, 15 tests): the paper's
+formulas by hand; the target is the raw prior where nothing was visited; it does not change with
+how the visits were allocated, nor with the search's noised and boosted prior or the steered and
+forced counts; it leaves unvisited moves the prior's shape; and it is rebuilt exactly from a
+record read back from disk - the record format (I15) already holds everything it needs. A
+prototype arm: the target builder does not write it, nothing trains on it, and no existing module
+imports it (`python/t5d/train/__init__.py`'s docstring names it).
+
+**Checks.** Every section reference in the two documents resolves to a heading; every table row
+has its header's cell count; no prose line begins with a list or heading marker; `python
+oracles/harness.py verify` ok (the 17 `proof-channel-vacuous` notes of issue 576, as before);
+`rulebook` ok; `ruff check` and `ruff format --check` clean on `python/t5d/train` and the new test
+file; `pytest tests/train/test_completed_q.py tests/train/test_targets.py -k "not generated"`: 59
+passed. The engine, its tests, the gate and the rest of the Python suite were not run - no engine
+code, nothing the gate reads and no existing Python module changed.
+
+Spec: the design spec, sections 0-16, the summary and Appendix A, and the register, parts A-M -
+edited directly, not proposed; `docs/BUILD_LOG.md` lists every decision made for the user to
+confirm, and spec issues 700-713 give the reasons for the review's own edits. The new module
+implements section 12.2's completed-Q target (register I21) as section 16 pins it.
+
+### 2026-11-09 - Build log: the current state at issue 535's merge
+
+`docs/BUILD_LOG.md`, "Current state": `lane/fix535` merged (issue 535 resolved by issue 600,
+with its review round) and idle; the number blocks used since 2026-10-23 recorded (the audit's
+535-539, the gate's 570-579 and edits 400-401, `lane/fix535`'s 600 and 603-609, the main loop's
+601-602, the net lane's edits 380-399); the waiting list gains 600-604, none for the user (603's
+build flag and 604's fix are the main loop's, in the quiet-machine block); "GitHub Actions has
+started no job since 2026-10-17" replaced by what holds now - CI runs again, and main's engine,
+network and commit-tier jobs were all green at faaa64e (05afde5 before the rewrite of 2026-11-16).
+
+Spec: no part of the spec describes the build log's bookkeeping.
+
 ### 2026-11-09 - Issue 535's review round: c61ed3a's findings fixed (M1-M3, L1-L13), two issues found beside them
 
 The review of c61ed3a (no HIGH; three MEDIUM, fourteen LOW) and the main loop's decisions

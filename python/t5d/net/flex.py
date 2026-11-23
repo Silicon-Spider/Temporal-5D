@@ -10,7 +10,10 @@ torch's ``flex_attention`` (``NetConfig.attn_impl="flex"``):
 * the **score function** (``score_mod``) adds, per (position, head, query, key): B15's
   displacement bias - the pair's entry computed by integer arithmetic from the two tokens'
   kinds and raw coordinates (``displacement.pair_entry``, "at score time from coordinates"),
-  then the layer's compact table; B16's status key bias under the block-causal scope - on a
+  then the layer's compact table - and, for two board tokens on boards beyond B15's exact
+  classes, B6's two per-axis scalars (the 2026-11-15 review; ``NetConfig.disp_far_axis``): the
+  pair's far cell by the same arithmetic (``displacement.pair_far_cell``), then the layer's far
+  table; B16's status key bias under the block-causal scope - on a
   live query row, the head's entry for the key's frozen board's status, read from a
   per-token index (``status.py``); B17's key-side Shaw term (behind its flag) - the query's
   precomputed product with the class of its pair, the class from B15's entry (``shaw.py``);
@@ -57,8 +60,18 @@ from dataclasses import dataclass
 import torch
 from torch.nn.attention.flex_attention import BlockMask, flex_attention
 
-from .attention import AttnContext, _as4d, _spatial_free, _time_rotated, _widened_k, _widened_q, quantised_operands
-from .displacement import pair_entry
+from .attention import (
+    AttnContext,
+    _as4d,
+    _pad_width,
+    _spatial_free,
+    _time_rotated,
+    _widened_k,
+    _widened_q,
+    padded_width,
+    quantised_operands,
+)
+from .displacement import pair_entry, pair_far_cell
 from .state import TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER, TOKEN_PAD, TOKEN_SQUARE
 from .structure import MASK_ROLES
 
@@ -104,6 +117,8 @@ class ScoreInputs:
     disp_coords: torch.Tensor | None = None  # (B, L, 4) long, raw
     disp_table: torch.Tensor | None = None  # (H, entries + 1): the layer's
     disp_geom: object = None
+    disp_far_table: torch.Tensor | None = None  # (H, cells + 1): the layer's per-axis far table (None: no per-axis tables)
+    disp_far_axes: object = None  # displacement.FarAxes: the far cells' buckets
     # B16
     status_key: torch.Tensor | None = None  # (B, L) long: a frozen board's token's status entry (statuses: none)
     status_live: torch.Tensor | None = None  # (B, L) bool: the live query rows
@@ -159,6 +174,8 @@ class ScoreInputs:
                 raise RuntimeError("B15's displacement table is per layer: use AttnContext.for_layer to choose the layer")
             out.disp_kind, out.disp_coords = st.disp_index.kind, st.disp_index.coords
             out.disp_table, out.disp_geom = st.disp_table, st.disp.geom
+            if st.disp.far is not None:  # B6's per-axis tables beyond the exact classes: set with ``disp_table``
+                out.disp_far_table, out.disp_far_axes = st.disp_far_table, st.disp.far
         if st.status is not None and st.status_index.any_frozen:
             if st.status_table is None:
                 raise RuntimeError("B16's status table is per layer here: use AttnContext.for_layer to choose the layer")
@@ -177,6 +194,12 @@ def make_score_mod(inp: ScoreInputs):
                 inp.disp_kind[b, q], inp.disp_kind[b, k], ck[0] - cq[0], ck[1] - cq[1], ck[2] - cq[2], ck[3] - cq[3], inp.disp_geom
             )
             s = s + inp.disp_table[h, e]
+            if inp.disp_far_table is not None:
+                # B6's two per-axis scalars for a pair of board tokens on boards beyond the exact
+                # classes (their sum, by far cell; the zero cell for every other pair) - the cell
+                # from the same kinds and coordinates, a function of the board pair alone.
+                far = pair_far_cell(inp.disp_kind[b, q], inp.disp_kind[b, k], ck[2] - cq[2], ck[3] - cq[3], inp.disp_far_axes)
+                s = s + inp.disp_far_table[h, far]
             if inp.shaw_products is not None:
                 # B17 (on top of B15): the query's precomputed product with its pair's class.
                 s = s + inp.shaw_products[b, h, q, inp.shaw_compact[e]]
@@ -368,6 +391,11 @@ def attention_flex(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, ctx: AttnC
         return torch.cat([qf, q.float()], dim=-1), torch.cat([torch.where(g, 0.0, kf), torch.where(g, k.float(), 0.0)], dim=-1)
 
     def run(qf: torch.Tensor, kf: torch.Tensor) -> torch.Tensor:
+        # Register G11 (section 10.2): the kernel's query and key widths zero-padded to a multiple
+        # of ``ctx.pad_multiple`` - here, where this path's features are assembled (1: as built; a
+        # zero feature adds zero to every score).
+        width = padded_width(qf.shape[-1], ctx.pad_multiple)
+        qf, kf = _pad_width(qf, width), _pad_width(kf, width)
         with warnings.catch_warnings(), torch.autocast(device_type=q.device.type, enabled=False):
             warnings.filterwarnings("ignore", message="flex_attention called without torch.compile")
             return flex_attention(qf.to(cd), kf.to(cd), v.to(cd), score_mod=score_mod, block_mask=block_mask, scale=dh**-0.5)

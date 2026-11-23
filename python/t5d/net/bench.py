@@ -76,8 +76,19 @@ import time
 #: same structure through ablation 6's dense-mask arm, "*-sdpa" through the unchunked fused
 #: path, which materialises (B, H, L, L) masks, and "*-keep" keeps every block for the
 #: backward pass instead of recomputing it (``attn_recompute=False``; training steps only);
-#: "6y-*" are ablation 6y's trunk arms on the v1 default, and "b17-shaw" is ablation 2's
-#: key-side Shaw arm on it (section 15.3's B17 row: its wall time beside "n2-default"'s).
+#: "6y-*" are ablation 6y's trunk arms on the v1 default, "b17-shaw" is ablation 2's
+#: key-side Shaw arm on it (section 15.3's B17 row: its wall time beside "n2-default"'s), and
+#: "6p-layout-*" are ablation 6p's two board-layout arms on it (register A8, section 2.2: A8 on
+#: with its own FFN at the placeholder's 8x and at 1x - ``config.PRESETS``' entries of the same
+#: names; section 15.3's A8 row: their wall time beside "n2-default"'s, not yet measured).
+#: "b15-*" are B15's arms on the v1 default (register B15, section 4.1; the 2026-11-15 review):
+#: "b15-layer-shared" is ablation 2's layer-shared arm (``disp_layer_shared``: one table per head
+#: for every layer, its bias assembled once per forward at inference - register G11), "-sdpa" the
+#: same through the one-block path, and "b15-no-far" B15 without B6's two per-axis far tables
+#: (``disp_far_axis=False``: the network as built before the review). "g11-pad8*" are the v1
+#: default with the kernel's widths padded to a multiple of 8 (register G11, section 10.2;
+#: ``attn_pad_multiple``). The operator counter's command line reaches all of them
+#: (``python -m t5d.net.opcount --config b15-layer-shared``).
 _ALL = dict(routing_table=True, typed_edge_bias=True, board_pair_smolgen=True)
 CONFIGS: dict[str, dict] = {
     "n1-dense": dict(move_graph_heads=0, attn_impl="sdpa", displacement_bias=False),
@@ -96,6 +107,13 @@ CONFIGS: dict[str, dict] = {
     "6y-post-norm": dict(norm_placement="post"),
     "6y-squared-relu": dict(ffn_activation="squared_relu"),
     "b17-shaw": dict(shaw_key_term=True),
+    "6p-layout-ff8": dict(board_layout_embedding=True, layout_ffn_ratio=8),
+    "6p-layout-ff1": dict(board_layout_embedding=True, layout_ffn_ratio=1),
+    "b15-layer-shared": dict(disp_layer_shared=True),
+    "b15-layer-shared-sdpa": dict(disp_layer_shared=True, attn_impl="sdpa"),
+    "b15-no-far": dict(disp_far_axis=False),
+    "g11-pad8": dict(attn_pad_multiple=8),
+    "g11-pad8-sdpa": dict(attn_pad_multiple=8, attn_impl="sdpa"),
 }
 
 

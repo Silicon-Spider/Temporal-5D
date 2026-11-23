@@ -27,6 +27,23 @@ parameter of ``TargetConfig`` with a placeholder default (spec issue 235).
   the asset map until I2's steered visits are validated (issue 179), so its records' boosts are 0.
   Recorded forced visits (none: forced playouts are not built, issue 153) are pruned like any
   other.
+* **The completed-Q policy target (register I21, section 12.2; a PROTOTYPE arm, off)**: behind
+  ``TargetConfig.completed_q`` the builder also writes Gumbel AlphaZero's target
+  (``completed_q.completed_q_policy``: softmax(raw logit + sigma(completed q)) over the candidate
+  moves and submit) **beside** the pruned-visit one, never in its place - ``GameTargets.completed_q``,
+  for the decisions the switch names: ``"full"`` searches (like for like with the visit target),
+  ``"cheap"`` ones, or ``"all"`` (I5's arm of 6l: section 12.5, "Cheap searches may emit policy
+  targets after all"). Its settings are ``completed_q_c_visit``, ``completed_q_c_scale`` and
+  ``completed_q_value_range`` (the paper's values; PLACEHOLDERS), its submit share the record's
+  (``submit_share_of``, as the divergence below reads it). Everything else is unchanged under the
+  switch: the policy target, the soft policy, the value-type targets, ``full_search`` (a pruned-visit
+  policy-type target exists) and the recorded prior-to-target divergence (I12's surprise weights)
+  still read the pruned visits. A flat decision has no completed-Q target (None: its reading over
+  whole turns is open, register part K); a decision whose search visited no child has the raw prior
+  (the function's reading, pinned by test: which decisions emit is a function of the search class
+  alone). ``"off"`` (the default) writes nothing, and the targets, their file and the batch are as
+  they were, bit for bit. What trains on it is ``losses.completed_q_arm``; what ranks it against the
+  pruned-visit target is M24's, after the pilot run (``train.target_arms``).
 * **D2's flat form - the per-board policy marginals (section 8.2; spec issue 242)**: "the flat
   form's policy targets are per-board visit marginals, so its policy normalises per board rather than
   across all moves". At a flat decision the root children are whole turns; their visits - with
@@ -66,7 +83,10 @@ parameter of ``TargetConfig`` with a placeholder default (spec issue 235).
   WDL at the root (``root_wdl``, for the loss's ``q_ratio`` blend, default 0) is the pruned (q, d).
 * **WDL on the game result (D3)**, the acting player's (D8): a checkmate's winner, a stalemate or
   I11's turn cap a draw, a resignation the other side's win; a game that ended unscored
-  (``"unknown"``, the safety stop) has no WDL target. Then **deblundered (I13)**.
+  (``"unknown"``, the safety stop) has no WDL target - nor moves-left nor short-term values, and no
+  deblunder blend gives it one (review decision 13: a turn start the game loop cannot settle ends
+  the game unscored, its outcome-derived targets masked; ``unscored_whole_blend`` is the as-built
+  reading's arm, below). Then **deblundered (I13)**.
 * **Short-term values (D3)** at ``NetConfig.short_term_horizons`` (in turns - one player's action,
   issue 305): KataGo's exponential average of the future search values, ``ST_h(t) = (1 - l)[v_t +
   sum_{a > a_t} l^(a - a_t) u_a] + l^(A - a_t) z``, ``l = 1 - 1/h``: ``v_t`` the decision's own
@@ -84,7 +104,11 @@ parameter of ``TargetConfig`` with a placeholder default (spec issue 235).
   expands mid-turn children on inherited priors) takes the decision's own raw moves-left - the
   same action's state; with no estimate at all, moves-left is masked from that decision back
   rather than left unblended beside a blended WDL (issue 235(g)). Game-record facts (the
-  per-board labels) stay as recorded.
+  per-board labels) stay as recorded. **In an unscored game no blend applies** (decision 13;
+  register H22, I15): its WDL and moves-left stay masked and its ``deblunder_weight`` is 0. The
+  reading built before the review - a whole blend there gives that decision and every earlier one
+  the best child's WDL and moves-left, since a whole blend reads no result - is the arm
+  ``TargetConfig.unscored_whole_blend``.
 * **Per-board targets (D4)**: travelled-into - a played move within ``travel_horizon`` turns from
   the decision (its own included) lands on the board by travel (its destination, for a branching
   move the history board it targets) - and timeline-active-at-end; tactical volatility needs proofs
@@ -117,6 +141,7 @@ import math
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -126,6 +151,9 @@ from ..net.state import collate, to_piece_centric
 from .losses import Targets
 from .records import DecisionRecord, GameRecord
 from .reply_map import AMBIGUOUS_MODES, ReplyMap, map_reply
+
+if TYPE_CHECKING:  # ``completed_q`` imports this module (``raw_prior``): its names are imported where they are called
+    from .completed_q import CompletedQConfig
 
 #: Register H23/H41: no proof enters a store, or a target, before the gate passes and the proof
 #: channel is signed off. I14's rescoring is refused while this is False.
@@ -146,11 +174,16 @@ TARGET_SOURCES: dict[str, str] = {
     "opp_reply": "game record",
     "tactical_volatility": "proofs (gated: H23, H41)",
     "square": "game record (each decision's replayed state, labelled by the rules engine's exact generator)",
+    "completed_q": "search record (the raw logits, each root child's visits and backed-up value; full searches, cheap ones under I5's arm)",
 }
 
 #: D2's flat form: where KataGo's pruning applies (``TargetConfig.flat_pruning``; issue 242(b)) - to
 #: each board's option counts, the turns' visits marginalised first (the default), or to the turns.
 FLAT_PRUNING: tuple[str, ...] = ("board", "turn")
+
+#: Register I21: which searches emit the completed-Q policy target (``TargetConfig.completed_q``) -
+#: none (the default: as built), the full ones, the cheap ones, or every one (I5's arm of 6l).
+COMPLETED_Q_SEARCHES: tuple[str, ...] = ("off", "full", "cheap", "all")
 
 #: Game ends with a result (scored): the rest have no WDL or short-term target.
 SCORED_ENDS: tuple[str, ...] = ("checkmate", "stalemate", "turn_cap", "resign")
@@ -188,8 +221,38 @@ class TargetConfig:
     deblunder_threshold: float = 0.1
     deblunder_band: float = 0.05
     deblunder_cheap: bool = True
+    #: Review decision 13 (register H22, I15; 2026-11-15): False - a game that ended unscored has no
+    #: outcome-derived target, so no deblunder blend applies in it. True - the reading built before
+    #: (issue 235(g)): a whole blend gives that decision and every earlier one the best child's WDL
+    #: and moves-left, which read no result. An arm, not a default.
+    unscored_whole_blend: bool = False
     # I14: refused until the sign-off (PROOF_CHANNEL_SIGNED_OFF).
     proof_rescoring: bool = False
+    #: I21 (section 12.2; a PROTOTYPE arm): which searches emit the completed-Q policy target, written
+    #: beside the pruned-visit one (``GameTargets.completed_q``) - one of ``COMPLETED_Q_SEARCHES``.
+    #: "off": as built, nothing written. "full": like for like with the visit target. "cheap": the
+    #: cheap half of section 12.2's prediction. "all": I5's arm of 6l - not a generator default
+    #: before M24's ranking.
+    completed_q: str = "off"
+    #: I21: sigma's constants and the range its values enter in (``completed_q.CompletedQConfig``:
+    #: the paper's 50 and 1; the search's W - L mapped onto [0, 1]) - PLACEHOLDERS.
+    completed_q_c_visit: float = 50.0
+    completed_q_c_scale: float = 1.0
+    completed_q_value_range: str = "unit"
+
+    def completed_q_settings(self, submit_share: float = 0.0) -> CompletedQConfig:
+        """The completed-Q target's settings as its own module reads them
+        (``completed_q.CompletedQConfig``), with the record's ``submit_share``. The fields are kept
+        flat here - ``to_dict`` enters every record header - and that module imports this one, so it
+        is imported in the call."""
+        from .completed_q import CompletedQConfig
+
+        return CompletedQConfig(
+            c_visit=self.completed_q_c_visit,
+            c_scale=self.completed_q_c_scale,
+            value_range=self.completed_q_value_range,
+            submit_share=submit_share,
+        )
 
     def validate(self) -> None:
         if self.policy_mode not in ("exclusion", "provenance"):
@@ -212,6 +275,12 @@ class TargetConfig:
             raise ValueError("square_mate_nodes >= 1 (0 would leave every mate label undecided)")
         if self.reply_ambiguous not in AMBIGUOUS_MODES:
             raise ValueError(f"reply_ambiguous must be one of {AMBIGUOUS_MODES}")
+        if self.completed_q not in COMPLETED_Q_SEARCHES:
+            raise ValueError(f"completed_q must be one of {COMPLETED_Q_SEARCHES} (register I21)")
+        try:
+            self.completed_q_settings().validate()
+        except ValueError as e:
+            raise ValueError(f"completed_q settings (register I21): {e}") from e
         if self.proof_rescoring and not PROOF_CHANNEL_SIGNED_OFF:
             raise ValueError(
                 "proof rescoring (I14) is gated on the proof-channel sign-off (H23, H41): no proof may enter a target before it"
@@ -322,6 +391,15 @@ def policy_target(d: DecisionRecord, pruned: np.ndarray) -> np.ndarray | None:
     return out
 
 
+def emits_completed_q(d: DecisionRecord, cfg: TargetConfig) -> bool:
+    """Whether decision ``d``'s search is one ``cfg.completed_q`` names (register I21): a function of
+    the search class alone - a full search under "full", a cheap one under "cheap", either under
+    "all". (A flat decision, and a root that offers no action, still have no target:
+    ``completed_q.completed_q_policy`` returns None there.)"""
+    mode = cfg.completed_q
+    return mode == "all" or (mode == "full" and bool(d.full_search)) or (mode == "cheap" and not d.full_search)
+
+
 def soft_policy(target: np.ndarray, power: float) -> np.ndarray:
     """D4's soft policy: ``target ** power`` renormalised (zeros stay zero)."""
     t = np.where(target > 0, target, 0.0) ** power
@@ -430,6 +508,14 @@ def flat_settings(record: GameRecord) -> tuple[bool, float]:
     share where the network gave no leave logit - the engine's defaults where none are recorded."""
     full = record.header.get("search", {}).get("full", {}) if record.header.get("search") else {}
     return int(full.get("flat_jumps", T5D_FLAT_JUMPS_BOTH)) == T5D_FLAT_JUMPS_BOTH, float(full.get("leave_share", 0.5))
+
+
+def submit_share_of(record: GameRecord) -> float:
+    """The search's placeholder prior for a legal submit the network gave no logit, from the record's
+    full-search parameters (0 where none is recorded) - what ``raw_prior`` takes for the recorded
+    divergence and for the completed-Q target (I21)."""
+    search = record.header.get("search", {})
+    return float(search.get("full", {}).get("submit_share", 0.0)) if search else 0.0
 
 
 def flat_boards(d: DecisionRecord, arrivals: bool = True) -> list[FlatBoard]:
@@ -589,6 +675,11 @@ class GameTargets:
     #: probability), every option of every playable board with a target; None: no flat target (not
     #: a flat decision, a cheap search, or no visit). Empty: built before the flat form's target.
     flat: list[np.ndarray | None] = field(default_factory=list)
+    #: Register I21's completed-Q policy target (a PROTOTYPE arm), beside ``policy``: per decision
+    #: ``(M + 1,)`` float64, moves then submit; None: no target (a flat decision, a search
+    #: ``TargetConfig.completed_q`` leaves out, or a root that offers no action). Empty: not built
+    #: (the switch "off", the default).
+    completed_q: list[np.ndarray | None] = field(default_factory=list)
 
     def __len__(self) -> int:
         return int(self.full_search.shape[0])
@@ -621,8 +712,7 @@ def build_targets(
     end, winner = record.end, record.winner
     scored = end in SCORED_ENDS
     k_h = len(cfg.short_term_horizons)
-    search = record.header.get("search", {})
-    share = float(search.get("full", {}).get("submit_share", 0.0)) if search else 0.0
+    share = submit_share_of(record)
     arrivals, leave_share = flat_settings(record)
 
     keeps = [noise_keep_of(record.header, d) for d in ds]
@@ -657,6 +747,16 @@ def build_targets(
         if d.full_search:
             converged = d.stop == "kl" or (d.root_visits - d.root_best_since) >= cfg.effort_stable_fraction * d.root_visits
             effort[i] = effort_bin(d.root_best_since, converged, cfg.effort_bins)
+
+    # I21's completed-Q policy target (a PROTOTYPE arm, off by default), beside the pruned-visit one:
+    # exactly what ``completed_q_policy`` returns for the searches the switch names - so a search that
+    # visited no child has the raw prior, and a flat decision none. Nothing above reads it.
+    completed: list[np.ndarray | None] = []
+    if cfg.completed_q != "off":
+        from .completed_q import completed_q_policy  # that module imports this one
+
+        settings = cfg.completed_q_settings(share)
+        completed = [completed_q_policy(d, settings) if emits_completed_q(d, cfg) else None for d in ds]
 
     # The game's end, in turns: a resignation's turn is the turn it happened in.
     n_turns = record.n_actions + (1 if ds and ds[-1].played_child < 0 else 0)
@@ -699,7 +799,7 @@ def build_targets(
     for i in range(n - 1, -1, -1):
         d = ds[i]
         w = _blunder_weight(d, pruned[i], cfg)
-        if w > 0:
+        if w > 0 and (scored or cfg.unscored_whole_blend):  # decision 13: an unscored game takes no blend
             b = int(np.argmax(pruned[i]))
             best_abs = _abs_wdl(wdl_of(float(d.children.q[b]), float(d.children.d[b])), d.acting_player)
             if np.isfinite(active).all():
@@ -769,6 +869,7 @@ def build_targets(
         reply=replies,
         square=square,
         flat=flat,
+        completed_q=completed,
     )
 
 
@@ -895,11 +996,15 @@ _COLUMNS = ("full_search", "search_value", "categorical", "root_wdl", "wdl", "mo
 
 def write_targets(path: str | Path, t: GameTargets) -> Path:
     """The targets written at generation (one ``.npz`` beside the record; the reply maps are not
-    stored - they are rebuilt from the inputs)."""
+    stored - they are rebuilt from the inputs). I21's completed-Q target is stored
+    (``completed_q_*``) only where it was built, so a file written with the switch off holds what it
+    always held."""
     arrays: dict[str, np.ndarray] = {}
     for name in ("policy", "soft_policy", "pruned", "board", "flat"):
         width = 3 if name in ("board", "flat") else None
         arrays[f"{name}_data"], arrays[f"{name}_offset"], arrays[f"{name}_present"] = _ragged(getattr(t, name), width)
+    if t.completed_q:
+        arrays["completed_q_data"], arrays["completed_q_offset"], arrays["completed_q_present"] = _ragged(t.completed_q)
     for name in _COLUMNS:
         arrays[name] = getattr(t, name)
     buf = io.BytesIO()
@@ -911,7 +1016,8 @@ def write_targets(path: str | Path, t: GameTargets) -> Path:
 def read_targets(path: str | Path) -> GameTargets:
     """The targets ``write_targets`` wrote. A file written before the flat form's target (no
     ``flat_*`` arrays - beside a version 1 record, which is refused too) is refused: rebuild the
-    targets from the record (``build_targets``)."""
+    targets from the record (``build_targets``). A file with no ``completed_q_*`` arrays was written
+    with I21's switch off: it reads back with none (``GameTargets.completed_q`` empty)."""
     with np.load(Path(path), allow_pickle=False) as z:
         a = {k: z[k] for k in z.files}
     if "flat_data" not in a:
@@ -919,6 +1025,8 @@ def read_targets(path: str | Path) -> GameTargets:
     kw = {name: a[name] for name in _COLUMNS}
     for name in ("policy", "soft_policy", "pruned", "board", "flat"):
         kw[name] = _unragged(a[f"{name}_data"], a[f"{name}_offset"], a[f"{name}_present"])
+    if "completed_q_data" in a:
+        kw["completed_q"] = _unragged(a["completed_q_data"], a["completed_q_offset"], a["completed_q_present"])
     return GameTargets(**kw)
 
 
@@ -943,7 +1051,9 @@ def collate_rows(rows: Sequence[Row], net_cfg) -> tuple:
     at the network's edge (``state.to_piece_centric``: strict for engine records, not for synthetic
     ones, whose move graph reaches empty cells) - the records stay square-centric - and the
     per-square labels go onto the square tokens there are: a label of a cell that is no token is
-    dropped (BUILD_LOG issue 250)."""
+    dropped (BUILD_LOG issue 250). I21's completed-Q target (``Targets.completed_q`` and
+    ``completed_q_submit``) is carried beside the policy target where any row's game was built with
+    the switch on - a row without one all zero - and is None otherwise, the batch as it was."""
     if not rows:
         raise ValueError("no rows")
     states = []
@@ -974,6 +1084,11 @@ def collate_rows(rows: Sequence[Row], net_cfg) -> tuple:
     flat_option = torch.full((bsz, k_max), -1, dtype=torch.long)
     flat_group = torch.full((bsz, k_max), -1, dtype=torch.long)
     flat_target = torch.zeros(bsz, k_max, dtype=torch.float32)
+    # I21 (a PROTOTYPE arm): each row's completed-Q target beside its policy target; carried where
+    # the switch was on for any row's game, so the loss key is stable under the arm.
+    has_cq = any(bool(r.targets.completed_q) for r in rows)
+    cq = torch.zeros(bsz, m_max, dtype=torch.float32)
+    cq_submit = torch.zeros(bsz, dtype=torch.float32)
     for i, (r, st) in enumerate(zip(rows, states, strict=True)):
         t, j = r.targets, r.index
         pt = t.policy[j]
@@ -983,6 +1098,12 @@ def collate_rows(rows: Sequence[Row], net_cfg) -> tuple:
                 raise ValueError(f"row {i}: a policy target over {pt.shape[0] - 1} moves for an input with {m}")
             policy[i, :m] = torch.from_numpy(pt[:m]).float()
             submit[i] = float(pt[m])
+        ct = t.completed_q[j] if t.completed_q else None
+        if ct is not None:
+            if ct.shape[0] != m + 1:
+                raise ValueError(f"row {i}: a completed-Q target over {ct.shape[0] - 1} moves for an input with {m}")
+            cq[i, :m] = torch.from_numpy(ct[:m]).float()
+            cq_submit[i] = float(ct[m])
         lab = t.board[j]
         if lab.shape[0] != st.n_boards:
             raise ValueError(f"row {i}: board labels for {lab.shape[0]} boards, the input has {st.n_boards}")
@@ -1035,11 +1156,14 @@ def collate_rows(rows: Sequence[Row], net_cfg) -> tuple:
         flat_option=flat_option if bool(flat_rows.any()) else None,
         flat_group=flat_group if bool(flat_rows.any()) else None,
         flat_target=flat_target if bool(flat_rows.any()) else None,
+        completed_q=cq if has_cq else None,
+        completed_q_submit=cq_submit if has_cq else None,
     )
     return batch, targets
 
 
 __all__ = [
+    "COMPLETED_Q_SEARCHES",
     "LEAVE",
     "PROOF_CHANNEL_SIGNED_OFF",
     "FLAT_PRUNING",
@@ -1053,6 +1177,7 @@ __all__ = [
     "build_targets",
     "collate_rows",
     "effort_bin",
+    "emits_completed_q",
     "flat_boards",
     "flat_kl",
     "flat_policy_target",
@@ -1073,6 +1198,7 @@ __all__ = [
     "soft_policy",
     "square_targets",
     "steered_visits",
+    "submit_share_of",
     "target_differences",
     "turn_option",
     "wdl_of",

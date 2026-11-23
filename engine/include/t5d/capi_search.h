@@ -297,8 +297,8 @@ typedef struct t5d_search_params {
   double dirichlet_shaping_share; /* the shaped share of the total (0.5) */
   double dirichlet_shaping_cap;   /* the shaping's prior cap (0.01) */
   double root_policy_temperature; /* the root's softmax temperature, before the noise (1: off) */
-  /* D2's tree form (split T5D_SPLIT_TREE; read by no other split; refused with graph - spec
-     issue 301): its interaction gates and their readings, placeholders */
+  /* D2's tree form (split T5D_SPLIT_TREE; read by no other split; with graph only evaluated
+     nodes are graph nodes - spec 8.5): its interaction gates and their readings, placeholders */
   uint32_t tree_gates;            /* T5D_TREE_GATE_* mask (T5D_TREE_GATES_INTERACTION); 0: the
                                      network only at turn starts and the root */
   int32_t tree_still_to_move;     /* T5D_STILL_TO_MOVE_* */

@@ -535,6 +535,11 @@ SWITCHES = {
     "disp_far_edges": (dict(), dict(disp_far_edges=(3, 4, 6))),
     "disp_line_max": (dict(), dict(disp_line_max=4)),
     "disp_register_pairs": (dict(), dict(disp_register_pairs="shared")),
+    # B6's two per-axis tables beyond B15's exact classes, and ablation 2's layer-shared arm (the 2026-11-15 review).
+    "disp_far_axis (B6's per-axis tables) off -> on": (dict(disp_far_axis=False), dict()),
+    "disp_far_time_exact": (dict(), dict(disp_far_time_exact=2)),
+    "disp_far_timeline_max": (dict(), dict(disp_far_timeline_max=8)),
+    "disp_layer_shared": (dict(), dict(disp_layer_shared=True)),
     # B16 lives in the cached configuration only (its bins are checked to regroup in test_status.py).
     "status_key_bias (B16) off -> on": (dict(attn_scope="block_causal", status_key_bias=False), dict(attn_scope="block_causal")),
     "status_bias_per_layer": (dict(attn_scope="block_causal"), dict(attn_scope="block_causal", status_bias_per_layer=True)),
@@ -551,6 +556,9 @@ SWITCHES = {
 #: indexing: for these the test also checks that the switch regroups the batch's pairs - which
 #: pairs share a scalar.
 B15_PLACEHOLDERS = ("disp_far_edges", "disp_line_max", "disp_register_pairs")
+#: The per-axis far tables' buckets likewise change their tables' sizes: for these the test checks
+#: that the switch regroups the batch's board pairs - which pairs share a (time, timeline) cell.
+B15_FAR_BUCKETS = ("disp_far_time_exact", "disp_far_timeline_max")
 
 
 def _same_grouping(a: torch.Tensor, b: torch.Tensor) -> bool:
@@ -574,6 +582,9 @@ def test_every_switch_changes_the_network(name):
         rows = torch.arange(batch.n_tokens).expand(batch.batch_size, -1)
         ea, eb = (m.make_context(batch).structure.disp_entries(rows) for m in (model_a, model_b))
         assert not _same_grouping(ea, eb), f"{name} regroups no pair of the batch"
+    if name in B15_FAR_BUCKETS:
+        ca, cb = (m.make_context(batch).structure.disp_index.far_cells for m in (model_a, model_b))
+        assert not _same_grouping(ca, cb), f"{name} regroups no board pair of the batch"
 
 
 def test_same_grouping():
@@ -588,8 +599,11 @@ def test_same_grouping():
     ("module", "form"), [("typed_edges", "relative_cells"), ("displacement", "relative_cells"), *(("smolgen", f) for f in SMOLGEN_FORMS)]
 )
 def test_every_new_parameter_tensor_reaches_the_outputs(module, form):
+    """(The batch holds a position with boards far apart, as the test above: B15's two per-axis
+    far tables act only on pairs of boards beyond the exact classes, and ``synthetic_state(12,
+    6)`` alone has none.)"""
     model = _model(typed_edge_bias=True, board_pair_smolgen=True, typed_edge_directed=True, smolgen_form=form)
-    batch = collate([synthetic_state(12, 6)])
+    batch = collate([synthetic_state(12, 6), far_state(12)])
     base = model(batch)
     gen = torch.Generator().manual_seed(12)
     for name, p in getattr(model, module).named_parameters():

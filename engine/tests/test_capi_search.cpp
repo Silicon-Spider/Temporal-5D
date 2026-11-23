@@ -279,7 +279,6 @@ TEST(capi_search_step_api_reproduces_the_cpp_search) {
   // read back through the C API field for field.
   for (const int32_t split : {T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_FLAT, T5D_SPLIT_TREE}) {
     for (const int32_t graph : {0, 1}) {
-      if (split == T5D_SPLIT_TREE && graph != 0) continue;  // refused (spec issue 301)
       const int32_t source = graph != 0 ? T5D_UNCERTAINTY_ERROR_HEAD : T5D_UNCERTAINTY_CATEGORICAL;
       const Game g = variant_game("Standard - Two Timelines");
       t5d_search_params p = quick_params();
@@ -653,12 +652,15 @@ TEST(capi_search_errors_release_the_batch) {
     t5d_search_destroy(bad);
     bad = nullptr;
   }
-  // D2's tree form: refused under graph search (spec issue 301); its gates a
-  // mask of the five bits; its readings named constants.
+  // D2's tree form: taken under graph search (§8.5: only evaluated nodes are
+  // graph nodes - spec issue 301, settled); its gates a mask of the five bits;
+  // its readings named constants.
   p = quick_params();
   p.split = T5D_SPLIT_TREE;
   p.graph = 1;
-  CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_OK);
+  t5d_search_destroy(bad);
+  bad = nullptr;
   p.graph = 0;
   p.tree_gates = 32;
   CHECK_EQ(t5d_search_new(g.get(), 1, &p, &bad, nullptr), T5D_ERR_ARGUMENT);

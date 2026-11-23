@@ -82,11 +82,21 @@ static class map: entry = ``class_map[tile(query board, key board), code(query),
 then the layer's table at that entry. The table is per layer, so the structure must be made
 for its layer (``for_layer(h, layer)``) before any bias row is built. Section 15.2's B15
 row compares these rows with B14's score function (``flex.py``), which computes the same
-entries by arithmetic on the coordinates, and with the bias materialised by hand.
+entries by arithmetic on the coordinates, and with the bias materialised by hand. B6's two
+per-axis tables, which B15 keeps beyond its exact classes (``NetConfig.disp_far_axis``; the
+2026-11-15 review), are added in the same rows (``disp_rows``): the layer's far table - the two
+tables summed per cell - is laid out once per layer over the batch's board slots
+(``disp_far_pairs``, ``(B, H, Nb + 2, Nb + 2)``: a function of the board pair alone) and
+gathered by the two tokens' slots (``far_rows``), as B12's board-pair table is. Every path that
+takes B15 from ``bias_rows`` - the block-sparse, chunked, fused, explicit and dense paths, and
+the cached path's frozen rows and live pass - so carries them. Under ablation 2's layer-shared
+arm (``NetConfig.disp_layer_shared``) B15's tables are the same at every layer and are set when
+the structure is built: it then needs no layer for B15.
 
 **Per layer.** ``for_layer(h, layer)`` adds what one layer's structure needs: B12's table,
-generated from the layer's attention input ``h``, B15's table of layer ``layer``, and B16's
-when it is per layer. Masks never depend on the layer; ``mask_rows`` builds them without it.
+generated from the layer's attention input ``h``, B15's tables of layer ``layer`` (unless the
+layers share them), and B16's when it is per layer. Masks never depend on the layer;
+``mask_rows`` builds them without it.
 
 **Under the block-causal scope** (stage N3, ``scope.py``) the edge-derived masks and
 biases (B9's move graph, B10's relations head, B11's typed biases) and B12's smolgen
@@ -112,7 +122,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from .config import TYPED_RELATIONS, NetConfig
-from .displacement import DisplacementBias, DisplacementIndex, displacement_index, lookup
+from .displacement import DisplacementBias, DisplacementIndex, PairSides, displacement_index, lookup, lookup_sides, pair_sides
 from .smolgen import BoardPairSmolgen, SmolgenInputs, smolgen_inputs
 from .state import (
     RELATION_IDS,
@@ -131,6 +141,31 @@ MASK_ROLES: tuple[str, ...] = ("move_graph", "same_board", "same_square", "relat
 #: B11's index (``TYPED_RELATIONS``) of each relation id of ``state.RELATION_TYPES``; -1
 #: for ``move``, which is B9's mask and carries no typed bias.
 TYPED_INDEX: tuple[int, ...] = tuple(TYPED_RELATIONS.index(name) if name in TYPED_RELATIONS else -1 for name in RELATION_TYPES)
+
+#: The most bytes of B15's assembled bias rows a structure keeps from one layer to the next under
+#: ablation 2's layer-shared arm (``AttnStructure.disp_rows``; register G11, section 10.2: "A
+#: materialised (head, T, T) bias is 136 MB per position at 44 boards in BF16 - affordable once
+#: per forward for a layer-shared table"). The rows are kept as built - FP32, twice that figure:
+#: measured, one position at 44 boards keeps 250 MiB on the block-sparse path and 260 MiB on the
+#: chunked and one-block paths (every head's (T, T)), so a batch of seven fits; at 240 boards
+#: (7.5 GiB a position) about the first quarter of a position's rows is kept and the rest is
+#: assembled per layer, as without the memo: the arm runs wherever it ran before. An
+#: implementation choice (the spec gives no bound); 0 keeps nothing.
+DISP_ONCE_BYTES = 2 * 2**30
+
+_MISSING = object()
+
+
+def memoised(memo: dict, key, make):
+    """``make()``, computed on first use and kept in ``memo`` under ``key`` (None is a value like
+    any other). The per-forward memos (``AttnStructure.memo``, ``AttnContext.memo``; register G11,
+    section 10.2, requirement 1) hold what no layer changes - integer and boolean tensors and
+    Python values, never a tensor a gradient flows through - so a later layer, and a block
+    recomputed in the backward pass, reads what the first computed."""
+    value = memo.get(key, _MISSING)
+    if value is _MISSING:
+        value = memo[key] = make()
+    return value
 
 
 class TypedEdgeBias(nn.Module):
@@ -153,6 +188,8 @@ class Pairs:
     k: torch.Tensor
     t: torch.Tensor | None = None
     o: torch.Tensor | None = None
+    #: The spans already looked up (``span``): a list of pairs is one batch's, the same at every layer.
+    spans: dict = field(default_factory=dict, init=False, repr=False, compare=False)
 
     @classmethod
     def sorted(cls, b, q, k, t=None, o=None) -> Pairs:
@@ -161,10 +198,13 @@ class Pairs:
         return cls(b[order], q[order], k[order], pick(t), pick(o))
 
     def span(self, start: int, stop: int) -> slice:
-        """The pairs whose query lies in ``[start, stop)``."""
-        bounds = torch.tensor([start, stop], dtype=self.q.dtype, device=self.q.device)
-        lo, hi = torch.searchsorted(self.q, bounds).tolist()
-        return slice(lo, hi)
+        """The pairs whose query lies in ``[start, stop)`` (searched once per span, then kept)."""
+        found = self.spans.get((start, stop))
+        if found is None:
+            bounds = torch.tensor([start, stop], dtype=self.q.dtype, device=self.q.device)
+            lo, hi = torch.searchsorted(self.q, bounds).tolist()
+            found = self.spans[(start, stop)] = slice(lo, hi)
+        return found
 
     def __len__(self) -> int:
         return int(self.q.shape[0])
@@ -260,6 +300,13 @@ class AttnStructure:
     disp: DisplacementBias | None = None  # B15
     disp_index: DisplacementIndex | None = None  # B15's per-batch slots, codes and tiles
     disp_table: torch.Tensor | None = None  # (H, entries + 1): this layer's B15 table (set by ``for_layer``)
+    #: (H, cells + 1): this layer's per-axis far table - B6's two tables summed per (time bucket,
+    #: timeline bucket) cell, the zero cell last - and (B, H, Nb + 2, Nb + 2): the same at each
+    #: (query slot, key slot)'s far cell (``DisplacementIndex.far_cells``). Set with ``disp_table``
+    #: (by ``for_layer``, or when built under the layer-shared arm); None without the per-axis
+    #: tables. Read only while ``disp`` is set.
+    disp_far_table: torch.Tensor | None = None
+    disp_far_pairs: torch.Tensor | None = None
     status: StatusKeyBias | None = None  # B16 (the block-causal scope only)
     status_index: StatusIndex | None = None  # B16's per-token status entries and live rows
     #: (H, statuses + 1): B16's table - shared by every layer (set when built) or this layer's
@@ -268,6 +315,14 @@ class AttnStructure:
     #: Block-sparse plans by (role, block, kernel keys, fraction), shared by every layer's
     #: copy of the structure (``for_layer`` copies the reference).
     plans: dict = field(default_factory=dict, repr=False)
+    #: What no layer changes, built on first use and read by every later layer (register G11,
+    #: section 10.2, requirement 1; ``memoised``): the head groups, each role's uncovered and free
+    #: registers, and - for a caller that names its rows and keys (``bias_rows(key=...)``) - the
+    #: sides of B15's lookups (``displacement.PairSides``); under ablation 2's layer-shared arm,
+    #: at inference, B15's assembled rows too (``disp_rows``). ``for_layer`` and
+    #: ``for_frozen_rows`` hand it to their copies - they change nothing it holds; any other copy
+    #: (``dataclasses.replace``) starts an empty one.
+    memo: dict = field(default_factory=dict, init=False, repr=False, compare=False)
 
     # -- what the attention paths ask --
 
@@ -282,19 +337,34 @@ class AttnStructure:
     @property
     def layer_dependent(self) -> bool:
         """Whether the bias rows differ by layer: B12's table (from each layer's input), B15's
-        table (one per layer) and B16's when it is per layer."""
-        return self.smolgen is not None or self.disp is not None or (self.status is not None and self.status.per_layer)
+        tables (one per layer - unless the layers share them, ablation 2's arm) and B16's when it
+        is per layer."""
+        disp = self.disp is not None and self.disp.per_layer
+        return self.smolgen is not None or disp or (self.status is not None and self.status.per_layer)
 
     def head_groups(self) -> list[tuple[str, torch.Tensor]]:
-        """Heads grouped by role, in order of first appearance: ``[(role, head indices)]``."""
-        roles = list(dict.fromkeys(self.head_roles))
-        device = self.kind.device
-        return [(r, torch.tensor([h for h, x in enumerate(self.head_roles) if x == r], device=device)) for r in roles]
+        """Heads grouped by role, in order of first appearance: ``[(role, head indices)]`` (built
+        once per structure: the same index tensors at every layer)."""
+
+        def build() -> list[tuple[str, torch.Tensor]]:
+            roles = list(dict.fromkeys(self.head_roles))
+            device = self.kind.device
+            return [(r, torch.tensor([h for h, x in enumerate(self.head_roles) if x == r], device=device)) for r in roles]
+
+        return list(memoised(self.memo, "head_groups", build))
+
+    def _carrying_memo(self, **changes) -> AttnStructure:
+        """A copy with ``changes`` that keeps this structure's memo (``for_layer``,
+        ``for_frozen_rows``: neither changes what the memo holds)."""
+        out = replace(self, **changes)
+        out.memo = self.memo
+        return out
 
     def for_layer(self, h: torch.Tensor | None, layer: int) -> AttnStructure:
         """This structure for layer ``layer``, whose attention input is ``h`` ``(B, L, d)``:
-        B12's board-pair table generated from ``h`` (which only B12 needs), B15's table of
-        that layer and B16's when it is per layer."""
+        B12's board-pair table generated from ``h`` (which only B12 needs), B15's tables of
+        that layer (the layer-shared arm's are set when the structure is built) and B16's when
+        it is per layer."""
         changes: dict = {}
         if self.smolgen is not None:
             if h is None:
@@ -303,17 +373,17 @@ class AttnStructure:
             if self.smolgen_rows is not None:
                 table = table * self.smolgen_rows[:, None, :, None].to(table.dtype)
             changes["pair_table"] = F.pad(table, (0, 1, 0, 1))
-        if self.disp is not None:
-            changes["disp_table"] = self.disp.layer_table(layer)
+        if self.disp is not None and self.disp.per_layer:
+            changes.update(displacement_tables(self.disp, self.disp_index, layer))
         if self.status is not None and self.status.per_layer:
             changes["status_table"] = self.status.layer_table(layer)
-        return replace(self, **changes) if changes else self
+        return self._carrying_memo(**changes) if changes else self
 
     def for_frozen_rows(self) -> AttnStructure:
         """This structure with B12 and B16 left out - what a frozen board's rows carry under the
         block-causal scope (``cache.py``), where both bias live rows only."""
-        return replace(
-            self, smolgen=None, smolgen_in=None, pair_table=None, smolgen_rows=None, status=None, status_index=None, status_table=None
+        return self._carrying_memo(
+            smolgen=None, smolgen_in=None, pair_table=None, smolgen_rows=None, status=None, status_index=None, status_table=None
         )
 
     # -- which queries a masked role's relation covers --
@@ -322,10 +392,16 @@ class AttnStructure:
         """``(B, L)`` bool: the register tokens that a masked role's relation does not cover
         as queries - they follow ``masked_head_registers``. The same-board relation covers
         per-board registers (they are on their board) under ``same_board_registers=
-        "own_board"``; no relation covers a global register."""
-        if role == "same_board" and self.same_board_registers == "own_board":
-            return self.kind == TOKEN_GLOBAL_REGISTER
-        return (self.kind == TOKEN_BOARD_REGISTER) | (self.kind == TOKEN_GLOBAL_REGISTER)
+        "own_board"``; no relation covers a global register. Built once per role and structure
+        (the token kinds are the batch's, the same at every layer)."""
+        own_board = role == "same_board" and self.same_board_registers == "own_board"
+
+        def build() -> torch.Tensor:
+            if own_board:
+                return self.kind == TOKEN_GLOBAL_REGISTER
+            return (self.kind == TOKEN_BOARD_REGISTER) | (self.kind == TOKEN_GLOBAL_REGISTER)
+
+        return memoised(self.memo, ("uncovered", own_board), build)
 
     def free_rows(self, role: str) -> torch.Tensor | None:
         """``(B, L)`` bool: the queries that read every valid key on a masked role's heads -
@@ -334,7 +410,7 @@ class AttnStructure:
         if self.registers != "read":
             return None
         free = self.uncovered_registers(role)
-        return free if bool(free.any()) else None
+        return free if memoised(self.memo, ("any_free", role), lambda: bool(free.any())) else None
 
     # -- rows --
 
@@ -469,25 +545,33 @@ class AttnStructure:
         heads: torch.Tensor | None = None,
         cols: torch.Tensor | None = None,
         cols_valid: torch.Tensor | None = None,
+        key=None,
     ) -> torch.Tensor | None:
         """The additive bias ``(B, Hg, c, Lk)`` of the queries ``[start, stop)`` on the heads
         ``heads`` (every head when None), over every key (``Lk = L``) or over the keys
         ``cols`` ``(B, K)`` (``Lk = K``; ``cols_valid`` marks the real entries); None when
         nothing adds a bias. Over a key selection, a typed pair whose key is not selected
-        is left out - its key is masked for its query."""
-        bsz = self.kind.shape[0]
-        rows = torch.arange(start, stop, device=self.kind.device).expand(bsz, stop - start)
-        return self._bias(rows, None, (start, stop), heads, cols, cols_valid)
+        is left out - its key is masked for its query.
+
+        ``key`` (hashable; None: nothing is kept): the caller's name for this selection of rows,
+        keys and heads, promising that it asks for the same one at every layer under the same
+        name - then what no layer changes is built once and kept in ``memo`` (the sides of B15's
+        lookups; under the layer-shared arm, at inference, B15's rows themselves: ``disp_rows``).
+        The result is the same tensor, bit for bit, with or without it; a caller must not write
+        into it."""
+        return self._bias(None, None, (start, stop), heads, cols, cols_valid, key)
 
     def bias_rows_at(
-        self, rows: torch.Tensor, rows_real: torch.Tensor | None = None, heads: torch.Tensor | None = None
+        self, rows: torch.Tensor, rows_real: torch.Tensor | None = None, heads: torch.Tensor | None = None, key=None
     ) -> torch.Tensor | None:
         """The additive bias ``(B, Hg, n, L)`` of the queries ``rows`` ``(B, n)`` (each
         position's own rows; ``rows_real`` marks the real entries, the others are computed
-        and meant to be discarded)."""
-        return self._bias(rows, rows_real, None, heads, None, None)
+        and meant to be discarded). ``key``: as ``bias_rows``'s."""
+        return self._bias(rows, rows_real, None, heads, None, None, key)
 
-    def _bias(self, rows, rows_real, span, heads, cols, cols_valid) -> torch.Tensor | None:
+    def _bias(self, rows, rows_real, span, heads, cols, cols_valid, key=None) -> torch.Tensor | None:
+        """``rows`` ``(B, n)``, or None with ``span`` ``(start, stop)``: the span's rows are then
+        made only for the terms that gather by them (B12, B16)."""
         if self.smolgen is not None and self.pair_table is None:
             raise RuntimeError("this structure's board-pair smolgen needs the layer input: use AttnContext.for_layer")
         if self.disp is not None and self.disp_table is None:
@@ -496,22 +580,27 @@ class AttnStructure:
             raise RuntimeError("B16's status table is per layer here: use AttnContext.for_layer to choose the layer")
         bsz, length = self.kind.shape
         n_heads = len(self.head_roles) if heads is None else int(heads.shape[0])
-        n_rows = rows.shape[1]
-        key_board = self.board_idx if cols is None else self.board_idx.gather(1, cols)
-        lk = key_board.shape[1]
+        if rows is None and (self.pair_table is not None or (self.status is not None and self.status_index.any_frozen)):
+            rows = torch.arange(span[0], span[1], device=self.kind.device).expand(bsz, span[1] - span[0])
+        n_rows = span[1] - span[0] if rows is None else rows.shape[1]
+        lk = length if cols is None else cols.shape[1]
         bias = None
+        #: Whether ``bias`` is a tensor the memo holds (B15's kept rows): never written in place.
+        kept = False
         if self.pair_table is not None:
+            key_board = self.board_idx if cols is None else self.board_idx.gather(1, cols)
             table = self.pair_table if heads is None else self.pair_table[:, heads]
             slots = table.shape[-1]
             q_board = self.board_idx.gather(1, rows)
             picked = table.gather(2, q_board[:, None, :, None].expand(bsz, n_heads, n_rows, slots))
             bias = picked.gather(3, key_board[:, None, None, :].expand(bsz, n_heads, n_rows, lk))
         if self.disp is not None:
-            disp = self.disp_rows(rows, cols, heads)
+            disp = self.disp_rows(rows, cols, heads, key=key, span=span if rows is None else None)
+            kept = bias is None and key is not None and ("disp", key) in self.memo
             bias = disp if bias is None else bias + disp
         if self.status is not None and self.status_index.any_frozen:
             status = self.status_rows(rows, cols, heads)
-            bias = status if bias is None else bias + status
+            bias, kept = (status if bias is None else bias + status), False
         if self.typed is not None:
             typed = self.typed
             if span is not None:
@@ -532,7 +621,10 @@ class AttnStructure:
             values = table[:, t, o].float()  # (Hg, n)
             head = torch.arange(n_heads, device=b.device)[:, None]
             index = ((b[None, :] * n_heads + head) * n_rows + row[None, :]) * lk + col[None, :]
-            bias = values.new_zeros(bsz, n_heads, n_rows, lk) if bias is None else bias.contiguous()
+            if bias is None:
+                bias = values.new_zeros(bsz, n_heads, n_rows, lk)
+            else:  # B15's kept rows are every layer's: a copy takes the typed scalars, never they
+                bias = bias.clone(memory_format=torch.contiguous_format) if kept else bias.contiguous()
             # Accumulated in place into these fresh rows (no gradient needs their previous
             # values); a pair related several ways sums its types' scalars.
             bias.view(-1).index_put_((index.reshape(-1),), values.reshape(-1), accumulate=True)
@@ -544,11 +636,82 @@ class AttnStructure:
         board tile, the query's code, the key's code) - the same at every layer."""
         return lookup(self.disp_index, self.disp.class_map, rows, cols)
 
-    def disp_rows(self, rows: torch.Tensor, cols: torch.Tensor | None = None, heads: torch.Tensor | None = None) -> torch.Tensor:
-        """B15's bias ``(B, Hg, n, Lk)`` of the queries ``rows`` over the keys ``cols`` (every
-        key when None) on the heads ``heads`` (every head when None), from this layer's table."""
+    def disp_sides(self, rows: torch.Tensor | None, cols: torch.Tensor | None = None, span=None, key=None) -> PairSides:
+        """The sides of B15's lookups (``displacement.PairSides``) for the queries ``rows`` ``(B,
+        n)`` - or the row span ``span`` - and the keys ``cols``: built once and kept under the
+        caller's ``key`` (``bias_rows``), else built for this call."""
+        if key is None:
+            return pair_sides(self.disp_index, rows, cols, span)
+        return memoised(self.memo, ("sides", key), lambda: pair_sides(self.disp_index, rows, cols, span))
+
+    def disp_rows(
+        self, rows: torch.Tensor | None, cols: torch.Tensor | None = None, heads: torch.Tensor | None = None, key=None, span=None
+    ) -> torch.Tensor:
+        """B15's bias ``(B, Hg, n, Lk)`` of the queries ``rows`` - or, with ``rows`` None, of the
+        row span ``span`` ``(start, stop)`` - over the keys ``cols`` (every key when None) on the
+        heads ``heads`` (every head when None), from this layer's table - and, with the per-axis
+        tables, plus their terms (``far_rows``): ``main + (time + timeline)``, the order the score
+        function (``flex.py``) adds them in.
+
+        ``key`` (``bias_rows``'s): the lookups' sides are built once (``disp_sides``). Under
+        ablation 2's layer-shared arm the tables are every layer's, so the rows are too: at
+        inference they are assembled once per forward and kept (register G11; section 10.2,
+        requirement 2: a materialised bias is "affordable once per forward for a layer-shared
+        table ... not sixteen times over, once per layer") - FP32, as built, so that every path
+        adds and casts them exactly as it did; up to ``DISP_ONCE_BYTES`` in all, beyond which a
+        selection is assembled at every layer as before. Never under autograd: a kept tensor would
+        be one node of the graph for every layer, and a block recomputed in the backward pass
+        (``attention._maybe_recompute``) must run what its forward ran."""
+        once = key is not None and not self.disp.per_layer and not torch.is_grad_enabled()
+        if once:
+            kept = self.memo.get(("disp", key))
+            if kept is not None:
+                return kept
+        sides = self.disp_sides(rows, cols, span, key)
         table = self.disp_table if heads is None else self.disp_table[heads]
-        return table[:, self.disp_entries(rows, cols)].transpose(0, 1)
+        out = table[:, lookup_sides(self.disp_index, self.disp.class_map, sides)].transpose(0, 1)
+        if self.disp_far_pairs is not None:
+            # Added whether or not the batch holds a far pair: every one of B15's tensors is
+            # then in the graph of every forward (a zero gradient, never a missing one).
+            out = out + self._far(sides, heads)
+        if once:
+            held = self.memo.get("disp_bytes", 0) + out.numel() * out.element_size()
+            if held <= DISP_ONCE_BYTES:
+                self.memo["disp_bytes"], self.memo[("disp", key)] = held, out
+        return out
+
+    def far_rows(self, rows: torch.Tensor, cols: torch.Tensor | None = None, heads: torch.Tensor | None = None) -> torch.Tensor:
+        """The per-axis terms ``(B, Hg, n, Lk)`` of the queries ``rows`` ``(B, n)`` over the keys
+        ``cols`` (every key when None) on the heads ``heads`` (every head when None): this layer's
+        far table at each pair's far cell - B6's Delta-time scalar plus its Delta-timeline scalar
+        for two board tokens on boards beyond the exact classes, zero for every other pair. Read
+        from ``disp_far_pairs`` by the two tokens' slots (the term depends on the board pair
+        alone), as B12's board-pair table is."""
+        return self._far(pair_sides(self.disp_index, rows, cols), heads)
+
+    def _far(self, sides: PairSides, heads: torch.Tensor | None) -> torch.Tensor:
+        """``far_rows`` for sides already built. Under autograd: two gathers, as built - by the
+        queries' slots, then by the keys' - so that the far tables' gradients are accumulated as
+        they always were. At inference: one indexing operation, which reads the same elements."""
+        if torch.is_grad_enabled():
+            pairs = self.disp_far_pairs if heads is None else self.disp_far_pairs[:, heads]
+            bsz, n_heads, slots, _ = pairs.shape
+            n_rows, lk = sides.slot_q.shape[1], sides.slot_k.shape[1]
+            picked = pairs.gather(2, sides.slot_q[:, None, :, None].expand(bsz, n_heads, n_rows, slots))
+            return picked.gather(3, sides.slot_k[:, None, None, :].expand(bsz, n_heads, n_rows, lk))
+        return self.disp_far_pairs[sides.b4, self._heads4(heads), sides.q4, sides.k4]
+
+    def _heads4(self, heads: torch.Tensor | None) -> torch.Tensor:
+        """``heads`` (every head when None) as a ``(1, Hg, 1, 1)`` index, laid out once per head
+        group: the groups' index tensors are the structure's own (``head_groups``), the same
+        objects at every layer, so they are recognised by identity."""
+        if heads is None:
+            make = lambda: torch.arange(len(self.head_roles), device=self.kind.device)[None, :, None, None]  # noqa: E731
+            return memoised(self.memo, "heads4", make)
+        entry = self.memo.get(("heads4", id(heads)))
+        if entry is None or entry[0] is not heads:  # the memo holds the tensor, so its id cannot be reused
+            entry = self.memo[("heads4", id(heads))] = (heads, heads[None, :, None, None])
+        return entry[1]
 
     def status_rows(self, rows: torch.Tensor, cols: torch.Tensor | None = None, heads: torch.Tensor | None = None) -> torch.Tensor:
         """B16's bias ``(B, Hg, n, Lk)`` of the queries ``rows`` ``(B, n)`` over the keys ``cols``
@@ -569,6 +732,19 @@ class AttnStructure:
     def dense_bias(self) -> torch.Tensor | None:
         """Every row's bias ``(B, H, L, L)`` (small inputs; tests)."""
         return self.bias_rows(0, self.kind.shape[1])
+
+
+def displacement_tables(disp: DisplacementBias, index: DisplacementIndex, layer: int) -> dict[str, torch.Tensor]:
+    """B15's tables of layer ``layer`` as ``AttnStructure`` fields: ``disp_table``, and - with the
+    per-axis tables - ``disp_far_table`` and ``disp_far_pairs``, the far table laid out over the
+    batch's (query slot, key slot) pairs. Under the layer-shared arm any ``layer`` gives the one
+    table."""
+    out = {"disp_table": disp.layer_table(layer)}
+    far_table = disp.layer_far_table(layer)
+    if far_table is not None:
+        out["disp_far_table"] = far_table
+        out["disp_far_pairs"] = far_table[:, index.far_cells].transpose(0, 1)
+    return out
 
 
 def board_coordinates(batch: Batch, coords: torch.Tensor) -> torch.Tensor:
@@ -622,6 +798,10 @@ def build_structure(
         typed = typed_pairs(batch, cfg.typed_edge_directed).live_queries(live)
         table = typed_edges.table
     ph = board_coordinates(batch, coords).round() if smolgen is not None else None
+    disp_index = None if displacement is None else displacement_index(batch, displacement.geom, displacement.far)
+    # Ablation 2's layer-shared arm: B15's tables are every layer's, so they are set here, once
+    # (as B16's shared table is, below), and the structure needs no ``for_layer`` for B15.
+    shared = {} if displacement is None or displacement.per_layer else displacement_tables(displacement, disp_index, 0)
     return AttnStructure(
         head_roles=roles,
         registers=cfg.masked_head_registers,
@@ -638,7 +818,8 @@ def build_structure(
         smolgen_in=None if smolgen is None else smolgen_inputs(batch, cfg, ph),
         smolgen_rows=live_boards if smolgen is not None else None,
         disp=displacement,
-        disp_index=None if displacement is None else displacement_index(batch, displacement.geom),
+        disp_index=disp_index,
+        **shared,
         status=status,
         status_index=None if status is None else status_index(batch, status, live),
         status_table=None if status is None or status.per_layer else status.layer_table(0),
