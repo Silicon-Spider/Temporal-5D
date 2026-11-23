@@ -677,10 +677,18 @@ TimedRun run_timed(Search& search, Evaluator& evaluator, TimeManager& tm, const 
   // The decision ends however the run returns (the E11 review's S2): a slice
   // that throws ends it too, the manager not left active.
   try {
-    for (;;) {
+    for (int idle = 0;;) {
       const double elapsed = clock != nullptr ? clock->now() - t0 : std::numeric_limits<double>::quiet_NaN();
       out.verdict = tm.check(search, elapsed);
       if (out.verdict.stop != TimeStop::None) break;
+      // The caller's deadline passed (the E11 review's S3): stop, as at
+      // max_seconds' - the slices would run under it, settle nothing, and a
+      // root with no visited child would hold the exception open for ever.
+      if (held && std::chrono::steady_clock::now() >= *held) {
+        out.search_stop = StopReason::Deadline;
+        out.verdict.stop = TimeStop::Search;
+        break;
+      }
       if (cap) slice.seconds = std::max(std::chrono::duration<double>(time_left(*cap)).count(), 1e-6);
       // The exception (a move needs a visit): until a root child has one, the
       // slice runs without the hard bound inside it, so that the root's listing
@@ -696,6 +704,19 @@ TimedRun run_timed(Search& search, Evaluator& evaluator, TimeManager& tm, const 
                                ? TimeStop::Solved
                                : TimeStop::Search;
         break;
+      }
+      // No progress (S3): a forced slice after which no root child has a
+      // visit - one that leaves a root with no edge as it found it, or
+      // kNoProgressSlices of them in a row.
+      if (forced) {
+        const std::vector<RootChild> after = search.root_children();
+        if (std::none_of(after.begin(), after.end(), [](const RootChild& c) { return c.visits > 0; })) {
+          if ((children.empty() && after.empty()) || ++idle >= kNoProgressSlices) {
+            out.search_stop = StopReason::Exhausted;
+            out.verdict.stop = TimeStop::Search;
+            break;
+          }
+        }
       }
     }
   } catch (...) {

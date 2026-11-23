@@ -677,6 +677,49 @@ def test_run_timed_search_returns_on_a_carried_root_waiting_to_be_relisted():
         search.close()
 
 
+@pytest.mark.parametrize("model", [False, True])
+def test_run_timed_search_returns_once_the_callers_deadline_has_passed(model):
+    """S3 in Python (the engine's p1 setup): the caller's deadline already passed - the run stops
+    between slices (``TIME_STOP_SEARCH``, "deadline") before running one under it, and restores it."""
+    params = search_params(split=T5D_SPLIT_FLAT, generator_nodes=1, hunt=0, settling=0, asset_map=0)
+    with Game.variant("Standard") as g, Search(g, params=params) as s, TimeManager() as tm:
+        s.set_deadline(1e-9)
+        held, _ = s.deadline()
+        time.sleep(0.01)
+        run = run_timed_search(s, UniformEvaluator(), tm, remaining=5.0, model_clock=model)
+        assert run.verdict.stop == T5D_TIME_STOP_SEARCH and run.search_stop == "deadline" and run.slices == 0
+        assert s.deadline()[0] == held
+
+
+def test_run_timed_search_gives_up_on_slices_that_make_no_progress(monkeypatch):
+    """S3's no-progress guard in Python (the engine's kNoProgressSlices): forced slices that leave no
+    root child visited - a root with no edge that gains none at once, or ``NO_PROGRESS_SLICES`` in
+    a row - end the run (``TIME_STOP_SEARCH``, "exhausted") rather than holding the exception open.
+    The slices are stubbed: no real root stays unvisited under them."""
+    import types
+
+    import t5d.engine.evaluator as evaluator_module
+    from t5d.engine.evaluator import NO_PROGRESS_SLICES
+
+    def stub_serve(driver, evaluator, *, batch_size):
+        return ServeStats()
+
+    class StubDriver:
+        def __init__(self, search, **kw):
+            self.stop = "playouts"
+
+    monkeypatch.setattr(evaluator_module, "serve", stub_serve)
+    monkeypatch.setattr(evaluator_module, "CStepDriver", StubDriver)
+    monkeypatch.setattr(evaluator_module, "start_epoch", lambda *a, **k: None)
+    for children, slices in (([], 1), ([types.SimpleNamespace(visits=0)], NO_PROGRESS_SLICES)):
+        with Game.variant("Standard") as g, Search(g, params=search_params(hunt=0, settling=0)) as s, TimeManager() as tm:
+            with monkeypatch.context() as m:
+                m.setattr(Search, "children", lambda self, children=children: list(children))
+                run = run_timed_search(s, UniformEvaluator(), tm, remaining=600.0, model_clock=True)
+        assert run.verdict.stop == T5D_TIME_STOP_SEARCH and run.search_stop == "exhausted" and run.slices == slices
+    assert NO_PROGRESS_SLICES == 16  # the placeholder (issue 482), the engine's kNoProgressSlices
+
+
 def _check_position_search(**kw):
     """White in check (a rook on e2), the expansion settling nothing beyond its cheap tiers and no
     lazy verification: root children left unknown."""

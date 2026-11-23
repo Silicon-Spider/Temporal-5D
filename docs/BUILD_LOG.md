@@ -8568,6 +8568,19 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     injected path's first step - which `Search` does not expose (`RootChild::lo` is -1 for a child
     with no node): not local. Open, for the proof channel's sign-off (H23) and, for the unclocked
     throw, the main loop (decision 13's family would end it unscored too).
+482. **When run_timed gives up on the exception "a move needs a visit"** (the E11 review's S3;
+    §8.6 has the hard bound and no exception). The forced slices - before any root child has a
+    visit - run on whatever the time manager says, so a root that cannot get a visit held the run
+    open for ever (the correctness pass's probe: a caller's deadline already passed cut the root's
+    listing; some 200M playouts in 20 s, no child). Built: `run_timed` (and Python's
+    `run_timed_search`) stops between slices once the caller's persistent deadline has passed -
+    `TimeStop::Search`, `StopReason::Deadline`, as at `max_seconds`' - and where its forced slices
+    make no progress: one that leaves a root with no edge as it found it, or `kNoProgressSlices`
+    in a row with no root child visited (`StopReason::Exhausted`). `kNoProgressSlices` (16;
+    Python's `NO_PROGRESS_SLICES`) is a PLACEHOLDER, well above the two evaluator calls a visit
+    takes from an unevaluated root (issue 458). No game reaches the no-progress guard as built (a
+    root that cannot be listed is stuck, and its run stops Finished first; a listing a deadline
+    cuts stops at that deadline): it is a guard, tested in Python with stubbed slices.
 600. **Issue 535 resolved - D2's flat form, a node's creation and a re-root made
     exception-safe under an allocation failure - and two defects of its kind found beside
     it, fixed with it** (section 15.4's invariants under failure: visit counts consistent,
@@ -11992,3 +12005,5 @@ entry changes in the same edit as its code, which the standing rule defers to up
   - **S2**: Python's forced-slice condition the engine's; `t5d_search_deadline` and
     `t5d_search_set_deadline_at` (appended) so that `run_timed_search` restores the caller's
     deadline exactly; `tm.end` however the run returns (Python and C++). probe_py1 adopted.
+  - **S3**: `run_timed` stops once the caller's deadline has passed, and on forced slices that make
+    no progress (issue 482); mirrored in Python. The correctness pass's p1wall/p1model adopted.

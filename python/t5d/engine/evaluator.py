@@ -826,6 +826,12 @@ class TimedSearch:
     slices: int = 0
 
 
+#: Slices before any root child has a visit, in a row, that leave none visited before
+#: ``run_timed_search`` gives up on the exception (a move needs a visit; the E11 review's S3) - the
+#: engine's ``kNoProgressSlices``, a placeholder (build-log spec issue 482).
+NO_PROGRESS_SLICES = 16
+
+
 def run_timed_search(
     search: Search,
     evaluator: Evaluator,
@@ -877,22 +883,31 @@ def run_timed_search(
     # search's deadline - the earlier of the two; a 0 s bound (a clock at the overhead) is a
     # deadline already passed, never 0 - which means none (the review's L3).
     held, held_left = search.deadline()
+    held_end = time.perf_counter() + held_left  # when the caller's deadline passes (inf: never)
     bound = held
     if steady and max(plan.hard_seconds, 1e-9) < held_left:
         search.set_deadline(max(plan.hard_seconds, 1e-9))
         bound, _ = search.deadline()
     lifted = False  # the forced slice's: run under the caller's deadline, not the bound (M1)
+    idle = 0  # forced slices in a row that left no root child visited (S3)
     try:
         while True:
             verdict = tm.check(search, math.nan if model_clock else now() - t0)
             if verdict.stop != T5D_TIME_STOP_NONE:
                 break
+            if time.perf_counter() >= held_end:
+                # The caller's deadline passed (S3): stop, as the engine's run_timed does.
+                out_stop = "deadline"
+                verdict = replace(verdict, stop=T5D_TIME_STOP_SEARCH)
+                break
+            found = search.children()
+            edgeless = not found
+            forced = not any(c.visits > 0 for c in found)  # the engine's condition (S2)
             if steady:
                 # The exception (a move needs a visit): until a root child has one, the slice runs
                 # without the hard bound inside it, so that the root's listing and classification
                 # complete (the review's M1) - the engine's run_timed's condition, no root child
                 # visited, and its deadline, the caller's (S2).
-                forced = not any(c.visits > 0 for c in search.children())
                 if forced != lifted:
                     search.set_deadline_at(held if forced else bound)
                     lifted = forced
@@ -910,6 +925,16 @@ def run_timed_search(
                 out_stop = driver.stop
                 verdict = replace(verdict, stop=T5D_TIME_STOP_SEARCH)
                 break
+            # No progress (S3): a forced slice after which no root child has a visit - one that
+            # leaves a root with no edge as it found it, or NO_PROGRESS_SLICES of them in a row.
+            if forced:
+                after = search.children()
+                if not any(c.visits > 0 for c in after):
+                    idle += 1
+                    if (edgeless and not after) or idle >= NO_PROGRESS_SLICES:
+                        out_stop = "exhausted"
+                        verdict = replace(verdict, stop=T5D_TIME_STOP_SEARCH)
+                        break
     finally:
         search.set_deadline_at(held)
         tm.end(search)

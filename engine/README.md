@@ -4661,7 +4661,11 @@ quiescence (issue 467). One deadline mechanism serves the time manager and issue
 1e9 s or more none, NaN and negatives refused); `Search::set_deadline` persistent, `run()` giving
 its batches the earlier of it and its own seconds and restoring it on return; `run_timed`
 restoring the caller's deadline (Python's `run_timed_search` too, exactly - S2) and taking a
-game's `max_seconds` as its slices' seconds. Match
+game's `max_seconds` as its slices' seconds; the caller's deadline passed stops it between slices
+as `max_seconds`' does, and slices before any root child has a visit that make no progress - a
+root with no edge left so, or `kNoProgressSlices` (16, a placeholder - issue 482) in a row with
+none visited - stop it too (`TimeStop::Search`, `StopReason::Deadline` and `Exhausted`; the E11
+review's S3; Python's the same). Match
 play's steps after the search sit inside the bound (§8.6's post-search scan "inside the hard
 bound"; the review's H1): the chosen move's exact verification gets what the bound leaves, and
 where it is cut or the move illegal the most visited child known legal is played. Two

@@ -581,10 +581,21 @@ class WallClock final : public Clock {
 };
 
 /// One timed decision's result.
+/// Stage E11 (the E11 review's S3): slices before any root child has a visit,
+/// in a row, that leave none visited before run_timed gives up on the
+/// exception (a move needs a visit) - TimeStop::Search, StopReason::Exhausted.
+/// From an unevaluated root a visit takes up to two evaluator calls (issue
+/// 458); a PLACEHOLDER well above that (build-log spec issue 482). Python's
+/// evaluator.NO_PROGRESS_SLICES is the same.
+inline constexpr int kNoProgressSlices = 16;
+
 struct TimedRun {
   TimePlan plan;
   TimeVerdict verdict;                         ///< the last check's (its stop: why it ended)
-  StopReason search_stop = StopReason::Playouts;  ///< the search's own stop, where verdict.stop is Search
+  /// The search's own stop, where verdict.stop is Search - or run_timed's:
+  /// Deadline once the caller's deadline has passed, Exhausted where its
+  /// slices made no progress (the E11 review's S3).
+  StopReason search_stop = StopReason::Playouts;
   std::uint64_t evaluations = 0;
   std::uint64_t playouts = 0;
   std::uint64_t batches = 0;
@@ -602,7 +613,15 @@ struct TimedRun {
 /// move needs a visit; the E11 review's M1). `max_seconds` (0: none; THE
 /// DEADLINE in t5d/mcts.hpp): the caller's own limit from the call - a game's
 /// safety stop - each slice's Limits::seconds, so that the search stops at it
-/// (StopReason::Deadline, TimeStop::Search).
+/// (StopReason::Deadline, TimeStop::Search). The caller's persistent deadline
+/// passed stops it between slices the same way (the E11 review's S3: its
+/// slices would run under it and settle nothing). And it stops where its
+/// slices make no progress (TimeStop::Search, StopReason::Exhausted): a slice
+/// before any root child has a visit that leaves a root with no edge as it
+/// found it, or kNoProgressSlices such slices in a row with no root child
+/// visited - a root that cannot get a visit would otherwise hold the
+/// exception (a move needs a visit) open for ever. The decision is ended
+/// (tm.end) however the run returns, a throw included (S2).
 TimedRun run_timed(Search& search, Evaluator& evaluator, TimeManager& tm, const TimeContext& ctx,
                    Clock* clock = nullptr, double max_seconds = 0);
 

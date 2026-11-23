@@ -1661,6 +1661,47 @@ TEST(timeman_run_timed_restores_the_deadline_when_the_evaluator_throws) {
   CHECK(!tm.in_decision());  // the decision ended however the run returned (the E11 review's S2)
 }
 
+TEST(timeman_run_timed_returns_once_the_callers_deadline_has_passed) {
+  // The E11 review's S3 (the correctness pass's p1wall and p1model, adopted):
+  // a flat root whose fallback listing the caller's persistent deadline - one
+  // already passed - cuts. The forced slice ran under it, the root was never
+  // re-listed and the time manager never stopped (no visited child): run_timed
+  // ran on for ever, on the wall clock and the model clock. It now stops
+  // between slices once that deadline has passed - TimeStop::Search,
+  // StopReason::Deadline - as at max_seconds', and restores it. A watchdog
+  // ends the process if it does not return.
+  for (const bool wall : {true, false}) {
+    SearchParams sp = quiet_params();
+    sp.split = TurnSplit::Flat;
+    sp.generator_nodes = 1;
+    Search search(variant("Standard"), sp);
+    const auto passed = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+    search.set_deadline(passed);
+    const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+    TimeManager tm;
+    TimeContext ctx;
+    ctx.remaining_seconds = 5;
+    WallClock clock;
+    const auto done = std::make_shared<std::atomic<bool>>(false);
+    std::thread([done] {
+      const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+      while (std::chrono::steady_clock::now() < end) {
+        if (done->load()) return;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      }
+      std::fprintf(stderr, "timeman_run_timed_returns_once_the_callers_deadline_has_passed: a hang\n");
+      std::_Exit(3);
+    }).detach();
+    const TimedRun r = run_timed(search, *uniform, tm, ctx, wall ? &clock : nullptr);
+    done->store(true);
+    CHECK(r.verdict.stop == TimeStop::Search);
+    CHECK(r.search_stop == StopReason::Deadline);
+    CHECK_EQ(r.batches, std::uint64_t{0});  // no slice ran under it
+    CHECK(search.deadline() == std::optional(passed));  // restored
+    CHECK(!tm.in_decision());
+  }
+}
+
 TEST(timeman_run_keeps_the_persistent_deadline_and_its_own_inside) {
   // The merge's rule (M2): run() gives the calls inside its batches the
   // earlier of the persistent deadline and its own Limits::seconds, and

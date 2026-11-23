@@ -10,6 +10,27 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - E11 review round 2, S3: run_timed stops once the caller's deadline has passed, and where its slices make no progress
+
+The review's S3 (SC-M2). `run_timed` looped for ever when the caller's persistent deadline had
+already passed: the forced slice (no root child visited) ran under it, a flat root whose listing
+it cut was never re-listed, and the time manager never stops while no child has a visit (the
+correctness pass's probe: some 200M playouts in 20 s, wall and model clock).
+- **The caller's deadline passed** stops `run_timed` between slices - `TimeStop::Search`,
+  `StopReason::Deadline` - as `max_seconds`' does.
+- **A no-progress guard**: a forced slice that leaves a root with no edge as it found it, or
+  `kNoProgressSlices` (16, a placeholder - issue 482) in a row with no root child visited, stops it
+  (`TimeStop::Search`, `StopReason::Exhausted`). No game reaches it as built; it is a guard.
+- **Python's `run_timed_search`** mirrors both ("deadline", "exhausted";
+  `evaluator.NO_PROGRESS_SLICES`).
+- Tests: the probe's setup (a flat root, `generator_nodes` 1, a caller's deadline already passed)
+  returning on the wall clock and the model clock with no slice run, its deadline restored and the
+  decision ended (C++, under a watchdog; Python); Python's guard with stubbed slices, at once for an
+  edgeless root and after 16 slices otherwise.
+
+Spec: §8.6's guards (the hard bound and its exceptions as built - issue 482 records the guard; no
+edit: the exceptions' text is S6's). No proposed edit; no measured figure.
+
 ### 2026-11-24 - E11 review round 2, S2: Python's timed run is the engine's - its forced slice, the caller's deadline restored, the decision always ended
 
 The review's S2 (SC-M1, SS-F7, SC-L2, observation 1). Python's `run_timed_search` could hang where
