@@ -22,7 +22,9 @@ the refusal it mutated (the hook is now taken; tested). L02 (a tier-3 search sta
 deadline) survives as EQUIVALENT: since the merge issue 406's own gate stops every per-move search
 past the deadline (`legal.cpp`'s loop), and the one other caller, the root's single search, is given
 no time left and settles nothing - the M4 test's four positions (120 boards of random play added,
-the reviewers' own) classify alike with and without it.
+the reviewers' own) classify alike with and without it. Phase 2's checks on b75209a, all green:
+the whole engine suite, long_detectors, the Lazy SMP test x3, ruff, the engine-driving Python files
+and `test_pool.py`, verify and gate commit (the build log's session entry).
 
 Spec: none - tests and their record. No proposed edit; no measured figure.
 

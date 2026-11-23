@@ -1374,6 +1374,7 @@ threads reach at least one thread's sum (one retry on a shared machine).
 | 2026-11-09 | The review's H2 (prover.cpp's list_children not complete under Q3; certificate.cpp's Q3 defender check) | lane/engine 3bb8ffa + H2, the tree before the commit | dev-r, 24 logical; other lanes' jobs starting; load 53% before, 87% after | 32 | 293 / 292 / 291 | 311 / 311 / 312 | none | pass x3 |
 | 2026-11-23 | the review's code round into main (the tree form under graph search, G11's network side; the main loop's check) | main d760019 + the round, the working tree before its commit | dev-r, 24 logical; the engine lane's and search lane's checks running | 32 | 293 / 289 / 291 | 301 / 303 / 304 | none | pass x3 |
 | 2026-11-23 | main 032db11 into lane/search (`mcts.cpp` combined: issue 535's fix and the tree form under graph search beside E11's deadline) | lane/search eb7353b (the merge 8903439 and the cited-ids update), inside its checks after the whole `--werror --test` run | dev-r, 24 logical; the engine lane's checks running; load 99-100% before and after | 32 | 293 / 293 / 293 | 315 / 314 / 313 | none | pass x3 |
+| 2026-11-24 | main d4c7fb9 into lane/search and phase 2 of E11's review (`mcts.cpp`: one deadline mechanism, `run()`'s scope; no scanner or search.* file) | lane/search b75209a, inside its checks after the whole `--werror --test` run | dev-r, 24 logical; quiet - load 11 / 21 / 6% before, 16 / 9 / 26% after | 32 | 293 / 293 / 293 | 316 / 314 / 316 | none | pass x3 |
 | 2026-11-23 | The review round's final tree (issue 411's truth sources; main af0c19b merged) | lane/engine e79ea70 | dev-r, 24 logical; load 26% before, 18% after | 32 | 293 / 293 / 293 | 318 / 317 / 318 | none | pass x3 |
 | 2026-11-23 | the engine lane into main (issue 411's truth sources, issue 412; the main loop's merge battery) | main 4e9267e + lane/engine 76501de, merged tree before the commit | dev-r, 24 logical; the net lane's fixer running | 32 | 293 | 317 / 315 / 315 | none | pass x3 |
 
@@ -11248,3 +11249,9 @@ entry changes in the same edit as its code, which the standing rule defers to up
     the rewritten code): 37 killed, Y02 obsolete (decision 12 removed its refusal), L02
     equivalent (issue 406's per-move gate before every search; the root's single search given no
     time left settles nothing) - the M4 test gained the reviewers' 120-board position for it.
+  - Checks on b75209a: engine 834 of 834 (`--werror`), long_detectors 2 of 2, the Lazy SMP test
+    x3 (table above; a quiet machine), ruff clean, pytest 222 passed (the time, search-API,
+    netplay, decision-log, switch-match and pool files), verify ok, gate commit ok (smoke test
+    passed, 0 declined; proof channel DISABLED). The nightly gate is not owed: the merge brought
+    `lane/engine`'s truth sources unchanged and this lane changed none. Decision 13 (H1 part 5) is
+    not on main yet (main has since taken the net lane, 98f68c1); it is adopted when it lands.
