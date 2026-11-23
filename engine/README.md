@@ -4196,7 +4196,7 @@ function (`smart_pruning_stop`, `visit_kld`, `value_overlap`, `unstable`), judge
 | Root solved - play at once | ONLY with the proof channel on (H41); off, nothing is solved and the stop is void |
 | Overlap and churn - extend | the top two children's own network categoricals (read from the evaluation cache, the root player's view: `Search::root_child_value`) intersect by `overlap_threshold` (0.5) or more AND the last KLD per visit is at least `churn_kld_threshold` (2e-4) |
 | Volatility - extend | the root's uncertainty signal (6m's: the categorical's variance by default) at least `variance_threshold` (0.2) |
-| Disagreement - extend hardest | a HOOK, OFF (`proof_volatility`): a Hunt or settling-scan proof whose value lies `disagreement_margin` (0.5) from the network's, with a calm net; refused unless the search's proof channel is on - whether those proofs may drive time before the sign-off is open (issue 180, ruled by the user 2026-11-23 (the review's decision 12, reported by the main loop): before the sign-off a proof may raise a prior or extend the search, never stop, prune, select or enter a store). Python refuses it, as it refuses the channel. Time management reads no proof directly; with `hunt_suggest` on, a proven mate still reaches the signals through the root's visits (issue 186(a)) |
+| Disagreement - extend hardest | a HOOK, OFF (`proof_volatility`): a Hunt or settling-scan proof - withheld or not - whose value lies `disagreement_margin` (0.5) from the network's, with a calm net. Read with the proof channel off, for this extension only: before the sign-off a proof is an estimate - it may extend the search, never stop it, prune, select or enter a store (issue 180, ruled by the user 2026-11-23 (the review's decision 12, reported by the main loop)); Python takes it too. A solved root's stop stays the channel's. Off, time management reads no proof directly; with `hunt_suggest` on, a proven mate still reaches the signals through the root's visits (issue 186(a)) |
 | Falling eval - extend | the root's backed-up value below the previous decision's by `fall_margin` (0.1); a rising eval never extends |
 | Instability - extend | the most visited child changed within the last `instability_window` (0.25) of the root's visits, from `instability_min_visits` (32) |
 
@@ -4294,7 +4294,9 @@ whole decision charged on a virtual clock (through `MatchClock::clock`: the read
 search included; the flat arms parting there), self-play refused; t5d-play's `--allocator`
 named in the record; netplay's increment, its model clock (reproducible, the model's price
 charged), a flag mid-action, a flagged decision's work counted and bad `time_overrides`
-refused; the proof hook refused without the proof channel, in C++, C and Python.
+refused; the proof hook taken with the proof channel off - extending on a withheld proof,
+never stopping (a solved root stops only with the channel), nothing injected in a match game -
+in C++, C and Python.
 
 ## 5DFEN
 

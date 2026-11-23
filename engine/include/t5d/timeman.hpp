@@ -54,15 +54,17 @@
 //   extend  volatility - the root's uncertainty signal (the categorical's
 //           variance, or the error head's: SearchParams::uncertainty_source,
 //           6m); the second source, a proof from Hunt or the settling scans
-//           that contradicts the net, is a HOOK, OFF (proof_volatility) and
-//           refused without the proof channel: whether those proofs may drive
-//           time before the sign-off was open (build-log spec issue 180),
-//           now ruled by the user 2026-11-23 (the review's decision 12,
-//           reported by the main loop): a proof may extend the search, never
-//           stop it.
-//           Time management reads no proof directly; with hunt_suggest on, a
-//           proven mate reaches the signals through the root's visits (issue
-//           186(a)). With
+//           that contradicts the net, is a HOOK, OFF (proof_volatility).
+//           Build-log spec issue 180 asked whether those proofs may drive
+//           time before the sign-off; ruled by the user 2026-11-23 (the
+//           review's decision 12, reported by the main loop): before the
+//           sign-off a proof is an estimate - it may extend the search, never
+//           stop it, prune, select or enter a store. So the hook, switched on,
+//           reads the ladder's verdicts with the proof channel off too, and
+//           feeds the disagreement extension only; a solved root's stop stays
+//           the channel's (H41). Off, time management reads no proof directly
+//           (with hunt_suggest on, a proven mate reaches the signals through
+//           the root's visits - issue 186(a)). With
 //           both read, a calm net and an alarmed prover - DISAGREEMENT - extends
 //           hardest;
 //   extend  a falling eval: the root's value below the previous decision's by
@@ -304,10 +306,10 @@ struct TimeParams {
   double extend_volatility = 0.5;
   /// THE SECOND VOLATILITY SOURCE - a HOOK, OFF: Hunt's and the settling scans'
   /// proofs read as an alarm where the proven value lies disagreement_margin or
-  /// more from the network's. Refused unless the search's proof channel is on
-  /// (issue 180: whether those proofs may drive time before the sign-off -
-  /// ruled by the user 2026-11-23, the review's decision 12, reported by the
-  /// main loop: they may extend it, never stop it). disagreement_margin: a
+  /// more from the network's - with the proof channel off too, for the
+  /// disagreement EXTENSION only (issue 180, ruled by the user 2026-11-23, the
+  /// review's decision 12, reported by the main loop: before the sign-off a
+  /// proof may extend the search, never stop it). disagreement_margin: a
   /// placeholder (issue 470).
   bool proof_volatility = false;
   double disagreement_margin = 0.5;
@@ -415,7 +417,8 @@ struct RootSnapshot {
   bool proof_channel = false;
   std::size_t batch_size = 1;
   /// The proof hook (proof_volatility): the largest gap between a proof's
-  /// value and the network's (0: no proof).
+  /// value and the network's (0: no proof) - read whether the proof channel is
+  /// on or not (decision 12), and only ever an extension's input.
   double proof_gap = 0;
 };
 
@@ -496,8 +499,8 @@ class TimeManager {
 
   /// Plans a decision at `search`'s root and begins it. Throws
   /// std::invalid_argument for a context out of range (remaining not > 0, a
-  /// negative increment, a moves-left negative or above kMovesLeftMaxTurns),
-  /// or for proof_volatility without the search's proof channel (issue 180).
+  /// negative increment, a moves-left negative or above kMovesLeftMaxTurns).
+  /// (proof_volatility needs no proof channel since decision 12, issue 180.)
   TimePlan begin(const Search& search, const TimeContext& ctx);
   /// Begins a decision on a plan made elsewhere (plan_decision): the root's
   /// visits now (the KLD's first comparison), its total, and the children's

@@ -649,7 +649,7 @@ class CTimeParams(ctypes.Structure):
         ("extend_overlap", c_double),
         ("variance_threshold", c_double),
         ("extend_volatility", c_double),
-        ("proof_volatility", c_int32),  # the proof hook: 0 (this binding refuses anything else: issue 180)
+        ("proof_volatility", c_int32),  # the proof hook: 0 or 1 - it extends, never stops (decision 12, issue 180)
         ("disagreement_margin", c_double),
         ("extend_disagreement", c_double),
         ("fall_margin", c_double),

@@ -44,9 +44,11 @@ rule or a search decision.
   deterministic clock), ``end`` closes it; ``evaluator.run_timed_search`` runs that loop with
   the network. ``time_params(**overrides)`` fills a ``t5d_time_params``: 6o's arms are its
   ``allocator`` (``"integral"``, ``"flat_evals"``, ``"flat_wall_clock"`` or the constant) and
-  ``signals``; **no proof drives time** - ``proof_volatility`` must stay 0, as the proof channel
-  does (build-log spec issue 180). E8 (a prototype, off: ``difficulty_weighting``) weights the
-  plan by the root's predicted effort, given to ``begin`` as the effort head's 16 probabilities
+  ``signals``; ``proof_volatility`` (off) lets Hunt's and the settling scans' proofs EXTEND a
+  decision, never stop it - with the proof channel off, which this binding cannot turn on
+  (build-log spec issue 180, ruled 2026-11-23: the 2026-11-15 review's decision 12). E8 (a
+  prototype, off: ``difficulty_weighting``) weights the plan by the root's predicted effort,
+  given to ``begin`` as the effort head's 16 probabilities
   (``effort``; none: inert). ``Search.set_deadline`` gives the rules engine's calls inside
   a batch the hard bound; ``Search.run_timed`` is a timed decision with a built-in evaluator.
 * **Lifetimes.** A leaf's pointers live until the next ``gather``, ``deliver``, ``abandon``
@@ -586,8 +588,8 @@ ALLOCATORS: dict[str, int] = {
 def time_params(lib: Library | None = None, **overrides) -> CTimeParams:
     """A ``t5d_time_params`` with the library's defaults and ``overrides`` by field name;
     ``allocator`` by name (``ALLOCATORS``) or constant, ``boards_per_action`` and
-    ``boards_per_action_ranges`` as sequences. ``proof_volatility`` must stay 0: no proof drives
-    time from Python (the proof channel stays off; build-log spec issue 180)."""
+    ``boards_per_action_ranges`` as sequences. ``proof_volatility`` 1 switches the proof hook on: a
+    proof may extend a decision, never stop it (decision 12; build-log spec issue 180)."""
     lib = load_library() if lib is None else lib
     p = CTimeParams()
     lib.fn.t5d_time_params_default(byref(p))
@@ -608,8 +610,6 @@ def time_params(lib: Library | None = None, **overrides) -> CTimeParams:
                 array[i] = v
             continue
         setattr(p, name, value)
-    if p.proof_volatility != 0:
-        raise ValueError("proof_volatility stays 0: no proof drives time management while the proof channel is off (issue 180)")
     return p
 
 
@@ -683,8 +683,6 @@ class TimeManager:
     def __init__(self, params: CTimeParams | None = None, *, lib: Library | None = None) -> None:
         self._lib = load_library() if lib is None else lib
         self.params = time_params(self._lib) if params is None else params
-        if self.params.proof_volatility != 0:
-            raise ValueError("proof_volatility stays 0 (build-log spec issue 180)")
         out = c_void_p()
         self._lib.call("t5d_timeman_new", byref(self.params), byref(out), error=True)
         self._handle = out

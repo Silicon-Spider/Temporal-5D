@@ -10,6 +10,36 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-23 - Decision 12 in E11: a proof may extend a decision before the sign-off, never stop it
+
+Decision 12 (build-log spec issue 180, ruled by the user 2026-11-23): "Before the sign-off a
+proof is an estimate: it may raise a prior or extend the search, and may not stop it, prune,
+select or enter a store." E11 built the proof source of volatility as a hook refused without the
+proof channel (the safe reading while issue 180 was open); it is now taken with the channel off,
+for the extension only.
+- **`engine/src/timeman.cpp`**: `TimeManager::begin` no longer refuses `proof_volatility` at a
+  search whose proof channel is off; `snapshot` reads the ladder's verdicts (withheld or
+  injected) whenever the hook is on; `check`'s prover alarm feeds the disagreement extension
+  whatever the channel. Unchanged: a solved root stops a decision only with the channel on (in
+  `check` and in `run_timed`), and no proof stops, prunes, selects or enters a store.
+- **Python** (`search.py`): `time_params(proof_volatility=1)` and `TimeManager` take the hook
+  (both refused it); Python still cannot turn the proof channel on. `capi.py`'s and the C
+  header's comments follow.
+- **Tests**: `timeman_a_proof_extends_the_search_before_the_sign_off_and_never_stops_it` (replacing
+  the refusal test) - the disagreement extension with the channel off and on, the solved stop only
+  on, a real Hunt proof of a mate read while withheld (the root unsolved, nothing injected), and a
+  match game with the hook on and off - every proof withheld, none injected, the record replaying;
+  the C API takes the hook with its plan unchanged; Python takes it, and a Hunt-proven mate leaves
+  the root unsolved and the decision not stopped as solved. Mutants killed: the extension needing
+  the channel, the solved stop without it, the hook's read needing it.
+- **Docs**: `timeman.hpp`'s header and `TimeParams`, `t5d/capi_search.h`, the engine README (the
+  disagreement row, "Tested"), and in `docs/BUILD_LOG.md` issues 470, 468 and 180's E11 note, the
+  E7 row and edits 335 and 337 (applied upstream by the review with the ruling's reading).
+
+Spec: §8.6 (the table's solved-root row and the second volatility source), §11.4 (decision 12's
+paragraph); register H41, E7, H43 - the build now follows the text the review left; nothing new
+proposed. Issues 180, 468, 470. No measured figure.
+
 ### 2026-11-23 - Decision 12 ruled: this lane's notes no longer call it awaiting confirmation
 
 The user ruled on 2026-11-23 (reported by the main loop) that the 2026-11-15 spec review's 23

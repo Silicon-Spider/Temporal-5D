@@ -1504,19 +1504,22 @@ TEST(capi_search_time_management_parameters_and_refusals) {
   CHECK_EQ(t5d_timeman_new(&p, &bad, nullptr), T5D_ERR_ARGUMENT);
   CHECK(bad == nullptr);
   CHECK_EQ(t5d_timeman_new(nullptr, nullptr, nullptr), T5D_ERR_ARGUMENT);
-  // The proof hook: refused at a search without the proof channel (issue 180).
+  // The proof hook: taken at a search without the proof channel (decision 12,
+  // issue 180 - a proof may extend a decision, never stop it); its plan is the
+  // plan without it.
   p = d;
   p.proof_volatility = 1;
   const TimeHandle hook = new_timeman(&p);
+  const TimeHandle plain_hook = new_timeman(&d);
   const Game g = variant_game("Standard");
   const SearchHandle s = new_search(g.get(), quick_params());
   const t5d_time_context ctx{10.0, 0.0, std::nan(""), nullptr, 0};
   t5d_time_plan plan;
-  char* message = nullptr;
-  CHECK_EQ(t5d_timeman_begin(hook.get(), s.get(), &ctx, &plan, &message), T5D_ERR_ARGUMENT);
-  REQUIRE(message != nullptr);
-  CHECK(std::string(message).find("issue 180") != std::string::npos);
-  t5d_free(message);
+  t5d_time_plan unhooked;
+  REQUIRE_EQ(t5d_timeman_begin(hook.get(), s.get(), &ctx, &plan, nullptr), T5D_OK);
+  REQUIRE_EQ(t5d_timeman_begin(plain_hook.get(), s.get(), &ctx, &unhooked, nullptr), T5D_OK);
+  CHECK_EQ(plan.soft_evaluations, unhooked.soft_evaluations);
+  CHECK_EQ(plan.hard_seconds, unhooked.hard_seconds);
   // A check outside a decision, a context out of range, a deadline.
   const TimeHandle tm = new_timeman();
   t5d_time_verdict v;

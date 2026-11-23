@@ -2,8 +2,8 @@
 ``evaluator.run_timed_search``, ``netplay``'s match clock).
 
 The mirror of ``t5d_time_params`` and its companions (laid out as the library's), the
-parameters' defaults and refusals - the proof hook refused from Python, as the proof channel is
-(build-log spec issue 180) -, a timed decision driven from Python on the model clock building the
+parameters' defaults and refusals - the proof hook taken with the proof channel off, extend-only
+(decision 12, build-log spec issue 180) -, a timed decision driven from Python on the model clock building the
 engine's own ``run_timed`` tree (H15's digest) with the same plan and stop, the wall clock's hard
 bound held (a generous correctness bound), and match play on a clock end to end: the games
 replay through the gate, a flag ends a game, self-play takes no clock.
@@ -33,6 +33,7 @@ from t5d.engine.capi import (
     T5D_TIME_STOP_NONE,
     T5D_TIME_STOP_SEARCH,
     T5D_TIME_STOP_SOFT_BUDGET,
+    T5D_TIME_STOP_SOLVED,
     CTimeParams,
     layout_mismatches,
     load_library,
@@ -87,8 +88,7 @@ def test_time_params_defaults_names_and_refusals():
     assert list(p.boards_per_action) == [1.05, 1.25, 1.77]  # M22's moves per turn by range
     q = time_params(allocator="flat_wall_clock", signals=0, boards_per_action=(1, 2, 3))
     assert q.allocator == ALLOCATORS["flat_wall_clock"] and q.signals == 0 and list(q.boards_per_action) == [1, 2, 3]
-    with pytest.raises(ValueError, match="issue 180"):
-        time_params(proof_volatility=1)
+    assert time_params(proof_volatility=1).proof_volatility == 1  # decision 12: extend-only, the channel off
     with pytest.raises(ValueError, match="allocator"):
         time_params(allocator="sideways")
     with pytest.raises(ValueError, match="no field"):
@@ -115,12 +115,24 @@ def test_an_implausible_moves_left_is_refused():
         assert tm.begin(s, remaining=60.0, moves_left=2000.0).our_actions == 1000.0
 
 
-def test_the_time_manager_refuses_a_proof_hook_set_by_hand():
-    """``TimeManager``'s own refusal, past ``time_params``' (a field set afterwards)."""
-    p = time_params()
-    p.proof_volatility = 1
-    with pytest.raises(ValueError, match="issue 180"):
-        TimeManager(p)
+def test_the_proof_hook_is_taken_with_the_proof_channel_off():
+    """Decision 12 (build-log spec issue 180, ruled 2026-11-23): before the sign-off a proof may
+    extend a decision, never stop it - so the hook is taken by a search whose proof channel is off
+    (every Python search's), and its plan is the plan without it. A Hunt proof of the root's mate,
+    withheld from the tree, leaves the root unsolved, nothing injected, and the decision is not
+    stopped as solved."""
+    hook, quiet = time_params(proof_volatility=1), search_params(hunt=0, settling=0)
+    with Game.variant("Standard") as g, Search(g, params=quiet) as s, TimeManager(hook) as hooked, TimeManager() as plain:
+        assert hooked.begin(s, remaining=60.0) == plain.begin(s, remaining=60.0)
+    mate = ["[k4/4Q/1K3/5/5:0:1:w]"]  # White mates in one on a 5 x 5 board (test_v3_support.hpp's)
+    with Game.from_fen(mate) as g:
+        params = search_params(synchronous=1, hunt=1, settling=0, asset_map=0)
+        with Search(g, params=params) as s, TimeManager(time_params(proof_volatility=1)) as tm:
+            run = run_timed_search(s, UniformEvaluator(), tm, remaining=60.0, model_clock=True)
+            info = s.info()
+            assert info.hunt_mates >= 1 and info.proofs_withheld >= 1 and info.proofs_injected == 0
+            assert not info.root_solved
+            assert run.verdict.stop != T5D_TIME_STOP_SOLVED
 
 
 def test_the_flat_arms_execute_as_named_from_python():

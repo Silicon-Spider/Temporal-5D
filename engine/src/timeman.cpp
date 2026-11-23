@@ -366,10 +366,14 @@ RootSnapshot snapshot(const Search& search, std::uint64_t evaluations, std::uint
       if (top[k] < children.size()) r.top_value[k] = search.root_child_value(top[k]);
     }
   }
-  if (params.proof_volatility && r.proof_channel) {
-    // The hook (issue 180): each proven verdict against the network's value of
+  if (params.proof_volatility) {
+    // The hook (issue 180; decision 12, ruled 2026-11-23: before the sign-off
+    // a proof is an estimate - it may extend the search, never stop it): each
+    // proven verdict, withheld or injected, against the network's value of
     // what it proves - our mate at the root (+1 against the root's evaluation),
     // the opponent's after our principal line (-1 against that line's child's).
+    // Read with the proof channel off too; it feeds only the disagreement
+    // extension (check), never a stop.
     for (const LadderVerdict& v : search.verdicts()) {
       if (v.status != ProofStatus::Proven) continue;
       double net = r.root_net_value;
@@ -429,11 +433,6 @@ TimePlan TimeManager::begin(const Search& search, const TimeContext& ctx) {
       !(finite_at_least(ctx.moves_left_turns, 0) && ctx.moves_left_turns <= kMovesLeftMaxTurns)) {
     throw std::invalid_argument(
         "TimeContext::moves_left_turns: 0 to kMovesLeftMaxTurns (2000) turns, or NaN (none) - build-log spec issue 476");
-  }
-  if (params_.proof_volatility && !search.params().proof_channel) {
-    throw std::invalid_argument(
-        "TimeParams::proof_volatility: Hunt's and the settling scans' proofs may not drive time management "
-        "while the proof channel is off (build-log spec issue 180, open; H41)");
   }
   const GameState& root = search.root_state();
   const NodeView rv = search.node(search.root());
@@ -584,7 +583,9 @@ TimeVerdict TimeManager::check(const RootSnapshot& root, double elapsed) {
       target_ += add;
     };
     const bool net_alarm = root.root_evaluated && root.root_variance >= p.variance_threshold;
-    const bool prover_alarm = p.proof_volatility && root.proof_channel && root.proof_gap >= p.disagreement_margin;
+    // Decision 12: a proof may extend the search before the sign-off - the
+    // channel on or off. (A solved root's stop, above, stays the channel's.)
+    const bool prover_alarm = p.proof_volatility && root.proof_gap >= p.disagreement_margin;
     if (prover_alarm && !net_alarm) take(kExtendDisagreement, p.extend_disagreement);
     if (net_alarm) take(kExtendVolatility, p.extend_volatility);
     if (unstable(root.root_visits, root.best_since, p.instability_window, p.instability_min_visits)) {

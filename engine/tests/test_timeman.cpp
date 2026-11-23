@@ -38,6 +38,7 @@
 #include "t5d/variants.hpp"
 #include "test_framework.hpp"
 #include "test_positions.hpp"
+#include "test_v3_support.hpp"
 
 using namespace t5d;
 using namespace t5d::mcts;
@@ -435,8 +436,9 @@ TEST(timeman_extends_on_the_table_and_only_there) {
     CHECK_EQ(v.extensions, kExtendVolatility);
     CHECK_EQ(v.target_evaluations, 150.0);
   }
-  // Disagreement - a calm net, an alarmed prover (the hook, with the proof
-  // channel: test-only) - extends more than either source alone.
+  // Disagreement - a calm net, an alarmed prover (the hook; the proof channel
+  // on here, off in timeman_a_proof_extends_the_search_before_the_sign_off_
+  // and_never_stops_it) - extends more than either source alone.
   {
     TimeParams hook = p;
     hook.proof_volatility = true;
@@ -713,27 +715,93 @@ TEST(timeman_the_model_clock_is_bit_reproducible) {
   }
 }
 
-TEST(timeman_the_proof_hook_is_refused_without_the_proof_channel) {
-  TimeParams p;
-  p.proof_volatility = true;
-  TimeManager tm(p);
-  Search search(variant("Standard"), quiet_params());
+TEST(timeman_a_proof_extends_the_search_before_the_sign_off_and_never_stops_it) {
+  // Decision 12 (build-log spec issue 180, ruled by the user 2026-11-23): before
+  // the sign-off a proof is an estimate - it may extend the search, never stop
+  // it, prune, select or enter a store. The hook (proof_volatility) is read with
+  // the proof channel off; a solved root stops a decision only with it on.
+  TimeParams hook;
+  hook.proof_volatility = true;
+  for (const bool channel : {false, true}) {
+    // An alarmed prover and a calm net at the soft bound: the disagreement
+    // extension, the channel on or off.
+    TimeManager tm(hook);
+    tm.begin(plan_of(100));
+    RootSnapshot r = snap(100, {60, 40});
+    r.root_evaluated = true;
+    r.root_variance = 0.01;
+    r.proof_channel = channel;
+    r.proof_gap = 1.5;
+    const TimeVerdict v = tm.check(r, std::nan(""));
+    CHECK_EQ(v.extensions, kExtendDisagreement);
+    CHECK_EQ(v.target_evaluations, 200.0);
+    CHECK(v.stop == TimeStop::None);
+    // A solved root (a stop): only with the channel on - the hook changes nothing.
+    TimeManager s(hook);
+    s.begin(plan_of(100));
+    RootSnapshot solved = snap(10, {5, 5});
+    solved.solved = true;
+    solved.proof_channel = channel;
+    solved.proof_gap = 1.5;
+    CHECK(s.check(solved, std::nan("")).stop == (channel ? TimeStop::Solved : TimeStop::None));
+  }
+  // A real search, the channel off: Hunt proves White's mate in one, the proof
+  // is withheld from the tree (unsolved, nothing injected), and the hook reads
+  // it - its +1 against the uniform network's 0. Off, it is not read.
+  SearchParams sp = quiet_params();
+  sp.synchronous = true;
+  sp.hunt = true;
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  Search search(t5d_test::v3::mate_in_one(), sp);
+  search.run(*uniform, Limits{64});
+  search.await_ladder();
+  REQUIRE(search.stats().hunt_mates >= 1);
+  const RootSnapshot read = snapshot(search, 0, 0, hook);
+  CHECK(!read.proof_channel);
+  CHECK(read.proof_gap >= hook.disagreement_margin);
+  CHECK(!read.solved);
+  CHECK_EQ(snapshot(search, 0, 0, TimeParams{}).proof_gap, 0.0);
+  CHECK_EQ(search.stats().proofs_injected, std::uint64_t{0});
+  TimeManager tm(hook);
   TimeContext ctx;
   ctx.remaining_seconds = 10;
-  CHECK_THROWS_WITH(tm.begin(search, ctx), std::invalid_argument, "issue 180");
-  // With the channel on (test-only), it is read.
-  SearchParams on = quiet_params();
-  on.proof_channel = true;
-  Search channel(variant("Standard"), on);
-  CHECK_NOTHROW(tm.begin(channel, ctx));
+  CHECK_NOTHROW(tm.begin(search, ctx));
+  // Match play with the hook on and the channel off: played (begin refused it
+  // before decision 12), every proof withheld and none injected, the record
+  // replaying; nothing of a proof is recorded - GameRecord and its decision log
+  // carry no bound, and a solved store is refused without the channel
+  // (test_ladder.cpp).
+  for (const bool on : {false, true}) {
+    PlayParams pp;
+    pp.search = sp;
+    pp.match_play = true;
+    pp.turn_cap.turns = 3;
+    pp.decision_log = true;
+    pp.clock.enabled = true;
+    pp.clock.model_clock = true;
+    pp.clock.base_seconds = 10;
+    pp.clock.time.proof_volatility = on;
+    const GameRecord g = play_game(t5d_test::v3::mate_in_two(), *uniform, pp);
+    CHECK(g.hunt_mates > 0);
+    CHECK(g.proofs_withheld > 0);
+    CHECK_EQ(g.proofs_injected, std::uint64_t{0});
+    CHECK_EQ(g.timed_decisions, g.decisions);
+    GameState s = g.start;
+    for (const std::vector<Move>& action : g.actions) {
+      for (const Move& m : action) s.apply(m);
+      s.submit();
+    }
+    CHECK(s == g.final_state);
+  }
   // Out-of-range contexts and parameters are refused.
+  Search standard(variant("Standard"), quiet_params());
   TimeManager plain;
   ctx.remaining_seconds = 0;
-  CHECK_THROWS_AS(plain.begin(search, ctx), std::invalid_argument);
+  CHECK_THROWS_AS(plain.begin(standard, ctx), std::invalid_argument);
   TimeParams bad;
   bad.hard_fraction = 0;
   CHECK_THROWS_AS(TimeManager{bad}, std::invalid_argument);
-  CHECK_THROWS_AS(plain.check(search, 0.0), std::logic_error);  // no decision begun
+  CHECK_THROWS_AS(plain.check(standard, 0.0), std::logic_error);  // no decision begun
 }
 
 TEST(timeman_match_play_on_the_clock_end_to_end) {

@@ -1860,7 +1860,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | E4 | principle (weakened) | "Narrow hard, because the auditor is watching" - the register says weakened: it holds where the settling scans (< 50 boards) and Hunt (< 100) run - wired since E10 (2026-10-23), their proofs withheld until the sign-off; above that, narrowing is a bet on the audit lane and the league |
 | E1 | built, tested (the mandatory-count widening option not built) | PUCT with entropy-adaptive top-k widening and FPU; the policy temperature at every node. CHECKPOINT 7 (with I19), engine ABI round 2b: root noise in self-play with its total concentration (`dirichlet_concentration`, placeholder 0.03 x 361, appended beside the per-child `dirichlet_alpha`, which stays as its arm at 0) split across the root's open edges, per decision (issue 150); KataGo-style shaping a prototype behind `dirichlet_shaping`, off (its form a reading, issue 151); the root policy temperature (I19; issue 152), before the noise. "The widening schedule may depend on the mandatory-board count" - an option for 6g, not built (A6's count is in the expansion). Under D2's flat form (2026-10-23): k0 from the turn distribution's entropy (the boards' entropies summed) capped at `flat_k0_max` 16, widening generating the turns it instantiates, the root noise's total concentration split per board across its options and drawn before generation, both temperatures per board (issue 167). Every constant a placeholder, named in §8.4's "Constants as built" (issue 82; edit 123) |
 | E5, E9 | built, tested | LCB with a visit floor (E5); the solver behind H41's switch, the secure child, a visit cap on solved children (E9) - constants named as placeholders in §8.4 (issues 84-85). E5's optional term (weight 0) reads the child's uncertainty signal - 6m's switch, since engine ABI round 2a (issue 149) |
-| E7 | built (E11, `lane/search`, 2026-11-08; placeholders) | Time management, `t5d/timeman.hpp`: the moves-left integral allocator on a cost model (the dense FLOP shape with a fixed share, its scale measured online; moves-left in turns, our actions half of them, N advanced by M22's boards per action - issues 305, 452-457); 6o's arms as switches (`allocator`: Integral, FlatEvals, FlatWallClock; `signals` on/off); the stop/extend table (smart pruning, KLDGain, a solved root only with the proof channel, overlap with churn, volatility, falling eval, instability - issues 459-463) with the spiral guard (each kind once a decision - tested on its own; a cap on the plan, never past the hard bound - issue 464, tested at 500 boards); the wall-clock hard bound held tight at high N and given to the rules engine's calls inside a batch (`Search::set_deadline`, `LegalityOptions::deadline` - issues 458, 467); the model clock (deterministic); match play's per-side clock (`PlayParams::clock`; t5d-play `--time`; netplay `PlayConfig.time`; issue 456); the C API and its Python mirror. NO root-scan reserve (issue 306). The second volatility source - Hunt's and the settling scans' proofs - is a hook, off, refused without the proof channel (issues 180, 470); the ladder's jobs cost the move no time - nothing waits for them, and they end at the re-root, not at the hard bound - nothing deducted for them (issue 466). Not built: pondering (C13), MLH steering (I3; issue 469) |
+| E7 | built (E11, `lane/search`, 2026-11-08; placeholders) | Time management, `t5d/timeman.hpp`: the moves-left integral allocator on a cost model (the dense FLOP shape with a fixed share, its scale measured online; moves-left in turns, our actions half of them, N advanced by M22's boards per action - issues 305, 452-457); 6o's arms as switches (`allocator`: Integral, FlatEvals, FlatWallClock; `signals` on/off); the stop/extend table (smart pruning, KLDGain, a solved root only with the proof channel, overlap with churn, volatility, falling eval, instability - issues 459-463) with the spiral guard (each kind once a decision - tested on its own; a cap on the plan, never past the hard bound - issue 464, tested at 500 boards); the wall-clock hard bound held tight at high N and given to the rules engine's calls inside a batch (`Search::set_deadline`, `LegalityOptions::deadline` - issues 458, 467); the model clock (deterministic); match play's per-side clock (`PlayParams::clock`; t5d-play `--time`; netplay `PlayConfig.time`; issue 456); the C API and its Python mirror. NO root-scan reserve (issue 306). The second volatility source - Hunt's and the settling scans' proofs - is a hook, off, extend-only with the proof channel off (decision 12, ruled 2026-11-23; issues 180, 470); the ladder's jobs cost the move no time - nothing waits for them, and they end at the re-root, not at the hard bound - nothing deducted for them (issue 466). Not built: pondering (C13), MLH steering (I3; issue 469) |
 | E2, E3 | built behind flags, tested | Off; awaiting 6m and 6t. They read a node's uncertainty signal: the categorical's variance by default, the error head's output under 6m's switch (`uncertainty_source`, engine ABI round 2a; issue 149); their constants placeholders twice over (issues 81, 149) |
 | E8 | built behind its flag (off; `lane/search`, 2026-11-09; placeholders) | Difficulty-weighted allocation (`TimeParams::difficulty_weighting`, `t5d/timeman.hpp`): the root's effort distribution (D4's 16 bins, the top one censored) through the time context; the plan E7's soft bound x 2^(the bin at the 0.8 quantile - this game's running mean bin, seeded at 256 visits), clamped to [0.25, 4], to a floor of 32 evaluations and to E7's hard bound; won't-resolve (censored mass >= 0.5) plans for the hard bound (reading A) or E7's plan (B: `CapAtPlan`), and takes no overlap-with-churn extension; the guards code paths (the ex-post extensions still apply; the floor; the hard bound and the ladder's budgets untouched - I4). Off = E7 bit for bit (tested). The quantile is heads.effort_quantile's (tested across languages). Inert without an effort distribution - the built-in evaluators and netplay give none (issue 473). Issues 471-475, edits 339-341 |
 | E6 | not built (rule) | Refused |
@@ -5718,7 +5718,8 @@ superseded or made moot says so; nothing is deleted.
     *E11 (2026-10-24) takes the safe reading until the ruling: the proof source is a hook,
     `TimeParams::proof_volatility`, off, refused by `TimeManager::begin` unless the search's
     proof channel is on, and refused by the Python binding - so time management reads no proof
-    directly (issue 470; through `hunt_suggest`'s priors, issue 186(a)).* *(Issue 180 is
+    directly (issue 470; through `hunt_suggest`'s priors, issue 186(a)).* *(Since the ruling
+    below, 2026-11-23: the hook is taken with the channel off and extends only - issue 470.)* *(Issue 180 is
     ruled by the user 2026-11-23 (the review's decision 12, reported by the main loop): before the sign-off a proof may raise a prior or extend the search, never stop,
     prune, select or enter a store.)*
 181. **"Full settling scans: df-pn at the root and on PV changes"** (§11.4; register H1; §8.4:
@@ -7121,7 +7122,9 @@ superseded or made moot says so; nothing is deleted.
     scanner as a second volatility source above 50 boards"; §8.6: "a proof from Hunt or the
     settling scans ... (under 100 and 50 boards)"). Hunt answers under 100 boards, so the second
     source is lost above 100, not 50 - and while issue 180 is open no proof is read at all.
-    Edit 335.
+    Edit 335. (2026-11-23: issue 180 is ruled - decision 12 - and the hook, switched on, reads
+    the proofs with the channel off, extend-only; the spec as the review left it says "above 100
+    boards".)
 469. **Time management outside match play.** Built: match play only (`PlayParams::clock`,
     refused in self-play; netplay likewise): self-play's budgets are PCR's (§12.5),
     `Limits::seconds` is "never training", and I20 is self-play's adaptive analogue (a
@@ -7131,11 +7134,17 @@ superseded or made moot says so; nothing is deleted.
 470. **The proof source of volatility, built as a hook** (issue 180; H41). `TimeParams::
     proof_volatility` (off) reads the decision's ladder verdicts: a proven mate at the root
     (+1) against the root's network value, a PV scan's refutation (-1) against the line's first
-    child's; refused by `TimeManager::begin` unless the search's proof channel is on, refused
-    by the Python binding (`time_params`), tested in C++ only with the channel switched on.
-    Until the user rules on issue 180, time management reads no proof - directly: with
-    `hunt_suggest` on, a proven mate leaves no suggestions and so reaches the signals through the
-    root's visits (issue 186(a), off with the flag). `disagreement_margin` 0.5 (a placeholder): a
+    child's. Built at first refused without the proof channel (`TimeManager::begin`, the Python
+    binding). Since 2026-11-23 - issue 180 ruled by the user 2026-11-23 (the review's decision 12, reported by the main loop): before the sign-off a proof is an estimate, it may
+    extend the search, never stop it, prune, select or enter a store - the hook is taken with
+    the channel off: it reads the verdicts, withheld or injected, and feeds only the
+    disagreement EXTENSION; the solved-root stop stays behind the channel (H41); Python takes it
+    too (it still cannot turn the channel on). Tested with the channel off and on: the
+    extension in both, the solved stop only on, a real withheld Hunt proof read, a match game
+    with the hook on playing with every proof withheld and none injected. Off (the default),
+    time management reads no proof directly: with `hunt_suggest` on, a proven mate leaves no
+    suggestions and so reaches the signals through the root's visits (issue 186(a), off with
+    the flag). `disagreement_margin` 0.5 (a placeholder): a
     proof's value at least this far from the network's is the alarm. (Added at E11's review, L9
     and L12. Issue 180 is ruled by the user 2026-11-23 (the review's decision 12, reported by the main loop): before the
     sign-off a proof may raise a prior or extend the search, never stop, prune, select or enter
@@ -8806,7 +8815,9 @@ struck through, where nothing of it is left to apply); the others stand as writt
     source above 50 boards; the network's own variance stands alone there (§8.6)". Proposed -
     "... above 100 boards (Hunt answers under 100, the settling scans under 50); and while the
     proofs may not drive time before the sign-off (issue 180's ruling), the network's variance
-    stands alone everywhere". Why: issues 468, 180.
+    stands alone everywhere". Why: issues 468, 180. (Applied upstream by the spec review of
+    2026-11-15 with decision 12's reading - "above 100 boards", a proof extend-only before the
+    sign-off; the build follows it since 2026-11-23, issue 470.)
 336. **§8.6's closing paragraph and its "Guards"' second bullet** (v3's stale text, brief note
     9b): now - "the chosen line is scanned exactly beyond tree depth"; "The §11.1 root-rule final
     scan sits inside the hard bound ... its escalated budget is part of the move's allocation".
@@ -8819,7 +8830,9 @@ struck through, where nothing of it is left to apply); the others stand as writt
     (the second source is now Hunt's and the settling scans' proofs) ... root-scan reserve".
     Proposed - "... (the second source Hunt's and the settling scans' proofs - read only once
     issue 180 is ruled; a hook, off) ... no root-scan reserve while Guard is adopted nowhere".
-    Why: issues 180, 306, 470 (with edit 204).
+    Why: issues 180, 306, 470 (with edit 204). (Applied upstream by the spec review of 2026-11-15
+    with decision 12's reading - register E7 now says "extend-only before the sign-off, H41",
+    which the build follows since 2026-11-23, issue 470.)
 338. **§12.3's match configuration and register I3**: Proposed - add "a clock: base plus an
     increment per action, per side; a flag is a loss by the match's convention; time
     management at match play only (self-play's budgets are PCR's)". Why: issues 456, 469.
@@ -9257,3 +9270,14 @@ struck through, where nothing of it is left to apply); the others stand as writt
     "awaiting the user's confirmation" now say it was ruled by the user 2026-11-23 - in
     `timeman.hpp`, the engine README, issue 180's E11 note and issue 470. No other review
     decision is cited in this lane's text.
+  - (b) Decision 12 in E11: `proof_volatility` is taken with the proof channel off -
+    `TimeManager::begin`'s refusal and Python's two (`time_params`, `TimeManager`) lifted; the
+    snapshot reads the ladder's verdicts, withheld or injected, whenever the hook is on; they feed
+    the disagreement extension only. The solved-root stop (in `check` and `run_timed`) stays
+    behind the channel, and nothing else of a proof reaches the time manager. Re-checked: no
+    proof reaches a store (the solved store and Hunt's export are refused without the channel)
+    or a record (`GameRecord`, its decision log and `TimedRun` carry no bound; a match game with
+    the hook on withholds every proof and injects none). Issue 470, issue 180's E11 note, issue
+    468, the E7 row, edits 335 and 337 (applied upstream with the ruling's reading), the header,
+    the C header and the README updated. Three mutants killed (the extension needing the channel,
+    the solved stop without it, the hook's read needing it).

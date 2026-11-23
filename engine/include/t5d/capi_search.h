@@ -685,9 +685,10 @@ T5D_API t5d_status t5d_search_layout(const char* type, const char* field, size_t
  * a batch stop at it, and clears it after. t5d_search_run_timed is the same loop
  * with a built-in evaluator. Every number of t5d_time_params is a named
  * placeholder (the engine README's "Time management"). Self-play takes no clock:
- * its budgets are PCR's. NO PROOF DRIVES TIME while the proof channel is off: the
- * proof hook (proof_volatility) is refused unless the search's proof_channel is
- * on (build-log spec issue 180, open). */
+ * its budgets are PCR's. Before the sign-off a proof is an estimate (build-log
+ * spec issue 180, ruled 2026-11-23 - the 2026-11-15 review's decision 12): the
+ * proof hook (proof_volatility, off) may EXTEND a decision with the proof
+ * channel off; a solved root ends one only with the channel on. */
 
 /* 6o's arms (t5d_time_params.allocator). */
 #define T5D_ALLOCATOR_INTEGRAL 0         /* the moves-left integral (8.6) */
@@ -751,7 +752,7 @@ typedef struct t5d_time_params {
   double extend_overlap;
   double variance_threshold;
   double extend_volatility;
-  int32_t proof_volatility;             /* the proof hook: 0 (refused without the proof channel) */
+  int32_t proof_volatility;             /* the proof hook: 0 or 1 - it extends, never stops (decision 12) */
   double disagreement_margin;
   double extend_disagreement;
   double fall_margin;
