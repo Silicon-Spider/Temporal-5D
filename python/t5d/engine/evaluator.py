@@ -60,7 +60,7 @@ from typing import Protocol, runtime_checkable
 import numpy as np
 import torch
 
-from ..net.cache import CachedEvaluator, Epoch, state_digest
+from ..net.cache import CachedEvaluator, Epoch, input_digest
 from ..net.model import NetOutput, T5DNet
 from ..net.state import PositionState, collate, relayout, to_piece_centric
 from .capi import T5D_SPLIT_FLAT, T5D_VALUE_LOGITS, T5D_VALUE_PROBABILITIES
@@ -337,7 +337,13 @@ class CachedNetworkEvaluator:
     The engine's search opens one epoch per search and never refreshes a node, so a cached
     evaluator configured for C3a's node refreshes (``CacheConfig.node_refresh``) or C24's
     (``complexity_refresh``) is refused here: the refresh ladder runs in the search-tree fixture
-    (``net/tree.py``) only (BUILD_LOG issue 271)."""
+    (``net/tree.py``) only (BUILD_LOG issue 271).
+
+    ``start`` reuses the current epoch only for a root whose whole network input is the epoch's
+    anchor's - its moves and edges included (``input_digest``; BUILD_LOG issue 274) - and, when it
+    opens a new one, has the cached evaluator drop the root refresh the new search replaces
+    (``CachedEvaluator.release``: only one it made), so the store holds the live search's epoch and
+    the causal one, never every past search's (issue 273)."""
 
     def __init__(self, cached: CachedEvaluator, *, policy: str = "normal", max_batch: int = 32) -> None:
         if cached.model.cfg.piece_centric:
@@ -352,6 +358,8 @@ class CachedNetworkEvaluator:
         self.policy = policy
         self.cached = cached
         self.epoch: Epoch | None = None
+        #: ``input_digest`` of the position the current epoch was opened at (``start``'s shortcut).
+        self._started: str | None = None
         #: C26's dense mode: the dense path itself (see the class docstring).
         self.dense = NetworkEvaluator(cached.model, max_batch=max_batch, scope="dense", policy=policy)
         #: Positions evaluated in each mode (C26): "dense" (a search rooted under N*) and "cached".
@@ -368,16 +376,22 @@ class CachedNetworkEvaluator:
         return state
 
     def start(self, root: PositionLike) -> Epoch:
-        """Open a search at ``root``: its epoch (the current one again when ``root`` is the
-        current epoch's anchor - the same search continuing). Under C26's phase form a root under
+        """Open a search at ``root``: its epoch - the current one again when ``root``'s network
+        input is the one the current epoch was opened at, moves and edges included (the same search
+        continuing; BUILD_LOG issue 274); else a new one, and the root refresh it replaces dropped
+        from the store (``CachedEvaluator.release``; issue 273). Under C26's phase form a root under
         N* boards gets the dense epoch - one object, with no anchor, so this asks the cached
         evaluator again, at no cost."""
         state = self._fit(state_of(root))
-        if self.epoch is not None and self.epoch.anchor == state_digest(state):
+        started = input_digest(state)
+        if self.epoch is not None and self.epoch.anchor is not None and self._started == started:
             return self.epoch
         with torch.no_grad():
-            self.epoch = self.cached.root_epoch(state)
-        return self.epoch
+            epoch = self.cached.root_epoch(state)
+        old, self.epoch, self._started = self.epoch, epoch, started
+        if old is not None and old is not epoch:
+            self.cached.release(old)
+        return epoch
 
     def __call__(self, positions: Sequence[PositionLike]) -> list[Evaluation]:
         if self.epoch is None:

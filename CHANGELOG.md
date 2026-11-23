@@ -10,6 +10,35 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-23 - C26/C27's review: the K/V store drops a past search's root refresh, and `start` reuses an epoch only for the same input (M2, L15; issues 273, 274)
+
+- **M2 (issue 273, which C26 made larger)**: nothing called `KVStore.drop_epoch`. The review measured
+  10 searches through one evaluator: 7 dead epochs, 24.75 MiB beside 3.61 MiB live, and unbounded
+  in a real run.
+  - Now `CachedNetworkEvaluator.start`, when it opens a new epoch, has the cached evaluator drop the
+    root refresh the new search replaces (`CachedEvaluator.release`): its history and every entry
+    computed under it.
+  - Only a root epoch that evaluator made, which it now records. In a store shared with another
+    evaluator the other's epochs stay (issue 274).
+  - The causal epoch, the dense epoch and node refreshes are kept.
+- **L15 (issue 274)**: `start`'s shortcut compared the anchor's `state_digest`, which holds neither
+  moves nor edges. So one evaluator started again at the same root under another legality policy
+  reused a refresh that had read another move graph. The shortcut now compares the root's whole
+  network input (`cache.input_digest`: every field of the position).
+
+Tests:
+- `test_the_store_keeps_only_the_live_search`: cached, cached, dense, cached, then another game.
+  After each start the store holds only the live epoch's entries. In a shared store, and for an
+  epoch the evaluator holds but did not make, the other evaluator's entries stay.
+- `test_release_drops_only_a_root_refresh_it_made`.
+- `test_start_reopens_at_a_root_whose_moves_differ`: two legality policies at one root. The second
+  start's root leaf is the dense pass over its own input, and starting there again computes
+  nothing.
+
+Spec: section 7.9 (epochs "die with section 8.7's garbage collection") and register C3. Nothing in
+the spec describes the store's bookkeeping or the shortcut. Spec issue 273 is resolved and issue
+274's second half; both are recorded in `docs/BUILD_LOG.md`. No edit.
+
 ### 2026-11-23 - C26/C27's review, the records: issue 264 under graph search - probed, pinned, a spec conflict for the user (M1); four statements corrected (L2, L3, L4, L9)
 
 The review of 6754794 ran three independent passes (spec fidelity, correctness, mutation): no HIGH

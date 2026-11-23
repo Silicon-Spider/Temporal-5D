@@ -6,6 +6,7 @@ through the engine's own search is ``tests/engine/test_phase_form.py``.
 
 * The defaults: off, N* = 50 (a placeholder); validation refuses an N* that is no positive integer
   and the phase form without C3's root refresh, which section 7.10 runs at or above N*.
+* ``release`` drops a root refresh the evaluator made and nothing else (BUILD_LOG issues 273, 274).
 * The predicate at its boundary: dense exactly under N*; never with the flag off.
 * ``root_epoch``: under N* the evaluator's one dense epoch - nothing computed, nothing stored; at or
   above N* the root refresh, bit for bit the cached path's without the phase form.
@@ -229,3 +230,26 @@ def test_a5_is_still_refused_under_the_phase_form():
     for cfg in (CacheConfig(), _phase(50)):
         with pytest.raises(NotImplementedError, match="issue 252"):
             CachedEvaluator(model, cfg)
+
+
+def test_release_drops_only_a_root_refresh_it_made():
+    """``release`` (BUILD_LOG issue 273): a root refresh this evaluator made goes from the store - its
+    history and the entries computed under it - and only once; the causal epoch, the dense epoch, a
+    node refresh and another evaluator's root refresh in a shared store are kept (issue 274)."""
+    model = _model(2)
+    root = _root("standard", 2)
+    child = root.apply(("physical", sorted(root.heads())[0]))
+    ev = CachedEvaluator(model, CacheConfig(root_refresh=True, node_refresh=True))
+    other = CachedEvaluator(model, CacheConfig(root_refresh=True), ev.store)
+    mine, theirs = ev.root_epoch(root.state()), other.root_epoch(child.state())
+    with torch.no_grad():
+        ev.evaluate(child.state(), mine)
+    node = ev.refresh(child.state(), mine)
+    keys = lambda: {k[0] for k in ev.store.entries}  # noqa: E731
+    assert keys() == {mine.key, theirs.key, node.key} and ev.store.computed["supersession"] > 0
+    n = len(ev.store.epoch_keys(mine.key))
+    assert ev.release(theirs) == 0 and ev.release(node) == 0 and ev.release(ev.dense_epoch) == 0
+    assert ev.release(mine) == n > 0 and keys() == {theirs.key, node.key} and ev.release(mine) == 0
+    causal = CachedEvaluator(model)
+    epoch = causal.root_epoch(root.state())
+    assert causal.release(epoch) == 0 and {k[0] for k in causal.store.entries} == {"causal"}

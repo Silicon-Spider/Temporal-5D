@@ -5499,13 +5499,31 @@ superseded or made moot says so; nothing is deleted.
     register C3, C3a). `KVStore.drop_epoch` exists and nothing calls it, so a cached game's store
     grows by each search's root refresh (both perspectives' history) and its supersession entries.
     Pre-existing (C3's), noted because C26 makes the cached half's memory per game the store's. Not
-    built: dropping the previous search's epochs at `start`.
+    built: dropping the previous search's epochs at `start`. *Resolved 2026-11-23 (C26/C27's review,
+    finding M2): the review measured it - 10 searches through one evaluator (dense, cached, a new
+    game) left 7 dead epochs, 24.75 MiB beside 3.61 MiB live.* `CachedNetworkEvaluator.start`, when
+    it opens a new epoch, has the cached evaluator drop the root refresh the new search replaces
+    (`CachedEvaluator.release`): its history and every entry computed under it. Only a root epoch
+    that evaluator made (it records their keys), so in a store shared with another evaluator the
+    other's epochs stay (issue 274); the causal epoch, which later searches share, the dense epoch,
+    which stores nothing, and node refreshes are kept. After every start the store holds the live
+    epoch's entries and the causal epoch's (`test_the_store_keeps_only_the_live_search`,
+    `test_release_drops_only_a_root_refresh_it_made`). Still kept: a root-dependent causal epoch
+    (`causal@<anchor>`: C20's `past_and_epoch_history` reading without the root refresh), keyed by
+    its anchor alone, which a later search at the same root reuses - one per root a game visits, as
+    before; no caller runs that configuration.
 274. **Epoch keys are unique per evaluator, not per store; `state_digest` omits the moves** (§7.9;
     register C3, C19). Pre-existing: a refresh epoch's key is `kind:<counter>:<anchor>` with the
     evaluator's counter, so two evaluators sharing one store at one root would write under one key
     (`put` refuses the second); and since `state_digest` holds no moves or edges, one evaluator used
     under two expansion configurations at one root reuses the first epoch (`start`'s shortcut),
-    conditioned on the first input. Neither arises in the build's callers; not changed.
+    conditioned on the first input. Neither arises in the build's callers; not changed. *The second
+    half resolved 2026-11-23 (C26/C27's review, finding L15):* the shortcut compares the root's
+    whole network input (`cache.input_digest`: every field of the position, moves and edges
+    included), so one evaluator started at one root under two legality policies opens a refresh for
+    each, and the first goes from the store (issue 273; `test_start_reopens_at_a_root_whose_moves_differ`).
+    The first half stands: keys are unique per evaluator, and `release` drops only the epochs its own
+    evaluator made.
 275. **A search driven without `start_epoch` keeps the evaluator's last epoch - now its mode too**
     (register C26). `run_search` opens the epoch; a caller that drives `CStepDriver` and `serve`
     itself must call `start_epoch` first, or the evaluator answers in whichever epoch it opened
@@ -10280,3 +10298,9 @@ entry changes in the same edit as its code, which the standing rule defers to up
     reading (b) would need (`reroot`, `set_epoch`). Issues 261 and 269 are restated, edit 385 is
     proposed, and the cached path's docstring is corrected. No engine code changed. Checks: ruff
     clean; R6f "4 passed in 54.24s".
+  - **The store and the shortcut** (M2, L15). `start` drops the root refresh it replaces
+    (`CachedEvaluator.release`, only epochs that evaluator made), and its shortcut compares the
+    whole network input (`input_digest`). This resolves issue 273 and the second half of issue 274.
+    Checks: ruff clean; the three new tests with the tests that start one evaluator more than once
+    (R6d, R6e, the anchor tests, `test_one_cached_evaluator_follows_its_search_to_a_new_root`, the
+    dense dispatch, the dense epoch's number): "12 passed in 40.06s".

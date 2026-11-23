@@ -57,7 +57,7 @@ from t5d.engine.capi import T5D_MOVE_TRAVEL, T5D_NO_LIMIT, T5D_SPLIT_BOARD_MOVE,
 from t5d.engine.evaluator import CachedNetworkEvaluator, NetworkEvaluator, _split, run_search, state_of
 from t5d.engine.play import ROYAL_IDS
 from t5d.net import NetConfig, build_model
-from t5d.net.cache import CacheConfig, CachedEvaluator, reference_output, state_digest
+from t5d.net.cache import CacheConfig, CachedEvaluator, input_digest, reference_output, state_digest
 from t5d.net.state import PIECE_IDS, RELATION_IDS
 from tests.engine.helpers import ENGINE_VARIANTS, requires_engine
 from tests.net.test_cache import _close
@@ -532,6 +532,36 @@ def test_the_root_refresh_at_an_engine_root_is_the_dense_pass(variant, supersess
         stale.start(root.position())  # the pseudo-legal expansion: one state_digest with the leaf, other moves
         assert stale.epoch.anchor == state_digest(ev.first)
         assert _logit_gap(stale([ev.first])[0], want) > ROOT_DENSE_BOUND, (variant, "the stale anchor misses the dense pass")
+
+
+def test_start_reopens_at_a_root_whose_moves_differ():
+    """``start``'s shortcut (BUILD_LOG issue 274): one evaluator is started at a root under one legality
+    policy - the pseudo-legal moves - then at the same root under another - the search's legal ones:
+    one ``state_digest``, other moves and edges. The second start opens a root refresh of its own,
+    whose root leaf is the dense pass over the legal input (it would miss it reading the first
+    refresh's move graph - ``test_the_root_refresh_at_an_engine_root_is_the_dense_pass``'s stale
+    anchor); started there again it continues that epoch, computing nothing; and the first epoch's
+    entries are gone (issue 273)."""
+    from t5d.engine.search import search_params
+
+    model = _model(3)
+    dense = NetworkEvaluator(model, scope="dense")
+    p = search_params()
+    with _differing_root("Standard - Two Timelines") as root:
+        pseudo = root.position().state
+        legal, again = (
+            root.position(legal_moves=True, legality_checks=p.legality_checks, legality_nodes=p.legality_nodes).state for _ in range(2)
+        )
+        assert state_digest(pseudo) == state_digest(legal) and not np.array_equal(pseudo.moves, legal.moves)
+        assert input_digest(pseudo) != input_digest(legal) == input_digest(again)
+        ev = CachedNetworkEvaluator(CachedEvaluator(model, CacheConfig(root_refresh=True)))
+        first = ev.start(pseudo)
+        second = ev.start(legal)
+        assert second is not first and second.anchor == first.anchor and second.key != first.key
+        assert _logit_gap(ev([legal])[0], dense([legal])[0]) < ROOT_DENSE_BOUND
+        computed = dict(ev.cached.store.computed)
+        assert ev.start(again) is second and ev.cached.store.computed == computed
+        assert {k[0] for k in ev.cached.store.entries} == {second.key}
 
 
 # --- one store across games, epochs and searches --------------------------------------------------

@@ -177,7 +177,7 @@ import itertools
 import math
 import numbers
 import struct
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 
 import numpy as np
 import torch
@@ -415,6 +415,31 @@ def state_digest(state: PositionState) -> str:
     return h.hexdigest()
 
 
+def input_digest(state: PositionState) -> str:
+    """A digest of a position's whole network input, as hex: every field of the state - the boards
+    and their flags, the candidate moves, the edges (the move graph and the typed relations), the
+    lineage, the action's flags and counts, the register counts. ``state_digest`` names an anchor in
+    an epoch's key and leaves the moves and edges out; a root refresh's dense pass reads them, so
+    ``CachedNetworkEvaluator.start`` reuses its epoch only for a root whose input is this one
+    (BUILD_LOG issue 274)."""
+    h = hashlib.blake2b(digest_size=16)
+    for f in fields(state):
+        value = getattr(state, f.name)
+        h.update(f.name.encode("utf-8"))
+        if value is None:
+            h.update(b"\x00none")
+        elif isinstance(value, np.ndarray):
+            h.update(f"{value.dtype.str}{value.shape}".encode())
+            h.update(np.ascontiguousarray(value).tobytes())
+        elif isinstance(value, (bool, np.bool_)):
+            h.update(b"\x01" if value else b"\x00")
+        elif isinstance(value, numbers.Integral):
+            h.update(struct.pack("<q", int(value)))
+        else:
+            raise TypeError(f"input_digest: no digest for the field {f.name}={value!r}")
+    return h.hexdigest()
+
+
 def topological_order(frozen: np.ndarray, deps: dict[int, list[int]], state: PositionState) -> list[int]:
     """The frozen boards with every board after the boards it reads; ties in ``(p, h)``
     order (canonical, so that every path computes a node's boards in one order)."""
@@ -508,6 +533,9 @@ class CachedEvaluator:
         self.config.validate()
         self.store = KVStore() if store is None else store
         self._epochs = itertools.count()
+        #: The keys of the refreshed epochs this evaluator made: the ones ``release`` may drop - a
+        #: store shared with another evaluator holds that evaluator's epochs too (BUILD_LOG issue 274).
+        self._made: set[str] = set()
         # C26: the one dense epoch every search rooted under N* shares (``dense_epoch``).
         self._dense_epoch = Epoch("dense", "dense")
 
@@ -589,7 +617,22 @@ class CachedEvaluator:
                 kv = torch.stack([torch.stack([k[0, :, sl], v[0, :, sl]]) for k, v in captured])
                 entry = self._entry(kv, out.trunk[0, sl], (), "refresh")
                 self.store.put((epoch.key, _history_digest(board_ident(view, int(b), acting=True))), entry)
+        self._made.add(epoch.key)
         return epoch
+
+    def release(self, epoch: Epoch) -> int:
+        """Drop a past search's root refresh from the store - its history and every entry computed
+        under it - and return how many entries went (BUILD_LOG issue 273; section 7.9: epochs "die
+        with section 8.7's garbage collection"). Only a root epoch this evaluator made: its key
+        carries this evaluator's counter, so no later search of this evaluator is given it again, and
+        an epoch another evaluator made in a shared store is that evaluator's (issue 274). Anything
+        else - the causal epoch, which later searches share, the dense epoch, which stores nothing,
+        a node refresh, another evaluator's epoch - is kept (0). The caller must hold no node in the
+        epoch: ``CachedNetworkEvaluator.start`` calls it for the epoch its new search replaces."""
+        if epoch.kind != "root" or not epoch.refreshed or epoch.key not in self._made:
+            return 0
+        self._made.discard(epoch.key)
+        return self.store.drop_epoch(epoch.key)
 
     # -- planning --
 

@@ -27,7 +27,8 @@ refresh (C3). "The dense search" is read as the same network's dense pass, batch
   it (R6g), F1 in BF16 (R6h, slow).
 * Units: N*'s placeholder is ``token_counts.N_STAR``'s; the dense epoch's engine number; the dense
   dispatch is ``NetworkEvaluator``'s, bit for bit, with either prior and the leave logits; its
-  ``max_batch``; the start shortcut; A5 still refused first.
+  ``max_batch``; the start shortcut; A5 still refused first; the store keeps only the live search's
+  epoch (issue 273).
 
 FP32, 2 layers, random weights at initialisation scale, the v1 defaults (B15, B16, A6, A7); the
 verification ladder off in every search (from Python it never changes the tree, H41, and it costs
@@ -58,7 +59,7 @@ from t5d.engine.evaluator import (
     state_of,
 )
 from t5d.net import NetConfig, build_model, synthetic_state
-from t5d.net.cache import CacheConfig, CachedEvaluator, reference_output, state_digest
+from t5d.net.cache import CacheConfig, CachedEvaluator, KVStore, reference_output, state_digest
 from tests.engine.helpers import ENGINE_VARIANTS, requires_engine
 from tests.engine.test_cached_variants import THREE_VARIANTS, _evals_close, _logit_gap, _search_root
 
@@ -796,3 +797,37 @@ def test_a5_is_refused_first_under_the_phase_form():
     model = build_model(NetConfig(trunk_dtype="fp32", n_layers=1, piece_centric=True), seed=0)
     with pytest.raises(NotImplementedError, match="issue 252"):
         CachedNetworkEvaluator(SimpleNamespace(model=model))
+
+
+def test_the_store_keeps_only_the_live_search():
+    """``start`` drops the root refresh its new search replaces (BUILD_LOG issue 273): one evaluator
+    following play - cached, cached, dense, cached, a new game cached - holds after each start only the
+    live epoch's entries (none under a dense search), and the shared causal epoch's are kept. Only
+    epochs it made: in a store shared with another evaluator (issue 274), the other's root refresh
+    stays, and so does an epoch the evaluator holds without having made it."""
+    model = _model(10)
+    roots = [synthetic_state(110 + i, n, n_timelines=2) for i, n in enumerate((8, 9, 4, 10, 8))]
+    ev = _phase(model, 6)  # the 4-board root is dense
+    for i, root in enumerate(roots):
+        epoch = ev.start(root)
+        ev([root, roots[(i + 1) % len(roots)]])
+        keys = {k[0] for k in ev.cached.store.entries}
+        assert keys == (set() if epoch.mode == "dense" else {epoch.key}), (i, keys)
+        assert ev.cached.store.computed["supersession"] + ev.cached.store.computed["refresh"] > 0
+    assert [ev.positions_by_mode[m] > 0 for m in ("dense", "cached")] == [True, True]
+    shared = KVStore()
+    a = CachedNetworkEvaluator(CachedEvaluator(model, CacheConfig(root_refresh=True), shared))
+    b = CachedNetworkEvaluator(CachedEvaluator(model, CacheConfig(root_refresh=True), shared))
+    ea, eb = a.start(roots[0]), b.start(roots[1])
+    a.start(roots[2])
+    keys = {k[0] for k in shared.entries}
+    assert ea.key not in keys and eb.key in keys and a.epoch.key in keys
+    b.epoch = a.epoch  # an epoch b did not make
+    b.start(roots[3])
+    assert a.epoch.key in {k[0] for k in shared.entries}, "another evaluator's epoch is kept"
+    causal = CachedNetworkEvaluator(CachedEvaluator(model))
+    first = causal.start(roots[0])
+    causal(roots[:2])
+    causal.start(roots[1])
+    assert causal.epoch is first or causal.epoch.key == first.key == "causal"
+    assert {k[0] for k in causal.cached.store.entries} == {"causal"}, "the shared causal epoch is kept"
