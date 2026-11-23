@@ -10920,19 +10920,35 @@ repository's copies, which upstream has still to take:
 341. **§13.1 6v**: Proposed - add "E8 at match play only (§12.5)", and that the effort label's
     convergence is the search's smart-pruning or KLD stop, not a budget stop. Why: issues 474,
     475.
-342. **§8.6 "Guards"**, revising edit 333 (applied upstream in the spec review of 2026-11-15, not
-    yet on main): now (with 333) - "no batch starts that would end past it". Proposed - add "save
-    that a root with no visited child is searched until one has a visit (a move must be chosen):
-    from an unevaluated root, up to two evaluator calls - its own leaf, then its children's".
-    Why: issue 458 as revised (review L1 of E11: the one-batch bound was wrong, and is now
-    measured).
-343. **§8.6's closing paragraph and "Guards"' second bullet**, revising edit 336 (applied upstream
-    in the spec review of 2026-11-15, not yet on main): now (with 336) - "their jobs run beside the
-    search on their own cores and end with the decision, inside the hard bound, nothing deducted
-    from the allocation". Proposed - "their jobs run beside the search on their own cores; nothing
-    waits for them, so they cost the move no time, and nothing is deducted from the allocation;
-    they end with the ladder's decision (the re-root after the move) or their own budgets, not at
-    the hard bound". Why: issue 466 as reworded (review L11 of E11).
+342. **§16's E7 as-built entry** ("E7, time management (on the search lane)"), where edit 333
+    landed when it was applied upstream (the spec review of 2026-11-15) - not §8.6 "Guards", as
+    this edit first said (retargeted 2026-11-24, the E11 review's S6). Now: "The hard bound is a
+    multiple of the plan that falls with N, capped at a share of the clock: no batch starts that
+    would end past it, and the rules engine's calls inside a batch stop at it — unknown, never a
+    verdict." Proposed - after it: "Match play's steps after the search sit inside it: the chosen
+    move's verification gets what it leaves, and where that is cut the most visited child known
+    legal is played. Two exceptions: a root with no visited child is searched until one has a
+    visit (a move must be chosen) - from an unevaluated root up to two evaluator calls, its own
+    leaf and then its children's - its own listing (its expansion, or the flat form's fallback
+    listing) running without the bound meanwhile and every other call keeping it; and where no
+    child is known legal once the verification is cut, nor the turn-start verdict's witness
+    continues, the side verifies its children in visit order against its remaining clock, within
+    the game loop's node budget, and flags only if that clock runs out - none shown legal, or no
+    move found, with time left ends the game unscored." Why: issue 458 as revised (review L1 of
+    E11: the one-batch bound was wrong, and is now measured; phase 2's H1 and M1; the second
+    review's S1 and S4; issues 480, 482).
+343. **§8.6 "Guards"' second bullet**, revising edit 336 (applied upstream in the spec review of
+    2026-11-15). Now (the spec's text): "**The provers run beside the search, inside the hard
+    bound.** Under v3 the chosen line is scanned for a refutation only under 50 boards, by the
+    settling scans that follow each change of the principal line; Hunt, under 100 boards, looks
+    for our own mate, not theirs. The provers' jobs run on their own cores and end with the
+    decision, and nothing is deducted from the move's allocation." Proposed - the bold lead
+    "**The provers run beside the search, costing the move no time.**", and for the third
+    sentence: "The provers' jobs run on their own cores; nothing waits for them, so they cost the
+    move no time, and nothing is deducted from the move's allocation; they end with the ladder's
+    decision (the re-root after the move) or their own budgets, not at the hard bound." The rest
+    of the bullet (the reserve) stands. Why: issue 466 as reworded (review L11 of E11; the bold
+    lead and the "now" text the E11 review's S6).
 344. **§16's H13/H43 entry** ("H13, H43: the asset map and Hunt's suggested lines each get an
     on/off switch for 6e's match test (section 13.1)"): Proposed - move it from the not-yet-built
     list to the built form: "the two switches (`asset_map`, on; `hunt_suggest`, off) reach every
@@ -10946,13 +10962,16 @@ repository's copies, which upstream has still to take:
     before the sign-off); no hook carries a proof into a prior - Hunt's partial lines have their
     own flag (`hunt_suggest`, off), and a proof-to-prior switch is not built (issue 478)". Why:
     issues 478, 479, 470.
-346. **§8.6 "Guards" and register E7's "tight wall-clock hard bound"**, beside edits 333 and 342:
-    Proposed - "match play's steps after the search sit inside the hard bound - the chosen move's
-    verification gets what it leaves, the most visited child known legal played where it is cut;
-    two exceptions to the inviolable bound: a root with no visited child is searched until one has
-    a visit, and where no child is known legal once the verification is cut, the side searches
-    for a legal move against its remaining clock and flags if it runs out". Why: issue 458 as
-    revised in phase 2 (the E11 review's H1 and M1).
+346. **§8.6's frame sentence and register E7's "tight wall-clock hard bound"**, beside edit 342
+    (retargeted 2026-11-24, the E11 review's S6: the operational text is edit 342's, in §16's E7
+    entry). Now - §8.6: "Signals act on the soft bound; the hard bound is inviolable."; register
+    E7: "... extensions in evals, tight wall-clock hard bound; no root-scan reserve ...".
+    Proposed - §8.6: "Signals act on the soft bound; the hard bound is inviolable but for two
+    exceptions - a move needs a visit, and the move played must be known legal (§16's E7 entry)."
+    Register E7: "... extensions in evals, tight wall-clock hard bound (two exceptions: a move
+    needs a visit, and must be known legal - §16); no root-scan reserve ...". Why: issue 458 as
+    revised in phase 2 (the E11 review's H1 and M1) and by the second review's S1 and S4 (issues
+    480, 482); the spec and the register change together, upstream.
 *Edits 402 and up are the review's code round (2026-11-22 to 2026-11-23; "Where things stand",
 top), numbered from the main loop's block. The documents they name are the repository's revised
 copies of 2026-11-15, which upstream has still to take; section 16's preamble says an as-built
@@ -12031,3 +12050,5 @@ entry changes in the same edit as its code, which the standing rule defers to up
     board-move: 10 unknown edges below the root).
   - **S5**: a deadline-cut turn-start check made again outside the deadline, a cut verification
     not marked done (issue 483); the correctness pass's p5 adopted.
+  - **S6**: edits 342 (now §16's E7 entry), 343 (the spec's own text, its bold lead) and 346 (the
+    frame sentence and register E7) rewritten; "not yet on main" dropped; D13 -> H22.

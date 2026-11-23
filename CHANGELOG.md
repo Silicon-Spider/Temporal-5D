@@ -10,6 +10,26 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - E11 review round 2, S6: the proposed edits point at the spec's text
+
+The review's S6 (SS-F4). Proposed edits 342, 343 and 346 pointed at the wrong text: edit 333
+landed upstream in §16's E7 as-built entry, not in §8.6 "Guards", where 342 and 346 aimed, so §16
+would have kept the hard bound with no exceptions; 343's "now" was its own proposal, not the
+spec's, and missed the bullet's bold lead "inside the hard bound"; 346 had no "now" text; §8.6's
+frame sentence ("the hard bound is inviolable") was left unqualified; and 342 and 343 still said
+the review's edits were "not yet on main".
+- **Edit 342** now targets §16's E7 entry, quoting its sentence on the hard bound, and proposes
+  the two exceptions as built after this round: the root's own listing alone lifted (S4), the
+  search against the remaining clock within the node budget, and the unscored ends (S1).
+- **Edit 343** quotes §8.6 "Guards"' second bullet as the spec has it, and proposes its bold lead
+  ("costing the move no time") with its third sentence.
+- **Edit 346** quotes §8.6's frame sentence and register E7's text, and qualifies both with the
+  two exceptions - the spec and the register together, upstream.
+- "Not yet on main" is gone; the phase-2 entry's `Spec:` line names decision 13 as H22, not D13.
+
+Spec: §8.6 (frame sentence, "Guards"), §16's E7 entry, register E7 - edits 342, 343 and 346
+rewritten (proposed, upstream). No code; no measured figure.
+
 ### 2026-11-24 - E11 review round 2, S5: a check or verification the deadline cut is made again outside it
 
 The review's S5 (SC-M4). Since E11 made the hard bound every match decision's deadline, any batch
@@ -246,7 +266,7 @@ findings H1 (parts 1-4 and 6), M1, M3 (the Python test), M4, L2 and L3.
   `docs/BUILD_LOG.md`, edit 346.
 
 Spec: §8.6 ("Guards": the hard bound inviolable, the post-search scan inside it), §12.3 (match
-play); register E7 (the tight wall-clock hard bound), H37, D13 (decision 13, adopted when it lands).
+play); register E7 (the tight wall-clock hard bound), H37, H22 (decision 13, adopted when it lands).
 Proposed edit 346; issues 456, 458, 467. No measured figure.
 
 ### 2026-11-23 - main (d4c7fb9) merged into lane/search, the two deadlines reconciled: one mechanism (E11 review M2, M3)
