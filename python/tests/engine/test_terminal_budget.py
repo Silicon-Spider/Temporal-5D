@@ -264,3 +264,130 @@ def test_with_no_child_known_legal_netplay_plays_the_witness(net, monkeypatch, m
     with Game.from_pgn(res.record) as replay:
         assert replay.replay_all() == 1
         assert replay.snapshot().fingerprint == res.final_fingerprint
+
+
+# --- the review of decision 13: its mutation pass's candidate tests, adopted (X1, X6, L10) -------------
+
+#: Bare kings on five timelines: a move touches two boards at most, so no two moves complete White's action.
+FIVE_BOARDS = tuple(f"[k7/8/8/8/8/8/8/7K:{t}:1:w]" for t in ("-2", "-1", "0", "+1", "+2"))
+
+
+def _verify_real_for(n: int, monkeypatch) -> list:
+    """Search.verify answers for real for its first n calls, then unknown; the verdict's witness withheld
+    (X2 would play it while the moves are its prefix - tested apart)."""
+    real = Search.verify
+    calls: list = []
+
+    def verify(self, index, **kwargs):
+        calls.append(kwargs)
+        return real(self, index, **kwargs) if len(calls) <= n else T5D_LEGALITY_UNKNOWN
+
+    monkeypatch.setattr(Search, "verify", verify)
+    monkeypatch.setattr(netplay.TurnWitness, "moves", lambda self: [])
+    return calls
+
+
+def _unverified_params(monkeypatch):
+    real_params = netplay._decision_params
+
+    def unverified(*args, **kwargs):
+        p = real_params(*args, **kwargs)
+        for name, value in UNVERIFIED.items():
+            setattr(p, name, value)
+        return p
+
+    monkeypatch.setattr(netplay, "_decision_params", unverified)
+
+
+def test_checks_and_nodes_reach_their_own_tiers():
+    """X1 (M24, M28): the binding hands checks to tier 2 and nodes to tier 3, never the other way. Bare kings:
+    tier 3 needs 4 search nodes (2 leave the move unknown), one tier-2 check settles it."""
+    with Game.from_fen([BARE_KINGS]) as g, _searched(g) as s:
+        assert s.verify(0, checks=0, nodes=2) == T5D_LEGALITY_UNKNOWN
+        assert s.child(0).legality == T5D_LEGALITY_UNKNOWN
+    with Game.from_fen([BARE_KINGS]) as g, _searched(g) as s:
+        assert s.verify(0, checks=1, nodes=0) == T5D_LEGALITY_LEGAL
+
+
+def test_the_bindings_default_verification_is_exact(monkeypatch):
+    """M31: ``Search.verify``'s default is exact - T5D_NO_LIMIT for both - not the game loop's budget."""
+    with Game.from_fen([BARE_KINGS]) as g, _searched(g) as s:
+        seen = []
+        real_call = s._lib.call
+
+        def call(name, *args, **kwargs):
+            if name == "t5d_search_verify_budgeted":
+                seen.append((args[2].value, args[3].value))
+            return real_call(name, *args, **kwargs)
+
+        monkeypatch.setattr(s._lib, "call", call)
+        assert s.verify(0) == T5D_LEGALITY_LEGAL
+        assert seen == [(T5D_NO_LIMIT, T5D_NO_LIMIT)]
+
+
+def test_the_budgeted_verification_keeps_the_memory_ceiling():
+    """X7 (M26): tier 3 alone (no checks, nodes unlimited) settles a child of bare kings on three timelines;
+    under a search whose mate_bytes is below one held position it stops at that ceiling - unknown, the child
+    kept."""
+    for mate_bytes, want in ((None, T5D_LEGALITY_LEGAL), (1, T5D_LEGALITY_UNKNOWN)):
+        extra = {} if mate_bytes is None else {"mate_bytes": mate_bytes}
+        with Game.from_fen(list(THREE_BOARDS)) as g:
+            s = Search(g, params=search_params(g.lib, **QUIET, **UNVERIFIED, **extra))
+            s.run(T5D_EVALUATOR_UNIFORM, 32)
+            n = len(s.children())
+            assert s.verify(0, checks=0, nodes=T5D_NO_LIMIT) == want
+            assert len(s.children()) == n
+            s.close()
+
+
+def test_netplay_rolls_back_the_whole_action_after_two_moves(net, monkeypatch):
+    """X6 (M39): two moves played in the action, the third choice unsettled - the game is put back before both,
+    not only the last; the record replays to no action."""
+    cfg, ev = net
+    _unverified_params(monkeypatch)
+    calls = _verify_real_for(2, monkeypatch)
+    play = PlayConfig(start_fen=FIVE_BOARDS, playouts=4, cap_turns=0, cap_boards=0, **QUIET)
+    with Game.from_fen(list(FIVE_BOARDS)) as start:
+        fingerprint = start.snapshot().fingerprint
+    with torch.no_grad():
+        res = play_game(ev, play, net_cfg=cfg)
+    assert len(calls) == 3
+    assert (res.end, res.unsettled, res.actions) == ("unknown", "choice", [])
+    assert res.decisions == 2  # two moves played in the action, then the game put back before both
+    assert res.final_fingerprint == fingerprint
+    with Game.from_pgn(res.record) as replay:
+        assert replay.replay_all() == 0
+
+
+def test_netplay_decision_log_survives_an_unsettled_choice(net, monkeypatch):
+    """L10 (M47): the unsettled decision is not logged (no move was chosen) - the log holds the decisions made."""
+    cfg, ev = net
+    _unverified_params(monkeypatch)
+    _verify_real_for(1, monkeypatch)
+    play = PlayConfig(start_fen=THREE_BOARDS, playouts=4, cap_turns=0, cap_boards=0, decision_log=True, **QUIET)
+    with torch.no_grad():
+        res = play_game(ev, play, net_cfg=cfg)
+    assert (res.end, res.unsettled) == ("unknown", "choice")
+    assert len(res.decision_log) == res.decisions == 1
+
+
+def test_netplay_cli_takes_terminal_nodes(monkeypatch, capsys):
+    """L10 (M42): ``--terminal-nodes`` reaches the games - within one node the start's verdict is unknown."""
+    import json
+
+    seen = []
+    real = netplay.play_game
+
+    def spy(evs, cfg, **kwargs):
+        seen.append(cfg.terminal_nodes)
+        return real(evs, cfg, **kwargs)
+
+    monkeypatch.setattr(netplay, "play_game", spy)
+    argv = [
+        *("--net", "small", "--threads", str(torch.get_num_threads()), "--no-replay", "--variant", "Standard"),
+        *("--split", "ply", "--mode", "self", "--no-hunt", "--no-settling", "--no-assets", "--terminal-nodes", "1"),
+    ]
+    assert netplay.main(argv) == 0
+    assert seen == [1]
+    games = [json.loads(line) for line in capsys.readouterr().out.splitlines() if '"unsettled"' in line]
+    assert len(games) == 1 and games[0]["end"] == "unknown" and games[0]["unsettled"] == "verdict"

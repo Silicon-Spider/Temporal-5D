@@ -1255,6 +1255,16 @@ TEST(capi_search_verifies_a_chosen_move_within_a_budget_h22) {
               static_cast<unsigned long long>(n), unknown_budgets, settled);
   CHECK_EQ(settled, T5D_LEGALITY_LEGAL);
   CHECK(unknown_budgets >= 1);  // no budget settles nothing
+  // Checks reach tier 2 and nodes tier 3, never the other way (the review of decision 13's X1:
+  // M24): tier 3 needs 4 search nodes here (2 leave the move unknown), one tier-2 check settles it.
+  {
+    const SearchHandle x = searched();
+    REQUIRE_EQ(t5d_search_verify_budgeted(x.get(), 0, 0, 2, &legality, nullptr), T5D_OK);
+    CHECK_EQ(legality, T5D_LEGALITY_UNKNOWN);
+    const SearchHandle y = searched();
+    REQUIRE_EQ(t5d_search_verify_budgeted(y.get(), 0, 1, 0, &legality, nullptr), T5D_OK);
+    CHECK_EQ(legality, T5D_LEGALITY_LEGAL);
+  }
   // Refused: no search, nowhere to answer, no such child, a batch waiting.
   CHECK_EQ(t5d_search_verify_budgeted(nullptr, 0, 0, 0, &legality, nullptr), T5D_ERR_ARGUMENT);
   CHECK_EQ(t5d_search_verify_budgeted(s.get(), 0, 0, 0, nullptr, nullptr), T5D_ERR_ARGUMENT);

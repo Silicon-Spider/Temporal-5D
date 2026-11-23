@@ -217,6 +217,7 @@ TEST(selfplay_games_end_by_checkmate_stalemate_or_the_cap) {
   CHECK(checkmates >= 2);
   CHECK(stalemates >= 2);
   CHECK(checkmates + stalemates + capped + unscored == 10);
+  CHECK(unscored <= 1);  // one game, at 88 boards (the review of decision 13, L4)
 }
 
 TEST(selfplay_match_play_carries_the_tree) {

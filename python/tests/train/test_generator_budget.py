@@ -11,19 +11,20 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import numpy as np
 import pytest
 import torch
 
 import t5d.train.selfplay as selfplay
 from t5d.engine import netplay
 from t5d.engine.capi import T5D_LEGALITY_UNKNOWN, T5D_NO_LIMIT
-from t5d.engine.evaluator import NetworkEvaluator
+from t5d.engine.evaluator import Evaluation, NetworkEvaluator, move_count, state_of
 from t5d.engine.game import Game
 from t5d.engine.netplay import SMALL, TERMINAL_NODES, UNSETTLED_NOTES
 from t5d.engine.search import Search
 from t5d.net import NetConfig, build_model
 from t5d.train.records import RECORD_VERSION, read_game, record_differences, write_game
-from t5d.train.selfplay import GeneratorConfig, generate_game, replay_positions
+from t5d.train.selfplay import GeneratorConfig, ResignConfig, generate_game, replay_positions
 from t5d.train.targets import target_differences
 from tests.engine.helpers import requires_engine
 
@@ -196,3 +197,61 @@ def test_the_reviews_four_choice_endings_now_play_on(evaluator, split, start, no
     assert (rec.end, rec.n_actions) == ("unknown", actions)
     assert f'[Termination "unknown{UNSETTLED_NOTES["verdict"]}"]' in rec.header["pgn"]
     assert any(d.choice == "verified_fallback" for d in rec.decisions)
+
+
+# --- the review of decision 13: its mutation pass's candidate tests, adopted (X6, L10) -----------------
+
+#: Bare kings on five timelines: a move touches two boards at most, so no two moves complete White's action.
+FIVE_BOARDS = tuple(f"[k7/8/8/8/8/8/8/7K:{t}:1:w]" for t in ("-2", "-1", "0", "+1", "+2"))
+
+
+def _verify_real_for(n: int, monkeypatch) -> list:
+    """Search.verify answers for real for its first n calls, then unknown; the verdict's witness withheld
+    (X2 would play it while the moves are its prefix - tested apart)."""
+    real = Search.verify
+    calls: list = []
+
+    def verify(self, index, **kwargs):
+        calls.append(kwargs)
+        return real(self, index, **kwargs) if len(calls) <= n else T5D_LEGALITY_UNKNOWN
+
+    monkeypatch.setattr(Search, "verify", verify)
+    monkeypatch.setattr(netplay.TurnWitness, "moves", lambda self: [])
+    return calls
+
+
+def test_generator_drops_the_whole_action_after_two_moves(evaluator, monkeypatch):
+    """X6 (M56, M62): two moves played in the action, the third choice unsettled - every decision of the action
+    dropped (not only the last) and the game put back before both moves (the start's fingerprint)."""
+    calls = _verify_real_for(2, monkeypatch)
+    cfg = replace(BASE, start_fen=FIVE_BOARDS, cap_turns=0, cap_boards=0, search_overrides=UNVERIFIED_OVERRIDES)
+    with Game.from_fen(list(FIVE_BOARDS)) as start:
+        fingerprint = start.snapshot().fingerprint
+    g = _generate(evaluator, cfg, keep_positions=True)
+    rec = g.record
+    assert len(calls) == 3
+    assert (rec.end, rec.n_actions, rec.decisions, g.positions) == ("unknown", 0, [], [])
+    assert rec.header["result"]["final_fingerprint"] == fingerprint
+
+
+class _Doomed:
+    """White always lost, Black always won (the acting player's view): a would-resign event at White's every
+    turn start."""
+
+    def __call__(self, positions):
+        out = []
+        for p in positions:
+            wdl = [-6.0, 0.0, 6.0] if state_of(p).acting_player == 0 else [6.0, 0.0, -6.0]
+            out.append(Evaluation(np.zeros(move_count(p), dtype=np.float32), np.array(wdl, dtype=np.float32)))
+        return out
+
+
+def test_generator_drops_the_dropped_actions_resignation_event(monkeypatch):
+    """L10 (M54): the would-resign event of the action an unsettled choice drops goes with it."""
+    calls = _verify_real_for(1, monkeypatch)
+    resign = ResignConfig(threshold=0.5, consecutive=1, disabled_fraction=1.0)  # resignation off: events recorded
+    cfg = replace(BASE, start_fen=THREE_BOARDS, cap_turns=0, cap_boards=0, search_overrides=UNVERIFIED_OVERRIDES, resign=resign)
+    rec = generate_game(_Doomed(), cfg, net_cfg=NET).record
+    assert len(calls) == 2
+    assert (rec.end, rec.n_actions, rec.decisions) == ("unknown", 0, [])
+    assert rec.header["resign"]["events"] == []

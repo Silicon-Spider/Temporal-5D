@@ -592,7 +592,8 @@ TEST(play_with_a_stop_from_sparse_starts_and_small_variants_never_throws) {
   for (const t5d_test::SparseStart& st : t5d_test::sparse_starts()) {
     starts.push_back({"sparse " + std::to_string(k++), t5d_test::game(st.boards, st.size, RuleOptions{})});
   }
-  std::size_t ended = 0, time_limits = 0;
+  std::size_t ended = 0, time_limits = 0, unscored = 0;
+  std::uint64_t witness_moves = 0;
   for (int g = 0; g < 26; ++g) {
     const Start& st = starts[static_cast<std::size_t>(g) % starts.size()];
     mcts::PlayParams pp;
@@ -602,14 +603,29 @@ TEST(play_with_a_stop_from_sparse_starts_and_small_variants_never_throws) {
     pp.seed = 1000 + static_cast<std::uint64_t>(g);
     pp.search.seed = pp.seed;
     pp.max_seconds = 0.05 + 0.017 * static_cast<double>((g * 7) % 23);
-    pp.terminal_nodes = std::numeric_limits<std::uint64_t>::max();  // exact: a test of the deadline, not of H22's budget
+    // Every third game exact (the deadline's own test); every third within one node - H22's budget:
+    // the start's verdict unknown, the game ended unscored at once (the review of decision 13, L4);
+    // every third with the fast classification, no lazy verification and each verification withheld
+    // (the test seam), so its choices fall to the verdict's witness (X2) or end unscored.
+    if (g % 3 == 0) pp.terminal_nodes = std::numeric_limits<std::uint64_t>::max();
+    if (g % 3 == 1) pp.terminal_nodes = 1;
+    if (g % 3 == 2) {
+      pp.search.legality = LegalityOptions::budgeted(0, 0);
+      pp.search.verify_unknown = false;
+      pp.unsettle_verification_for_tests = [](std::uint64_t) { return true; };
+    }
     const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform, pp.seed);
     mcts::GameRecord r(st.state);
     CHECK_NOTHROW(r = mcts::play_game(st.state, *ev, pp));
     ++ended;
     if (r.end == mcts::GameEnd::TimeLimit) ++time_limits;
+    if (r.end == mcts::GameEnd::Unknown) ++unscored;
+    witness_moves += r.witness_moves;
   }
-  std::fprintf(stderr, "  %zu games, %zu ended TimeLimit\n", ended, time_limits);
+  std::fprintf(stderr, "  %zu games, %zu ended TimeLimit, %zu Unknown; %llu witness moves\n", ended,
+               time_limits, unscored, static_cast<unsigned long long>(witness_moves));
+  CHECK(unscored >= 1);
+  CHECK(witness_moves >= 1);
 }
 
 TEST(flat_play_fallback_cut_by_the_deadline) {
@@ -1180,6 +1196,9 @@ TEST(play_terminal_budget_is_the_searchs_own_and_refuses_none_h22) {
   CHECK_EQ(mcts::kTerminalNodes, std::uint64_t{2'000'000});
   CHECK_EQ(mcts::PlayParams{}.terminal_nodes, mcts::kTerminalNodes);
   CHECK_EQ(mcts::SearchParams{}.mate_nodes, mcts::kTerminalNodes);
+  CHECK_EQ(std::string(mcts::unsettled_name(mcts::Unsettled::None)), std::string(""));  // L10 (M10)
+  CHECK_EQ(std::string(mcts::unsettled_name(mcts::Unsettled::Verdict)), std::string("verdict"));
+  CHECK_EQ(std::string(mcts::unsettled_name(mcts::Unsettled::Choice)), std::string("choice"));
   mcts::PlayParams pp;
   pp.terminal_nodes = 0;
   const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
@@ -1379,4 +1398,106 @@ TEST(play_a_choice_unsettled_off_the_witness_puts_the_game_back_after_two_moves_
   PgnReplay replay(read_pgn(record), PgnOptions{}, RuleOptions{});
   CHECK_NOTHROW(replay.play_all());
   CHECK_EQ(replay.actions_played(), std::size_t{0});
+}
+
+// ---- the review of decision 13: its mutation pass's candidate tests, adopted (X6, X7, L4, L10) -----
+
+TEST(play_an_unsettled_turn_start_at_the_cap_is_unknown_h22) {
+  // X7 (M08), adopted: H22, I11 - the rules come before the cap, so a capped turn start the budget
+  // cannot settle is Unknown (its question the verdict), never TurnCap. The mated start, its board cap
+  // reached at once, within one node (its proof needs 15).
+  const GameState s = t5d_test::game({"[8/8/8/8/8/5k2/6q1/7K:0:1:w]"}, BoardSize{8, 8});
+  mcts::PlayParams pp;
+  pp.search = quiet(pp.search);
+  pp.turn_cap.boards = 1;
+  REQUIRE(pp.turn_cap.reached(s));
+  pp.terminal_nodes = 1;
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
+  const mcts::GameRecord g = mcts::play_game(s, *ev, pp);
+  CHECK(g.end == mcts::GameEnd::Unknown);
+  CHECK(g.unsettled == mcts::Unsettled::Verdict);
+  CHECK(g.actions.empty());
+}
+
+TEST(play_a_verdict_the_memory_ceiling_stops_ends_the_game_unknown_h22) {
+  // X7 (M09), adopted: H22, H37 - a verdict the memory ceiling stops is unsettled too: the game ends
+  // Unknown, its question the verdict, with no action - an exact node budget, the ceiling below one
+  // held position.
+  const GameState s = t5d_test::game({"[k7/8/8/8/8/8/8/7K:0:1:w]"}, BoardSize{8, 8});
+  mcts::PlayParams pp;
+  pp.search = quiet(pp.search);
+  pp.search.mate_bytes = 1;
+  pp.terminal_nodes = std::numeric_limits<std::uint64_t>::max();
+  pp.max_actions = 2;
+  pp.playouts = 2;
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
+  mcts::GameRecord g(s);
+  CHECK_NOTHROW(g = mcts::play_game(s, *ev, pp));
+  CHECK(g.end == mcts::GameEnd::Unknown);
+  CHECK(g.unsettled == mcts::Unsettled::Verdict);
+  CHECK(g.actions.empty());
+}
+
+TEST(play_an_unsettled_choice_after_a_move_puts_the_game_back_h22) {
+  // X6 (F4: M17, M21), adopted: with no child known legal within the budget and the moves played off the
+  // verdict's witness, the game ends Unknown at the action's turn start - the action under way, one
+  // move already played, not recorded and the state put back before it. Issue 406's Q3 node, no
+  // legality budget in the search: (-0T2)Kc4(+0T2)c4 is shown legal within the game loop's 100,000
+  // nodes, and after it the jump (+2T2)Kb4(+1T1)a4 stays unknown within them; the first move is not
+  // the witness's (checked), so the witness does not continue.
+  const GameState s = fixture("q3-flat-node.5dpgn", q3());
+  const Move first = find_move(s, "(-0T2)Kc4(+0T2)c4");
+  const Move jump = find_move(s, "(+2T2)Kb4(+1T1)a4");
+  mcts::PlayParams pp;
+  pp.search = quiet(pp.search);
+  pp.search.split = mcts::TurnSplit::BoardMove;
+  pp.search.legality = LegalityOptions::budgeted(0, 0);
+  pp.search.verify_unknown = false;
+  pp.match_play = true;
+  pp.playouts = 2;
+  pp.terminal_nodes = 100'000;
+  REQUIRE(!same_move(first, witness_at(s, pp.terminal_nodes).at(0)));
+  TwoSteering steer(first, jump);
+  mcts::GameRecord g(s);
+  CHECK_NOTHROW(g = mcts::play_game(s, steer, pp));
+  std::fprintf(stderr, "  %s (%s), %llu decisions, %llu verified choices, %zu actions\n", mcts::game_end_name(g.end),
+               mcts::unsettled_name(g.unsettled), static_cast<unsigned long long>(g.decisions),
+               static_cast<unsigned long long>(g.verified_choices), g.actions.size());
+  CHECK(g.end == mcts::GameEnd::Unknown);
+  CHECK(g.unsettled == mcts::Unsettled::Choice);
+  CHECK_EQ(g.decisions, std::uint64_t{1});  // the first move was played, then the game put back before it
+  CHECK(g.actions.empty());
+  CHECK(g.final_state == s);
+  PgnReplay replay(read_pgn(tools::play_record(g, "custom")), PgnOptions{}, q3());
+  CHECK_NOTHROW(replay.play_all());
+  CHECK_EQ(replay.actions_played(), std::size_t{0});
+}
+
+TEST(play_the_node_budget_and_the_deadline_each_end_the_191_board_verdict_h22) {
+  // L4: the default node budget with a deadline - whichever stops the 191-board verdict first names the
+  // end. With a 1 s safety stop the deadline does (TimeLimit; the verdict takes about 3.8 s to spend
+  // 2,000,000 nodes there); with a 60 s one the node budget does (Unknown, its question the verdict -
+  // L6's clock rule: the deadline had not passed). Measured: 1.0 s and 2.5 s, the machine loaded;
+  // the bounds 5 s and 30 s.
+  const GameState s = fixture("vso-seed4-verdict.5dpgn", RuleOptions{});
+  REQUIRE_EQ(s.multiverse().board_count(), std::size_t{191});
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Material);
+  for (const double stop : {1.0, 60.0}) {
+    mcts::PlayParams pp;
+    pp.search = quiet(pp.search);
+    pp.playouts = 2;
+    pp.max_seconds = stop;
+    const mcts::GameRecord g = mcts::play_game(s, *ev, pp);
+    std::fprintf(stderr, "  stop %.0f s: %.2f s (verdicts %.2f s), %s (%s)\n", stop, g.seconds, g.seconds_verdicts,
+                 mcts::game_end_name(g.end), mcts::unsettled_name(g.unsettled));
+    CHECK(g.actions.empty());
+    if (stop < 2) {
+      CHECK(g.end == mcts::GameEnd::TimeLimit);
+      CHECK(g.seconds < 5.0);
+    } else {
+      CHECK(g.end == mcts::GameEnd::Unknown);
+      CHECK(g.unsettled == mcts::Unsettled::Verdict);
+      CHECK(g.seconds < 30.0);
+    }
+  }
 }

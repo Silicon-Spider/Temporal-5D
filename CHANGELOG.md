@@ -10,6 +10,24 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - Decision 13's review: the missing tests (X1, X6, X7, L4, L10)
+
+The review of decision 13's mutation pass left 16 survivors; its candidate tests are adopted
+(build-log issue 414): checks and nodes reaching their own tiers through the binding and the C
+function (X1); rollbacks after two moves in netplay, the generator and the C++ loop, the
+dropped action's resignation event, netplay's decision log and `--terminal-nodes`, the
+binding's exact default (X6, L10); the rules before the cap and a verdict the memory ceiling
+stops in the C++ loop, and the budgeted verification's memory ceiling (X7); the default budget
+against a deadline at the 191-board verdict, a bound on the unscored self-play games, and the
+never-throws sweep reaching the Unknown and witness paths (L4); `unsettled_name`'s strings
+(L10). `engine/tests/test_capi_search.cpp`, `test_legality_cost.cpp`, `test_selfplay.cpp`;
+`python/tests/engine/test_terminal_budget.py`, `python/tests/train/test_generator_budget.py`.
+Checks: t5d-tests _h22, capi_search_verifies, play_with and selfplay_games_end, 16 of 16
+(--werror build); the two Python files, 31 passed; ruff clean.
+
+Spec: none - tests only; register H22's built behaviour unchanged. No truth source, search,
+prover or scanner path changed; the proof channel stays off.
+
 ### 2026-11-24 - Decision 13's review, X2: the verdict's witness is played where no child is known legal
 
 The review of decision 13 (193b517; build-log issue 414) found an unsettled choice ending the

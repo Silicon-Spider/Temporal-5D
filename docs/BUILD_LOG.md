@@ -6706,6 +6706,24 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     - 1 and 5 actions, each ending later on a verdict the budget cannot settle. The rollback tests
     withhold the witness (it would continue whenever the moves played happen to be its prefix).
     Proposed edit 309.
+    **X1, X6, X7, L4, L10: the missing tests** (the mutation pass's candidates, adopted; its
+    survivors M08, M09, M10, M17, M18, M21, M24, M26, M28, M31, M39, M42, M47, M54, M56, M62). X1:
+    checks and nodes reach their own tiers, through the binding and through
+    `t5d_search_verify_budgeted` (bare kings: tier 3 needs 4 search nodes, one tier-2 check settles
+    the move). X6: rollbacks after two moves - netplay and the generator on five timelines of bare
+    kings (two moves real, the third unsettled; the witness withheld), the C++ loop's Q3 test with a
+    first move off the witness (F4) and, with the seam, after two moves (commit X2: M18); the
+    dropped action's resignation event goes with it (M54); netplay's decision log holds no unsettled
+    decision (M47); its `--terminal-nodes` reaches the games (M42); the binding's default is exact
+    (M31). X7: a capped turn start the budget cannot settle is Unknown, not TurnCap (M08); a verdict
+    the memory ceiling stops ends the game Unknown (M09); the budgeted verification keeps the
+    search's memory ceiling (M26). L4: the default budget with a deadline at the 191-board verdict -
+    a 1 s stop ends it TimeLimit (1.0 s), a 60 s one leaves it to the node budget, Unknown (2.5 s,
+    loaded); `selfplay_games_end_by_checkmate_stalemate_or_the_cap` holds its unscored games to one;
+    the never-throws sweep gives a third of its games a one-node budget (9 end Unknown) and a third
+    the fast classification with every verification withheld (131 witness moves), its third left
+    exact. L10: `unsettled_name`'s strings (M10). The observation on that self-play test (one game,
+    54 s of its 62) is left: trimming it was not shown to keep every kill.
 
 402. **6f's settling scans: their wrapper is not on main** (§13.1 6f "verify the proof-export
     invariant under TT churn for Hunt and the settling scans (§11.3)"; §11.4 "df-pn at the
