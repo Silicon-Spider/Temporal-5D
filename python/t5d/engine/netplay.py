@@ -42,6 +42,15 @@ mirrors the engine's ``play_game`` (``src/selfplay.cpp``; ``t5d-play``) step for
   (deterministic). A side whose clock runs out loses on time (``end`` "flag", result ``*``: the
   clock is the match's convention, not a rule), as the engine's ``play_game`` does - the flagged
   decision's work counted in the totals. Self-play takes no clock.
+* **6e's steering switches** (H13, H43; spec section 11.2: "an on/off test of its own at match
+  play"): ``asset_map`` (on) and ``hunt_suggest`` (off) for every search; ``search_overrides``,
+  further ``t5d_search_params`` fields by name; ``side_overrides``, White's and Black's own (match
+  play only), so a match can play two settings against each other with one network
+  (``switch_match.py`` pairs the colours). Fields the game loop sets itself (``RESERVED_OVERRIDES``)
+  are refused. ``GameResult`` counts, per side, the root edges each switch raised and the turn-start
+  roots the carried tree had already visited (where Hunt's suggestions do not reach - build-log spec
+  issue 477); the record's ``Steering`` header names each side's settings when any is not the
+  default.
 * **A move is played only once known legal**: a chosen child the legality budget left
   unknown is classified exactly first (``Search.verify``) - illegal, it is removed and the
   choice made again; still unknown, the most visited child known legal is played. Every
@@ -154,6 +163,12 @@ class PlayConfig:
     hunt: bool = True
     settling: bool = True
     asset_map: bool = True
+    #: H43's flag: Hunt's suggested lines raise the root edges they start (off; 6e's match test).
+    hunt_suggest: bool = False
+    #: Further ``t5d_search_params`` fields by name for every search (as ``GeneratorConfig``'s), and
+    #: White's and Black's own, applied after them - match play only (6e's two settings).
+    search_overrides: tuple[tuple[str, object], ...] = ()
+    side_overrides: tuple[tuple[tuple[str, object], ...], tuple[tuple[str, object], ...]] = ((), ())
     hunt_ms: float = 50.0
     settling_ms: float = 50.0
     verification_threads: int = 5
@@ -200,6 +215,16 @@ class PlayConfig:
                 raise ValueError(f"time_overrides: {entry[0]!r} is PlayConfig.{entry[0]}'s, not an override")
             if entry[0] not in fields:
                 raise ValueError(f"time_overrides: t5d_time_params has no field {entry[0]!r}")
+        if not (isinstance(self.side_overrides, tuple) and len(self.side_overrides) == 2):
+            raise ValueError("side_overrides: a pair - White's overrides, Black's")
+        if any(self.side_overrides) and self.mode != "match":
+            raise ValueError("side_overrides: match play only (a self-play search serves both sides)")
+        for overrides in (self.search_overrides, *self.side_overrides):
+            for entry in overrides:
+                if not (isinstance(entry, tuple) and len(entry) == 2 and isinstance(entry[0], str)):
+                    raise ValueError(f"search overrides: (field name, value) pairs, not {entry!r}")
+                if entry[0] in RESERVED_OVERRIDES:
+                    raise ValueError(f"search overrides: {entry[0]!r} is the game loop's (RESERVED_OVERRIDES)")
 
 
 @dataclass
@@ -239,6 +264,16 @@ class GameResult:
     time_stops: dict[int, int] = field(default_factory=dict)
     extensions: int = 0
     hard_overruns: int = 0
+    #: 6e's switches (H13, H43), per side (White, Black): the root edges the asset map and Hunt's
+    #: suggestions raised, the side's turn-start decisions, and how many of those roots the carried
+    #: tree had already visited (Hunt's suggestions do not reach them - issue 477); the proofs the
+    #: game's searches withheld and injected (0 while the proof channel is off - H41).
+    asset_boosted_edges: list[int] = field(default_factory=lambda: [0, 0])
+    suggestion_edges: list[int] = field(default_factory=lambda: [0, 0])
+    turn_start_decisions: list[int] = field(default_factory=lambda: [0, 0])
+    carried_turn_starts: list[int] = field(default_factory=lambda: [0, 0])
+    proofs_withheld: int = 0
+    proofs_injected: int = 0
 
     @property
     def result(self) -> str:
@@ -381,9 +416,24 @@ def turn_start_verdict(game: Game, cfg: PlayConfig) -> str | None:
     return None
 
 
-def _decision_params(game: Game, cfg: PlayConfig, relations: int, *, seed: int, noise: bool):
-    return search_params(
-        game.lib,
+#: The search fields the game loop sets from the game's own settings, and the proof channel:
+#: never overridden (``PlayConfig.search_overrides``, ``side_overrides``).
+RESERVED_OVERRIDES = frozenset(
+    {"split", "seed", "root_noise", "batch_size", "turn_cap_turns", "turn_cap_boards", "expand", "proof_channel"}
+)
+
+
+def _search_settings(cfg: PlayConfig, side: int | None) -> dict:
+    """The steering switches and overrides a search takes: ``cfg``'s, then ``side``'s own."""
+    settings = {"asset_map": int(cfg.asset_map), "hunt_suggest": int(cfg.hunt_suggest)}
+    settings.update(dict(cfg.search_overrides))
+    if side is not None:
+        settings.update(dict(cfg.side_overrides[side]))
+    return settings
+
+
+def _decision_params(game: Game, cfg: PlayConfig, relations: int, *, seed: int, noise: bool, side: int | None = None):
+    params = dict(
         split=SPLITS[cfg.split],
         seed=seed,
         root_noise=int(noise),
@@ -393,11 +443,25 @@ def _decision_params(game: Game, cfg: PlayConfig, relations: int, *, seed: int, 
         expand=(8, "all", relations),
         hunt=int(cfg.hunt),
         settling=int(cfg.settling),
-        asset_map=int(cfg.asset_map),
         hunt_ms=float(cfg.hunt_ms),
         settling_ms=float(cfg.settling_ms),
         verification_threads=int(cfg.verification_threads),
     )
+    params.update(_search_settings(cfg, side))
+    return search_params(game.lib, **params)
+
+
+def steering_header(cfg: PlayConfig) -> str | None:
+    """The record's ``Steering`` header - each side's steering switches and overrides as it
+    searched - or None where every search took the defaults (default records stay as they were)."""
+    if not (cfg.hunt_suggest or cfg.search_overrides or any(cfg.side_overrides)):
+        return None
+
+    def side(k: int) -> str:
+        settings = _search_settings(cfg, k if cfg.mode == "match" else None)
+        return ", ".join(f"{name}={value}" for name, value in settings.items())
+
+    return f"white: {side(0)}; black: {side(1)}"
 
 
 def _mix(x: int) -> int:
@@ -465,7 +529,7 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                     shared = search
                 else:
                     if carried[mover] is None:
-                        params = _decision_params(game, cfg, relations, seed=_mix(cfg.seed + 17 * mover), noise=False)
+                        params = _decision_params(game, cfg, relations, seed=_mix(cfg.seed + 17 * mover), noise=False, side=mover)
                         carried[mover] = Search(game, params=params)
                     search = carried[mover]
                 before = search.info()
@@ -505,6 +569,13 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                 res.network_seconds += stats.evaluate_seconds
                 res.collect_seconds += stats.collect_seconds
                 res.deliver_seconds += stats.deliver_seconds
+                res.asset_boosted_edges[mover] += after.asset_boosted_edges - before.asset_boosted_edges
+                res.suggestion_edges[mover] += after.suggestion_edges - before.suggestion_edges
+                res.proofs_withheld += after.proofs_withheld - before.proofs_withheld
+                res.proofs_injected += after.proofs_injected - before.proofs_injected
+                if before.root_turn_start:
+                    res.turn_start_decisions[mover] += 1
+                    res.carried_turn_starts[mover] += int(before.root_visits > 0)
                 if timed is not None:
                     # The decision charged to the side's clock: its whole wall time, or its model time.
                     spent = timed.seconds if cfg.model_clock else time.perf_counter() - d0
@@ -566,6 +637,9 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
             ),
             ("TurnCap", f"turns {cfg.cap_turns}, boards {cfg.cap_boards}"),
         ]
+        steering = steering_header(cfg)
+        if steering is not None:
+            extra.append(("Steering", steering))
         res.record = write_record(
             cfg.variant if cfg.start_fen is None else "custom",
             res.actions,
@@ -908,6 +982,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-hunt", action="store_true", help="stage E10: no Hunt at the roots (on under 100 boards)")
     parser.add_argument("--no-settling", action="store_true", help="stage E10: no settling scans (on under 50 boards)")
     parser.add_argument("--no-assets", action="store_true", help="stage E10: no asset-map boosts")
+    parser.add_argument("--hunt-suggest", action="store_true", help="H43: Hunt's suggested lines raise their root edges (6e)")
     parser.add_argument("--hunt-ms", type=float, default=50.0, help="Hunt's budget per question (6b'': 50 ms)")
     parser.add_argument("--settling-ms", type=float, default=50.0, help="each settling scan's budget (50 ms)")
     parser.add_argument("--verification-threads", type=int, default=5, help="the provers' threads (M13: 5)")
@@ -955,6 +1030,7 @@ def main(argv: list[str] | None = None) -> int:
                         hunt=not args.no_hunt,
                         settling=not args.no_settling,
                         asset_map=not args.no_assets,
+                        hunt_suggest=args.hunt_suggest,
                         hunt_ms=args.hunt_ms,
                         settling_ms=args.settling_ms,
                         verification_threads=args.verification_threads,
@@ -1007,6 +1083,7 @@ if __name__ == "__main__":
 
 
 __all__ = [
+    "RESERVED_OVERRIDES",
     "GameResult",
     "PlayConfig",
     "Replay",
@@ -1017,6 +1094,7 @@ __all__ = [
     "pgn_move",
     "play_game",
     "replay_with_gate",
+    "steering_header",
     "turn_start_verdict",
     "write_record",
 ]

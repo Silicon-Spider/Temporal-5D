@@ -4009,7 +4009,11 @@ target against the boosted moves - issue 179): **self-play runs without the asse
 default and match play (`t5d-play`, `netplay`) keep 6b″'s table, the map on.
 Hunt's soft priors (H43) are built behind `hunt_suggest` (off): the root's Hunt then runs
 before the root's expansion and each suggested action's first move (flat: the turn) is
-boosted and counted as steering.
+boosted and counted as steering (`SearchStats::suggestion_edges`, the summary's
+`suggestion_edges`). They carry partial lines only: a Hunt that proves its mate suggests
+nothing - decision 12 allows a proof to raise a prior, but no hook for it is built (issue
+478) - and a turn-start root the carried tree had already expanded takes none, its priors
+set before Hunt answered (issue 477; `tests/test_steering_switches.cpp` pins both).
 
 **Events (H44).** The search records the root's PV changes (`pv_changes()`: the root's
 visits, the old and new most visited child with their visits and Q) and per root child
@@ -4023,10 +4027,15 @@ E4 confirms is injected (the action proven lost), the decision searched again
 the ply split it reaches the submission's decision only (issue 185).
 
 **Drivers.** `play_game` makes one ladder per game; `t5d-play` takes `--no-hunt`,
-`--no-settling`, `--no-assets`, `--hunt-ms`, `--settling-ms`, `--verification-threads`
-and `--guard-final` (with `--proof-channel`), names the ladder in its Engine header and
-prints its counts; Python's `netplay` mirrors the switches through `t5d_search_params`,
-and `train.selfplay` records the steering per root child (I15).
+`--no-settling`, `--no-assets`, `--hunt-suggest`, `--hunt-ms`, `--settling-ms`,
+`--verification-threads` and `--guard-final` (with `--proof-channel`), names the ladder in
+its Engine header and prints its counts; Python's `netplay` mirrors the switches through
+`t5d_search_params` (`asset_map`, `hunt_suggest`, `search_overrides` for any further field and,
+at match play, `side_overrides` - each side's own, for 6e's match between two settings, named
+in the record's `Steering` header), and `t5d.engine.switch_match` plays that match - one
+switch on for one side and off for the other, each start with the colours swapped, one
+network on both sides - reporting each arm's raised edges; `train.selfplay` records the
+steering per root child (I15).
 
 **Found on the way.** A carried root the tree form inherited lost submit's share on its
 re-evaluation (`set_priors` looked for the submit edge last, where the inherited

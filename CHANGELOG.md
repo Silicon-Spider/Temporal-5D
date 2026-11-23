@@ -10,6 +10,39 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-23 - 6e's steering switches on every driver: Hunt's lines in t5d-play and netplay, per-side settings, the switch match, the summary's counter
+
+Register H13 and H43 (spec §11.2: "an on/off test of its own at match play (6e)"; §13.1's 6e: "each
+steering term on and off at match play - the asset map, Hunt's suggested lines"; §16). The engine's
+two switches existed (`asset_map`, on; `hunt_suggest`, off); what a match between two settings
+lacked is built here, from the plan handed over by the session that built the 2026-11-15 review's
+code (verified against this tree; its recommended answers taken). No default changes; default
+records are byte-identical.
+- **t5d-play**: `--hunt-suggest` (the Engine header names "hunt suggestions").
+- **C API** (ABI append): `t5d_search_summary.suggestion_edges` after `steered_visits` - the root
+  edges Hunt's suggestions raised; the layout entry and check; `capi.py` and `SearchInfo` mirror it.
+- **netplay**: `PlayConfig.hunt_suggest`, `search_overrides` (any further `t5d_search_params` field),
+  `side_overrides` (White's and Black's own, match play only); `RESERVED_OVERRIDES` (the fields the
+  game loop sets, and the proof channel) refused; `GameResult` counts per side the edges each switch
+  raised, the turn-start decisions and those the carried tree had already visited, and the proofs
+  withheld and injected; the record's `Steering` header names each side's settings when one is not
+  the default; `--hunt-suggest`.
+- **`python/t5d/engine/switch_match.py`** (new): `play_switch_match` - one switch ON for one side and
+  OFF for the other, each start twice with the colours swapped, one evaluator on both sides; the
+  tally from the ON side (I11's cap a draw, counted apart; unscored games counted), the edges each
+  arm raised; `python -m t5d.engine.switch_match` (random weights: plumbing, not a figure).
+- **Tests**: `engine/tests/test_steering_switches.cpp` (new) - the defaults; the asset map off is the
+  search without it; Hunt's lines off are the search without Hunt; on, only the suggested lines are
+  raised (ply, flat, tree); a proven mate raises no prior and decides nothing before the sign-off;
+  a carried root already expanded takes no suggestions (the as-built limit). `test_capi_search.cpp`
+  (the appended field), `test_play_exe.cpp` (the header, a `--hunt-suggest` game replayed),
+  `python/tests/engine/test_switch_match.py` (new, 8 tests). Four mutants killed.
+- **Docs**: the engine README (Hunt's lines, the drivers); `docs/BUILD_LOG.md` - the H13 and H43
+  rows, issue 186(a) settled by decision 12, new issues 477-479, edits 344-345.
+
+Spec: §11.2, §11.4 (decision 12), §13.1 (6e), §16 (the H13/H43 and H41/H43 entries); register H13,
+H43, H41, E7. Proposed edits 344-345; issues 186(a), 477-479. No measured figure.
+
 ### 2026-11-23 - Decision 12 in E11: a proof may extend a decision before the sign-off, never stop it
 
 Decision 12 (build-log spec issue 180, ruled by the user 2026-11-23): "Before the sign-off a

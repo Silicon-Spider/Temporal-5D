@@ -144,6 +144,16 @@ TEST(play_exe_records_replay_through_the_gate_adapter) {
                                               {});
   REQUIRE(solved.header("Engine") != nullptr);
   CHECK(solved.header("Engine")->find(", proof channel ON") != std::string::npos);
+  // H13, H43 (6e's switches): the asset map on by default and Hunt's suggested
+  // lines off; --hunt-suggest --no-assets the reverse, and the game replays.
+  CHECK(plain.header("Engine")->find("asset map") != std::string::npos);
+  CHECK(plain.header("Engine")->find("hunt suggestions") == std::string::npos);
+  const t5d::PgnRecord suggested = play_and_gate({"--variant", "Very Small - Open", "--hunt-suggest", "--no-assets",
+                                                  "--synchronous", "--playouts", "16", "--cap-turns", "4", "--seed", "2"},
+                                                 {});
+  REQUIRE(suggested.header("Engine") != nullptr);
+  CHECK(suggested.header("Engine")->find("hunt suggestions") != std::string::npos);
+  CHECK(suggested.header("Engine")->find("asset map") == std::string::npos);
   // Root noise: on in self-play by default (E1, §8.4), --no-noise turns it off,
   // match play has none.
   CHECK(plain.header("Engine")->find("root noise") != std::string::npos);

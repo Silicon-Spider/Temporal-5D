@@ -1024,9 +1024,13 @@ TEST(capi_search_e10_layout_defaults_and_the_ladder_shared) {
   CHECK(offsetof(t5d_search_summary, hunt_runs) > offsetof(t5d_search_summary, fallback_listings));
   for (const char* field : {"hunt_runs", "hunt_mates", "settling_runs", "settling_proven", "settling_disproven",
                             "refutations", "ladder_cancelled", "proofs_withheld", "proofs_injected", "pv_changes",
-                            "asset_boosted_edges", "steered_visits"}) {
+                            "asset_boosted_edges", "steered_visits", "suggestion_edges"}) {
     CHECK_EQ(t5d_search_layout("t5d_search_summary", field, &v), T5D_OK);
   }
+  // H43's counter, appended after the steered visits (6e's match test reads it).
+  CHECK(offsetof(t5d_search_summary, suggestion_edges) > offsetof(t5d_search_summary, steered_visits));
+  REQUIRE_EQ(t5d_search_layout("t5d_search_summary", "suggestion_edges", &v), T5D_OK);
+  CHECK_EQ(v, offsetof(t5d_search_summary, suggestion_edges));
   CHECK(offsetof(t5d_root_child, prior_unsteered) > offsetof(t5d_root_child, steered_visits));
   for (const char* field : {"prior_unsteered", "was_pv", "peak_share"}) {
     CHECK_EQ(t5d_search_layout("t5d_root_child", field, &v), T5D_OK);

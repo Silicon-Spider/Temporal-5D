@@ -543,6 +543,7 @@ class CSearchSummary(ctypes.Structure):
         ("pv_changes", c_uint64),
         ("asset_boosted_edges", c_uint64),
         ("steered_visits", c_uint64),
+        ("suggestion_edges", c_uint64),  # root edges Hunt's suggestions raised (hunt_suggest, H43)
     ]
 
 

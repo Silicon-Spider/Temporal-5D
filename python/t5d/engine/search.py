@@ -208,6 +208,7 @@ class SearchInfo:
     pv_changes: int
     asset_boosted_edges: int
     steered_visits: int  # root visits counted steered (I2)
+    suggestion_edges: int  # root edges Hunt's suggestions raised (hunt_suggest, H43; 0 while it is off)
 
     @property
     def root_finished(self) -> bool:

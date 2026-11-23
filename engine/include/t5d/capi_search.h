@@ -454,6 +454,7 @@ typedef struct t5d_search_summary {
   uint64_t pv_changes;         /* the root's most visited child changed (first included) */
   uint64_t asset_boosted_edges;
   uint64_t steered_visits;     /* root visits counted steered (I2) */
+  uint64_t suggestion_edges;   /* root edges Hunt's suggestions raised (hunt_suggest, H43; 0 while it is off) */
 } t5d_search_summary;
 
 /* A run's budgets (t5d/mcts.hpp, Limits): T5D_NO_LIMIT for none (seconds: 0). playouts and

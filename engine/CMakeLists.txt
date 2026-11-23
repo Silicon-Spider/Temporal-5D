@@ -349,6 +349,11 @@ target_compile_definitions(t5d-tests PRIVATE "T5D_AUDIT_EXE=\"$<TARGET_FILE:t5d-
 target_sources(t5d_core PRIVATE src/timeman.cpp)
 target_sources(t5d-tests PRIVATE tests/test_timeman.cpp)
 
+# H13, H43: the steering switches for 6e's on/off match test - each off is the
+# search without it, Hunt's lines raise only what Hunt suggested, a proven mate
+# raises nothing before the sign-off, and the carried root's limit.
+target_sources(t5d-tests PRIVATE tests/test_steering_switches.cpp)
+
 # D2's tree form against the ply split on recorded games' turn starts:
 # evaluation counts (docs/MEASUREMENTS.md). Not one of the truth's sources.
 add_executable(t5d-tree-count tools/t5d_tree_count.cpp)

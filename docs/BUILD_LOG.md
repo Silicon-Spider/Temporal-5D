@@ -1770,11 +1770,11 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | H10 | reduced, built | Rung 1 dropped (6b); rungs 3 and 5 retired, not built (M5); rung 2's promotion side is Guard, its demotion audit the audit lane; rung 4, the asset map, built (E9). The reduced ladder as H14 restates it: Hunt, the asset map and the settling scans under 50 boards - Guard offline (adopted nowhere, 6b″) |
 | H11 | superseded | By Guard (promotion) and the audit lane (demotion audit) |
 | H12 | retired | With the NNUE and the per-node scans |
-| H13 | built, wired (E10) | The asset map (E9) as the register records it: the material estimate, 4 plies and 128 nodes per board, flagged at 300, boost 0.25 × min(1, value/900), every number a placeholder (issue 106). Wired (E10, 2026-10-23): its boost enters every node's priors after the softmax and before k0 and the root noise, never the cached evaluation - (P + b) / (1 + Σb), a multiplicative arm (issue 178); one map per game, shared by its fresh searches (each board assessed once in the game, tested); the root's unsteered priors and steered visits recorded for I2 (issue 179). With a uniform evaluator it dominates flat priors: self-play then branches heavily (issue 178). **E10 review (2026-10-23):** the additive rule is now monotone and capped (`boost_cap` 0.5 of the unboosted mass, a placeholder; issue 178(a)); the flat form steers after its noise, k0 unsteered (178(b)); **off in self-play** (`self_play_search_defaults()`, Python's `GeneratorConfig.asset_map`) until I2's steered visits are validated - on in the search's default and match play (issues 179, 450) |
+| H13 | built, wired (E10) | The asset map (E9) as the register records it: the material estimate, 4 plies and 128 nodes per board, flagged at 300, boost 0.25 × min(1, value/900), every number a placeholder (issue 106). Wired (E10, 2026-10-23): its boost enters every node's priors after the softmax and before k0 and the root noise, never the cached evaluation - (P + b) / (1 + Σb), a multiplicative arm (issue 178); one map per game, shared by its fresh searches (each board assessed once in the game, tested); the root's unsteered priors and steered visits recorded for I2 (issue 179). With a uniform evaluator it dominates flat priors: self-play then branches heavily (issue 178). **E10 review (2026-10-23):** the additive rule is now monotone and capped (`boost_cap` 0.5 of the unboosted mass, a placeholder; issue 178(a)); the flat form steers after its noise, k0 unsteered (178(b)); **off in self-play** (`self_play_search_defaults()`, Python's `GeneratorConfig.asset_map`) until I2's steered visits are validated - On in the search's default and match play (issues 179, 450). **6e's switch (2026-11-23, phase 1B):** reachable from every driver - `asset_map` in t5d-play (`--no-assets`), netplay's config and its per-side `side_overrides`; off on both sides is the game without the map (tested in C++ and Python); `t5d.engine.switch_match` plays the on/off match (paired colours, one network; its size, starts and pass rule pre-registered before a trained network exists) |
 | H14 | built (E10; placeholders) | Restated at CHECKPOINT 6: budgets for the reduced ladder - Hunt, the asset map, the settling scans under 50 boards (Guard offline) - against shared movegen, on M13's five cores. Built (E10, 2026-10-23): one worker per game's ladder, the jobs one at a time in the order asked (the root's Hunt, its settling scan, PV changes' scans - issue 182), each prover on `verification_threads` (5) threads under 50 ms (6b″'s configuration) or a node cap; at most 4 PV scans a decision; the asset map on the search's thread (once per board, 128 nodes); the synchronous mode by nodes (25,000) inline. A decision's end cancels its jobs (`ProveBudget::cancel`; issue 187). Where the jobs' time sits in E7's allocation: nowhere - nothing waits for them, so they cost the move no time; they end at the re-root after the move (or their own budgets), not at the hard bound; nothing deducted (E11; issue 466, reworded at E11's review, L11). **E10 review (2026-10-23):** the root's Hunt or its settling scan (not both, issue 181), then PV changes'; verdicts tagged by decision, a search taking its own (issue 183); a decision's end tested to cancel a running job (issue 187); the ladder's counts `answered` (taken), `cancelled`, `discarded`, `contradictions` (a job that throws, reported on stderr); every parallel self-play game's ladder has a worker and five prover threads - oversubscribing M13's five cores (issue 451) |
 | H41 | built, tested | `SearchParams::proof_channel` (C `proof_channel`, `t5d-play --proof-channel`) - the switch the register now names: propagation of solved status (marking nodes solved, pruning siblings, secure-child selection) and export, off by rule; game ends are scored as results. Not yet: the cross-checks of the solver's proofs against df-pn and the oracles' mate verdicts (§15.4) - step 2's missing tests |
 | H42 | built, tested; not adopted | Guard (E9): depth 1 completes in 65.1 / 15.8 / 5.2 / 0.0% of roots against 95% (6b″) - adopted in no range; §13: the chosen move goes unguarded. Built and kept (the audit lane's shallow-mate report uses its question offline; the search's re-search hook stays unwired-by-adoption). Its five-thread depth-1 test failed once in CI (run 37146667584): a thread that read the root's proof from a helper's export - its tree empty - was the one reported, so the refutation's line was empty. Fixed in the prover's report (2026-10-17, `lane/engine`): the line of a thread that searched, complete at depth 1; the test pins the race and checks the line's contract at depth 2. What Guard decides is unchanged. Beyond depth 1 the line keeps its contract (it can stop where a node was solved from the store): a certificate holds the attacker's proving actions only, so the line could take the attacker's step past such a node from one but not the defender's longest defence, which needs an enumeration of the defender's actions (the first record of this fix gave another reason - that 6b″ ran Guard without certificates; it ran with them, for its cross-check against E4) |
-| H43 | built, tested; adopted under 100 boards; wired (E10) | Hunt (E9): 69.0% / 63.6% of the truth's mates under 50 / 50-99 boards (6b″) - adopted there; 35.0% at 100-199 and 0 of 1 at 200+ - not adopted; §13: proofs there come only from the search's solver. Export refused until H41/H23. Wired (E10, 2026-10-23): asked at turn-start roots under 100 boards at 50 ms on 5 threads; its mate carried through the action's decisions under the ply split; withheld while the proof channel is off (issue 180); the soft priors built behind `hunt_suggest`, off, counted as steering (issue 186). **E10 review (2026-10-23):** under 50 boards the root's settling scan asks its question in its place (same class and depth; `hunt_with_settling` off - issue 181), so Hunt itself runs at 50-99 boards (and below 50 with its suggestions on); its silence with suggestions on would leak a mate (issue 186(a)) |
+| H43 | built, tested; adopted under 100 boards; wired (E10) | Hunt (E9): 69.0% / 63.6% of the truth's mates under 50 / 50-99 boards (6b″) - adopted there; 35.0% at 100-199 and 0 of 1 at 200+ - not adopted; §13: proofs there come only from the search's solver. Export refused until H41/H23. Wired (E10, 2026-10-23): asked at turn-start roots under 100 boards at 50 ms on 5 threads; its mate carried through the action's decisions under the ply split; withheld while the proof channel is off (issue 180); the soft priors built behind `hunt_suggest`, off, counted as steering (issue 186). **E10 review (2026-10-23):** under 50 boards the root's settling scan asks its question in its place (same class and depth; `hunt_with_settling` off - issue 181), so Hunt itself runs at 50-99 boards (and below 50 with its suggestions on); its silence with suggestions on would leak a mate (issue 186(a)). **6e's switch (2026-11-23, phase 1B):** `hunt_suggest` on every driver - t5d-play `--hunt-suggest`, netplay's `hunt_suggest` and per-side overrides, `switch_match`; the summary's `suggestion_edges` shows the arm acted; off is the search without Hunt's lines; on, only the suggested lines are raised; a proven mate raises nothing and decides nothing before the sign-off (186(a) settled by decision 12 - issue 478); a carried root already expanded takes no suggestions (issue 477). The pre-sign-off hooks: the extend hook built (E11, `proof_volatility`, off; extend-only without the channel since decision 12), the proof-to-prior hook not built (issue 479) |
 | H44 | built (tooling), tested | The audit lane's tools: the certificate checker (E4 alone) and `t5d-hunt-truth` (E9); the search's decision events and **the tooling (E10, 2026-10-23, `lane/search`)**: the decision log (`PlayParams::decision_log`, `t5d-play --decision-log`, Python's `netplay --decision-log`; JSONL `t5d-decisions` v1 - games by start and actions, events final / pv_change / demotion), `t5d-audit sample` (seeded, rates and caps per category and range), `run` (Guard's question offline on the action, our mate at the turn start by the truth recorder's method, certificates checked by E4; contradictions to the `CurriculumSink` interface, its one implementation a JSONL writer) and `report` (per range the shallow-mate rate, Guard's completed depths, the undecided, the contradictions; counted as 6b″ counts). No consumer of the contradictions is built (curriculum hooks as interfaces only). Every budget and threshold a placeholder (issues 191-197). **E10 review (2026-10-23):** the runner's E4 gate tested with a certificate E4 rejects (no contradiction), the abandoned mate and the chosen child's exclusion from the demotions tested; `missed_mate`'s known false positives stay documented (issue 192) |
 | H45 | not built (rule) | The adversarial league (M5) |
 | H46 | built, tested | Q2 (provisional): initial timelines count as created by neither player - a variant's set-up reads every timeline as initial (rulebook R10) |
@@ -5811,7 +5811,10 @@ superseded or made moot says so; nothing is deleted.
     (a) *E10 review (2026-10-23; reviewer A's L7):* with the flag on, a Hunt that proves a mate
     gives no suggestions - so their absence tells the search, through the priors, that Hunt
     found a mate, a proof acting before the sign-off (issue 180) by another route. Harmless
-    while the flag is off; to be settled with issue 180 before it is turned on.
+    while the flag is off; to be settled with issue 180 before it is turned on. *(Settled
+    2026-11-23 by decision 12, ruled by the user 2026-11-23 (the review's decision 12, reported
+    by the main loop): an effect of a proof through the priors is an estimate's use, which the
+    rule allows - issue 478.)*
 187. **"No job outlives its decision", and its cost.** Built: `ProveBudget::cancel` - a stop
     the prover reads where it spends its budget (a budget stop: claims nothing, H37;
     `ProverStats::stopped_by_cancel`). A decision's end (the search destroyed or re-rooted)
@@ -7192,6 +7195,31 @@ superseded or made moot says so; nothing is deleted.
     game; a context's moves-left above it refused by `TimeManager::begin`, the root's network
     output capped at it, the integral summing at most 1000 actions, the moves-left floor and
     default refused above it. A bound, not a tuning; no spec text describes it.
+477. **Hunt's suggestions at a carried root** (H43; §11.2, §13.1's 6e: "each steering term on and
+    off at match play"). Steering enters a node's priors when they are set (at expansion, or at
+    the tree form's re-evaluation of an inherited root); the search waits for Hunt only at an
+    unexpanded root. At match play the tree is carried (C12), so a turn-start root the carried
+    tree had already expanded takes no suggestions: they arrive, are stored and never applied.
+    Built: the limit made visible (netplay's `carried_turn_starts`, `switch_match`'s
+    `carried_on`) and pinned by test (`steering_a_carried_root_already_expanded_takes_no_
+    suggestions`). Open (the handover plan's recommended answer, not built): rule a re-steer - an
+    expanded turn-start root with `hunt_suggest` on waits for Hunt and has its priors set again
+    from its edges' stored logits - before 6e's Hunt arm is run for a verdict; the work is in
+    `mcts.cpp`, after the lanes merge. Until then a verdict from that arm means little.
+478. **Issue 186(a) under decision 12** (Hunt's silence with suggestions on). Decision 12 (ruled
+    by the user 2026-11-23, the review's decision 12, reported by the main loop) lets a proof
+    raise a prior before the sign-off, so an effect of a proof through the priors is an
+    estimate's use: 186(a)'s worry is moot. As built, a Hunt that proves its mate suggests
+    nothing and the proof is withheld - tested (`steering_a_proven_mate_raises_no_prior_and_
+    decides_nothing_before_the_sign_off`). Not built (the handover plan's recommended answer):
+    a proof-to-prior hook, with its own switch (`proof_prior`, off) entering the proven first
+    action through the suggestion path at weight 1 - a new `t5d_search_params` field, so a
+    record-format decision (the I15 header lists every field).
+479. **Register H43's "both hooks built and off"** (decisions.md H43; spec §16's H41/H43 entry
+    calls them "not yet built"). As built on this lane: the extend hook is built (E11's
+    `TimeParams::proof_volatility`, off; since decision 12 taken with the proof channel off,
+    extend-only - issue 470); the raise-a-prior hook is not - `hunt_suggest` carries Hunt's
+    partial lines, never a proof (issue 478). Edit 345.
 
 ## Proposed spec edits
 
@@ -8863,6 +8891,19 @@ struck through, where nothing of it is left to apply); the others stand as writt
     waits for them, so they cost the move no time, and nothing is deducted from the allocation;
     they end with the ladder's decision (the re-root after the move) or their own budgets, not at
     the hard bound". Why: issue 466 as reworded (review L11 of E11).
+344. **§16's H13/H43 entry** ("H13, H43: the asset map and Hunt's suggested lines each get an
+    on/off switch for 6e's match test (section 13.1)"): Proposed - move it from the not-yet-built
+    list to the built form: "the two switches (`asset_map`, on; `hunt_suggest`, off) reach every
+    driver - t5d-play, netplay with each side's own settings - and a runner plays the on/off match
+    with paired colours and one network; the match's starts, size and pass rule are pre-registered
+    before a trained network exists; Hunt's suggestions reach only a root not yet expanded (issue
+    477)". Why: issues 477, 479 (phase 1B (c)).
+345. **§16's H41/H43 entry and register H43** (now: register H43 "under H41's rule they may raise
+    a prior or extend the search - both hooks built and off"; §16 "As built both are off"):
+    Proposed - "the extend hook is built (the time manager's proof source, off; extend-only
+    before the sign-off); no hook carries a proof into a prior - Hunt's partial lines have their
+    own flag (`hunt_suggest`, off), and a proof-to-prior switch is not built (issue 478)". Why:
+    issues 478, 479, 470.
 
 ## Session log
 
@@ -9281,3 +9322,21 @@ struck through, where nothing of it is left to apply); the others stand as writt
     468, the E7 row, edits 335 and 337 (applied upstream with the ruling's reading), the header,
     the C header and the README updated. Three mutants killed (the extension needing the channel,
     the solved stop without it, the hook's read needing it).
+  - (c) The H13/H43 match-test switches (handed over from the session that built the review's
+    code; its plan verified against this tree - the summary struct, t5d-play's flags and netplay's
+    loop are where it says, line numbers apart). t5d-play `--hunt-suggest` (the Engine header
+    names "hunt suggestions"); `t5d_search_summary.suggestion_edges` appended after
+    `steered_visits` (layout check, `capi.py`, `SearchInfo`); netplay's `hunt_suggest`,
+    `search_overrides`, `side_overrides` (match play; `RESERVED_OVERRIDES` refused), per-side
+    counters (`asset_boosted_edges`, `suggestion_edges`, `turn_start_decisions`,
+    `carried_turn_starts`) and the proofs withheld and injected, the record's `Steering` header
+    (only when a setting is not the default), `--hunt-suggest`; the new
+    `t5d.engine.switch_match` (paired colours, one network, the tally from the ON side, a
+    command line). The plan's recommended answers taken: no re-steer at a carried root (issue
+    477, pinned by test), no proof-to-prior hook (issue 478), the extend hook gated by decision 12
+    (done in (b)), no match protocol invented, no C++ two-setting match, the ABI append. Not
+    built, as the plan says: `GameRecord::suggestion_edges` and t5d-play's summary line (after
+    the lanes' merges). New issues 477-479, edits 344-345; H13 and H43 rows. Tests: six in
+    `engine/tests/test_steering_switches.cpp`, the layout and t5d-play checks,
+    `python/tests/engine/test_switch_match.py` (8); four mutants killed (the summary's counter
+    unfilled, a side's overrides dropped, `--hunt-suggest` a no-op, the colours not swapped).

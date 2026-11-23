@@ -579,6 +579,7 @@ constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_AT(t5d_search_summary, pv_changes),
     T5D_SEARCH_AT(t5d_search_summary, asset_boosted_edges),
     T5D_SEARCH_AT(t5d_search_summary, steered_visits),
+    T5D_SEARCH_AT(t5d_search_summary, suggestion_edges),
 
     T5D_SEARCH_SIZE(t5d_search_limits),
     T5D_SEARCH_AT(t5d_search_limits, playouts),
@@ -1382,6 +1383,7 @@ t5d_status t5d_search_info(const t5d_search* search, t5d_search_summary* out) {
     out->pv_changes = st.pv_changes;
     out->asset_boosted_edges = st.asset_boosted_edges;
     out->steered_visits = st.steered_visits;
+    out->suggestion_edges = st.suggestion_edges;
     return T5D_OK;
   });
 }

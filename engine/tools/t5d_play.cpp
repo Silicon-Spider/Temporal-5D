@@ -10,7 +10,7 @@
 //            [--match] [--final visits|lcb] [--temperature T] [--temperature-decisions N]
 //            [--noise | --no-noise] [--cap-turns N] [--cap-boards N] [--max-actions N]
 //            [--mate-nodes N] [--max-seconds S] [--seed S]
-//            [--no-hunt] [--no-settling] [--no-assets] [--hunt-ms MS]
+//            [--no-hunt] [--no-settling] [--no-assets] [--hunt-suggest] [--hunt-ms MS]
 //            [--settling-ms MS] [--verification-threads N] [--guard-final]
 //            [--decision-log FILE] [--time BASE [--increment INC]
 //            [--allocator integral|flat-evals|flat-wall-clock] [--no-signals]
@@ -39,7 +39,8 @@
 // turn-start roots under 100 boards (--no-hunt; --hunt-ms its budget, 50), the
 // df-pn settling scans under 50 boards (--no-settling; --settling-ms, 50), the
 // asset map's boosts (--no-assets), the provers on --verification-threads
-// threads (5). Their proofs change play only with --proof-channel. Guard (H42)
+// threads (5); --hunt-suggest switches Hunt's suggested lines on (H43, off:
+// 6e's on/off match test). Their proofs change play only with --proof-channel. Guard (H42)
 // is adopted in no range: --guard-final switches its hook at submission on,
 // for experiments, and needs --proof-channel. The Engine header names them.
 // --decision-log FILE writes the game's decisions for the offline audit lane
@@ -103,7 +104,7 @@ void usage(std::FILE* to) {
       "                [--cap-boards N]\n"
       "                [--max-actions N] [--mate-nodes N]\n"
       "                [--max-seconds S] [--seed S]\n"
-      "                [--no-hunt] [--no-settling] [--no-assets] [--hunt-ms MS]\n"
+      "                [--no-hunt] [--no-settling] [--no-assets] [--hunt-suggest] [--hunt-ms MS]\n"
       "                [--settling-ms MS] [--verification-threads N] [--guard-final]\n"
       "                [--decision-log FILE] [--time BASE [--increment INC]\n"
       "                [--allocator integral|flat-evals|flat-wall-clock] [--no-signals]\n"
@@ -303,6 +304,8 @@ int main(int argc, char** argv) {
         params.search.settling = false;
       } else if (std::strcmp(a, "--no-assets") == 0) {
         params.search.asset_map = false;
+      } else if (std::strcmp(a, "--hunt-suggest") == 0) {
+        params.search.hunt_suggest = true;  // H43's soft priors (6e); the boost its placeholder
       } else if (std::strcmp(a, "--hunt-ms") == 0) {
         params.search.hunt_ms = real(a, value());
         if (!(params.search.hunt_ms > 0)) throw std::invalid_argument("--hunt-ms: more than 0 (--no-hunt for none)");
@@ -411,6 +414,7 @@ int main(int argc, char** argv) {
     if (sp.hunt) part("hunt under " + std::to_string(sp.hunt_max_boards) + " boards");
     if (sp.settling) part("settling under " + std::to_string(sp.settling_max_boards) + " boards");
     if (sp.asset_map) part("asset map");
+    if (sp.hunt_suggest) part("hunt suggestions");
     part(params.guard_final ? "guard at submission" : "guard off");
     if (sp.hunt || sp.settling) part(std::to_string(sp.synchronous ? 1 : sp.verification_threads) + " prover threads");
     engine += ", ladder: " + ladder;
