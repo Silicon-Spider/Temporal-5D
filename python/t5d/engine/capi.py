@@ -456,6 +456,12 @@ class CSearchParams(ctypes.Structure):
         ("ladder_certify", c_int32),  # only proofs E4 confirms enter the tree
         ("boost_cap", c_double),  # the additive rule's cap: at most this share of the unboosted mass (0.5)
         ("hunt_with_settling", c_int32),  # 1: Hunt beside the root's settling scan; 0: not where it subsumes Hunt
+        # register E12: Gumbel root search (a prototype, off; t5d/gumbel.hpp)
+        ("gumbel_root", c_int32),  # 1: the root's Gumbel sample and sequential halving
+        ("gumbel_m", c_uint32),  # the sample's size (16, a placeholder)
+        ("gumbel_simulations", c_uint64),  # n: the schedule's visits - the playout cap less one
+        ("gumbel_c_visit", c_double),  # sigma's c_visit (50) ...
+        ("gumbel_c_scale", c_double),  # ... and c_scale (1)
         ("expand", ExpandOptions),
     ]
 
@@ -859,6 +865,7 @@ _SIGNATURES: dict[str, tuple[object, list[object]]] = {
     "t5d_search_child": (c_int32, [_SEARCH, c_size_t, POINTER(CRootChild), POINTER(MoveRecord), c_size_t, _ERR]),
     "t5d_search_choose": (c_int32, [_SEARCH, POINTER(c_size_t), POINTER(c_int32), _ERR]),
     "t5d_search_choose_by_visits": (c_int32, [_SEARCH, c_double, c_double, POINTER(c_size_t), _ERR]),
+    "t5d_search_choose_gumbel": (c_int32, [_SEARCH, POINTER(c_size_t), _ERR]),  # register E12
     "t5d_search_verify": (c_int32, [_SEARCH, c_size_t, POINTER(c_int32), _ERR]),
     "t5d_search_verify_within": (c_int32, [_SEARCH, c_size_t, c_uint64, c_uint64, c_double, POINTER(c_int32), _ERR]),
     "t5d_search_verify_budgeted": (c_int32, [_SEARCH, c_size_t, c_uint64, c_uint64, POINTER(c_int32), _ERR]),

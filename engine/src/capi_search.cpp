@@ -298,6 +298,11 @@ SearchParams params_from(const t5d_search_params* c) {
   p.ladder_certify = boolean(c->ladder_certify, "ladder_certify");
   p.boost_cap = c->boost_cap;
   p.hunt_with_settling = boolean(c->hunt_with_settling, "hunt_with_settling");
+  p.gumbel_root = boolean(c->gumbel_root, "gumbel_root");
+  p.gumbel_m = c->gumbel_m;
+  p.gumbel_simulations = c->gumbel_simulations;
+  p.gumbel_c_visit = c->gumbel_c_visit;
+  p.gumbel_c_scale = c->gumbel_c_scale;
   return p;
 }
 
@@ -515,6 +520,11 @@ constexpr LayoutEntry kLayout[] = {
     T5D_SEARCH_AT(t5d_search_params, ladder_certify),
     T5D_SEARCH_AT(t5d_search_params, boost_cap),
     T5D_SEARCH_AT(t5d_search_params, hunt_with_settling),
+    T5D_SEARCH_AT(t5d_search_params, gumbel_root),
+    T5D_SEARCH_AT(t5d_search_params, gumbel_m),
+    T5D_SEARCH_AT(t5d_search_params, gumbel_simulations),
+    T5D_SEARCH_AT(t5d_search_params, gumbel_c_visit),
+    T5D_SEARCH_AT(t5d_search_params, gumbel_c_scale),
     T5D_SEARCH_AT(t5d_search_params, expand),
 
     T5D_SEARCH_SIZE(t5d_leaf),
@@ -1169,6 +1179,11 @@ void t5d_search_params_default(t5d_search_params* out) {
   out->ladder_certify = flag(p.ladder_certify);
   out->boost_cap = p.boost_cap;
   out->hunt_with_settling = flag(p.hunt_with_settling);
+  out->gumbel_root = flag(p.gumbel_root);
+  out->gumbel_m = p.gumbel_m;
+  out->gumbel_simulations = p.gumbel_simulations;
+  out->gumbel_c_visit = p.gumbel_c_visit;
+  out->gumbel_c_scale = p.gumbel_c_scale;
 }
 
 t5d_status t5d_search_new(const t5d_game* game, int32_t turn_start, const t5d_search_params* params,
@@ -1490,6 +1505,14 @@ t5d_status t5d_search_choose_by_visits(const t5d_search* search, double temperat
   return guarded(error, [&]() -> t5d_status {
     if (search == nullptr || index == nullptr) throw std::invalid_argument("search or index is NULL");
     *index = search->search.choose_by_visits(temperature, random);
+    return T5D_OK;
+  });
+}
+
+t5d_status t5d_search_choose_gumbel(const t5d_search* search, size_t* index, char** error) {
+  return guarded(error, [&]() -> t5d_status {
+    if (search == nullptr || index == nullptr) throw std::invalid_argument("search or index is NULL");
+    *index = search->search.choose_gumbel();
     return T5D_OK;
   });
 }

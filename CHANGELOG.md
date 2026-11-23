@@ -10,6 +10,22 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - Register E12 (Gumbel root search), part 1: the C API and the binding
+
+The five `t5d_search_params` fields in front of `expand` (still last), in `params_from`, the
+layout table and the defaults; `t5d_search_choose_gumbel` appended (build-log issue 415).
+`python/t5d/engine/capi.py` mirrors them (`CSearchParams`, `_SIGNATURES`: a library without
+them is refused at load) and `Search.choose_gumbel()` binds the choice, with a docstring bullet
+in `search.py`. Tests: `capi_gumbel_fields_defaults_and_choice` (the fields at their offsets,
+their defaults, the C search the C++ one by digest and choice, the refusals through the C API),
+and `python/tests/engine/test_gumbel_root.py` (the defaults and layout, the record header's
+round trip, the step loop the engine's own run digest for digest under the board-move split and
+the tree form, the choice and the refusals as `EngineArgumentError`, and the numbers the engine
+pins against `train.completed_q` and `train.selfplay.mix`).
+
+Spec: register E12; §16 - edit 312 names the C fields. Record headers gain five keys per search
+arm (`params_dict`); the record version stays 2, as for every appended field.
+
 ### 2026-11-24 - Register E12 (Gumbel root search), part 1: the search's arm, off
 
 `SearchParams::gumbel_root` (off) with `gumbel_m` 16, `gumbel_simulations` (the driver's: its

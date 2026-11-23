@@ -3206,7 +3206,7 @@ and pruning one changes no other's; the stream `mix64(seed ^ mix64(root key) ^
 0x47554D42454C3132)` ("GUMBEL12"), so a record's `search_seed`, `root_key` and candidate
 index give `g` again; `mix64` SplitMix64's finaliser.
 
-**Parameters** (`SearchParams`): `gumbel_root`
+**Parameters** (`SearchParams`; `t5d_search_params` in front of `expand`): `gumbel_root`
 (false), `gumbel_m` (16, the paper's placeholder), `gumbel_simulations` (0: the driver
 gives it - its playout cap less one, the root's own evaluation being a playout),
 `gumbel_c_visit` (50) and `gumbel_c_scale` (1), placeholders as I21's are. `gumbel_m`
@@ -3241,18 +3241,24 @@ same sample. MCGS and the tree form are allowed (the root's statistics are its e
 `gumbel_view()` gives the tests and tools each root child's `g`, logit, completed q,
 score and whether it is still considered, with `v_mix`, the phase and the schedule.
 
+**C API and binding.** The five `t5d_search_params` fields (in front of `expand`, which
+stays last; in `t5d_search_layout`), `t5d_search_choose_gumbel` (appended), mirrored in
+`capi.py`'s `CSearchParams` and `_SIGNATURES`, and `Search.choose_gumbel()` in
+`search.py`.
+
 **Not built: the generator's arm** (part 2): its policy target must be I21's
 completed-Q target, not the visit distribution, and what "the root search value" means
 under halving - which the value targets, resignation, deblundering and the effort label
 read - needs a ruling (build-log issue 415, with its design).
 
-**Tests** (`tests/test_gumbel.cpp`): the
+**Tests** (`tests/test_gumbel.cpp`, `python/tests/engine/test_gumbel_root.py`): the
 variate finite at both ends and Gumbel-distributed (mean 0.5772, variance 1.6449 over
 200,000 draws), a pure function of (stream, index); the sample a permutation with the
 closed edges last, and its first two drawn from the softmax without replacement (40,000
 seeds); the schedule's hand counts (16 moves and 200 visits: 3, 6, 12 and 25 more a
 phase, 6 left over) and its laws for m 1 to 64 and n 1 to 2,000; sigma and `v_mix` on
-the numbers the target side pins (0, 31.8, 15.9, 26.5); the halving driven as a bandit - every survivor at the phase's
+the numbers the target side pins (0, 31.8, 15.9, 26.5), in C++ and through
+`train.completed_q`; the halving driven as a bandit - every survivor at the phase's
 target at each halving, the kept half the test's own top half, the final counts eight
 3s, four 9s, two 21s and two 49s; the wait, the first phase's refill and the later
 phases' drop; the choice better than the prior in expectation and, at c_scale 0, a
@@ -3266,7 +3272,9 @@ at their first visit and an illegal one replaced; batched and synchronous alike;
 tree form and MCGS, interior nodes still widening; a one-move root and a mated one;
 every allocation of the root's first delivery failing in turn, each surfaced, the
 invariants held and the same sample and visits after; a timed decision and the game loop
-refused.
+refused; the C fields, their layout and defaults, the
+C choice the C++ one, and the refusals through the C API and Python; the binding's step
+loop the engine's own run, digest for digest.
 
 ## Stage E8: the verification layer's redesign (M14, a prototype until 6b′)
 

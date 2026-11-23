@@ -894,3 +894,60 @@ TEST(mcts_gumbel_is_refused_by_the_timed_decision_and_the_game_loop) {
   pp.search = gumbel_params(63);
   CHECK_THROWS_AS(mcts::play_game(standard(), *ev, pp), std::invalid_argument);
 }
+
+// ---- the C API ---------------------------------------------------------------------------------------
+
+TEST(capi_gumbel_fields_defaults_and_choice) {
+  // engine ABI: five t5d_search_params fields in front of `expand` (still last), their defaults,
+  // the layout the binding checks, t5d_search_choose_gumbel the C++ choice, and the refusals.
+  t5d_search_params p;
+  t5d_search_params_default(&p);
+  CHECK_EQ(p.gumbel_root, 0);
+  CHECK_EQ(p.gumbel_m, std::uint32_t{16});
+  CHECK_EQ(p.gumbel_simulations, std::uint64_t{0});
+  CHECK_EQ(p.gumbel_c_visit, 50.0);
+  CHECK_EQ(p.gumbel_c_scale, 1.0);
+  CHECK(offsetof(t5d_search_params, gumbel_c_scale) < offsetof(t5d_search_params, expand));
+  for (const auto& [name, at] : {std::pair<const char*, std::size_t>{"gumbel_root", offsetof(t5d_search_params, gumbel_root)},
+                                 {"gumbel_m", offsetof(t5d_search_params, gumbel_m)},
+                                 {"gumbel_simulations", offsetof(t5d_search_params, gumbel_simulations)},
+                                 {"gumbel_c_visit", offsetof(t5d_search_params, gumbel_c_visit)},
+                                 {"gumbel_c_scale", offsetof(t5d_search_params, gumbel_c_scale)}}) {
+    std::size_t got = 0;
+    REQUIRE_EQ(t5d_search_layout("t5d_search_params", name, &got), T5D_OK);
+    CHECK_EQ(got, at);
+  }
+  t5d_game* g = nullptr;
+  REQUIRE_EQ(t5d_game_new_variant("Standard", T5D_RULES_STANDARD, &g, nullptr), T5D_OK);
+  p.expand.square_features = T5D_FEATURES_NONE;
+  p.gumbel_root = 1;
+  p.gumbel_simulations = 63;
+  p.hunt = 0;
+  p.settling = 0;
+  t5d_search* s = nullptr;
+  char* error = nullptr;
+  CHECK_EQ(t5d_search_new(g, 1, &p, &s, &error), T5D_ERR_ARGUMENT);  // asset_map on: refused, named
+  CHECK(error != nullptr && std::string(error).find("asset_map") != std::string::npos);
+  t5d_free(error);
+  p.asset_map = 0;
+  REQUIRE_EQ(t5d_search_new(g, 1, &p, &s, nullptr), T5D_OK);
+  REQUIRE_EQ(t5d_search_run(s, T5D_EVALUATOR_UNIFORM, 0, 64, nullptr), T5D_OK);
+  std::size_t chosen = 99;
+  REQUIRE_EQ(t5d_search_choose_gumbel(s, &chosen, nullptr), T5D_OK);
+  mcts::SearchParams cpp = gumbel_params(63);
+  mcts::Search twin(standard(), cpp);
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
+  twin.run(*ev, mcts::Limits{64});
+  CHECK_EQ(chosen, twin.choose_gumbel());
+  std::uint64_t digest = 0;
+  REQUIRE_EQ(t5d_search_digest(s, &digest), T5D_OK);
+  CHECK_EQ(digest, twin.digest());  // the same search through the C API
+  std::size_t index = 0;
+  int32_t reason = 0;
+  CHECK_EQ(t5d_search_choose(s, &index, &reason, nullptr), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_search_advance(s, 0, nullptr), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_search_choose_gumbel(nullptr, &chosen, nullptr), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_search_choose_gumbel(s, nullptr, nullptr), T5D_ERR_ARGUMENT);
+  t5d_search_destroy(s);
+  t5d_game_destroy(g);
+}

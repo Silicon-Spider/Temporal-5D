@@ -317,7 +317,7 @@ build. *(2026-11-23: they carry them now.)*
   section 15.2's tree-form row under the graph (decision 10); a node budget for the terminal test
   in Python's play loops and the training generator (decision 13 - *built on `lane/engine`, 2026-11-24: issue 413*); on/off switches for the asset
   map and Hunt's suggested lines for 6e's match tests; Gumbel root search behind a flag (E10),
-  after I21's ranking (register E12 - *part 1, the engine arm, being built on `lane/engine`,
+  after I21's ranking (register E12 - *part 1, the engine arm, built on `lane/engine`,
   2026-11-24: issue 415; the generator's arm designed and waiting, issue 416*); MLH steering in Lc0's form once the moves-left head is trained.
 - **Gate lane.** Nothing new. H48 waits for the user.
 - **The main loop.** Conclude the `lane/fix535` merge; merge this review's edits into each lane
@@ -784,8 +784,8 @@ pushed after every commit, taking main by merge, never rebase (re-check with `gi
   309-311) - merged 2026-11-24 (main b18a7b3). MT-02's records into the corpus wait for the user
   (issue 405). Since then: main 5e77028 (the search lane) merged; register E12, the Gumbel root
   search, part 1 - the engine arm, off (issue 415; edits 312-315; the generator's arm designed
-  and waiting on two questions, issue 416) - in progress: the pure parts and the search's arm
-  built.
+  and waiting on two questions, issue 416) - built: the pure parts, the search's arm, the C API
+  and the binding; its checks and review next.
 - `lane/search` (from main 2b752ba, 2026-10-23) - E10 redone and merged (Hunt under 100
   boards, the settling scans under 50, the asset map - off in self-play until I2's steered
   visits are validated, issue 450 - Guard's hook built and off, H44's audit-lane tooling;
@@ -2266,7 +2266,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | E2, E3 | built behind flags, tested | Off; awaiting 6m and 6t. They read a node's uncertainty signal: the categorical's variance by default, the error head's output under 6m's switch (`uncertainty_source`, engine ABI round 2a; issue 149); their constants placeholders twice over (issues 81, 149) |
 | E8 | built behind its flag (off; `lane/search`, 2026-11-09; placeholders) | Difficulty-weighted allocation (`TimeParams::difficulty_weighting`, `t5d/timeman.hpp`): the root's effort distribution (D4's 16 bins, the top one censored) through the time context; the plan E7's soft bound x 2^(the bin at the 0.8 quantile - this game's running mean bin, seeded at 256 visits), clamped to [0.25, 4], to a floor of 32 evaluations and to E7's hard bound; won't-resolve (censored mass >= 0.5) plans for the hard bound (reading A) or E7's plan (B: `CapAtPlan`), and takes no overlap-with-churn extension; the guards code paths (the ex-post extensions still apply; the floor; the hard bound and the ladder's budgets untouched - I4). Off = E7 bit for bit (tested). The quantile is heads.effort_quantile's (tested across languages). Inert without an effort distribution - the built-in evaluators and netplay give none (issue 473). Issues 471-475, edits 339-341 |
 | E6 | not built (rule) | Refused |
-| E12 | part 1 in progress (2026-11-24): the pure parts and the search's arm built | *Register E10 until edit 412 is applied - renamed by ruling, 2026-11-23 (issue 730).* Gumbel root search (section 8.4; 2026-11-15 review). Part 1, the engine arm behind `gumbel_root` (off), its C API and binding: issue 415, its readings rows 16-25 of the readings table, edits 312-315. Part 2, the generator's arm: designed, not built - its target is I21's, and the root value under halving and the record wait for the user (issue 416). Its experiment (6g) after I21's ranking |
+| E12 | part 1 built, tested (2026-11-24); part 2 not built | *Register E10 until edit 412 is applied - renamed by ruling, 2026-11-23 (issue 730).* Gumbel root search (section 8.4; 2026-11-15 review). Part 1, the engine arm behind `gumbel_root` (off), its C API and binding: issue 415, its readings rows 16-25 of the readings table, edits 312-315. Part 2, the generator's arm: designed, not built - its target is I21's, and the root value under halving and the record wait for the user (issue 416). Its experiment (6g) after I21's ranking |
 | F1, F2 | built, tested | 22,965,426 parameters (F1 after F5, B15, M20, A6, D3 and D4: 21,338,634 after F5 - 20,736 fewer than N5's 21,359,370, gain-only norms, no Q/K/V biases, spec issue 203 - plus B15's 1,623,168, spec issue 210, plus M20's 3,337: the policy's promotion offset, 3,341, less the learned register coordinates, 4 - plus A6's 8,768: the turn-state counts' MLP, spec issue 230 - less D3's 12,079: three short-term outputs, 771, and the error head, 257, on the value MLP's shared layer, and N1's 51-bin short value head, 13,107, gone, issue 231 - plus D4's 3,598: the soft policy, 69,390, and N1's always-built reply head, 65,792, now a prototype off - 69,133 with its offset when on, issue 232); the L24-ff12 preset, 46,894,834 (F2: 44,460,082 and B15's 2,434,752 over 24 layers). Unchanged by F6's Mish in the heads, by B11's fold (its flag is off; with it on, 40 scalars where there were 48) and by B16 (its 304 are in a network of the cached configuration only: 22,965,730 with `attn_scope = "block_causal"`) and B17 (off; with it on, 6,115,328 more - 29,080,754, or 23,729,842 with the vectors shared by the heads; spec issue 218) |
 | F5 | built, tested | Network: RMSNorm-style norms (a learned gain, no centring, no bias; FP32) everywhere in the trunk, no Q/K/V biases, the attention-output and FFN biases kept (spec issue 200), pre-norm. 6y's arm - post-norm with DeepNet's initialisation, `norm_placement="post"` - through the dense trunk and the cached path, its unstated details placeholders (issue 201); smolgen has no norm to keep (issue 202) |
 | F6 | built, tested | Network: Mish in the trunk FFN (`ffn_activation="mish"`) and in every head's hidden layers - the value head's MLP, the only head with one (CHECKPOINT 8's ruling on issue 204, `lane/net` N-F6heads: no switch - `head_activation` and its GELU removed); 6y's arm, squared ReLU (`"squared_relu"`), in the trunk only, through the dense trunk and the cached path - tested: no head follows it. Outside F6's words, kept as built: the embedding's Δt MLP (GELU) and B12's smolgen (SiLU) - spec issue 221 |
@@ -6927,14 +6927,20 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     re-check: (j). The ABI: fields in front of `expand`, the layout table and the defaults, the
     function appended and mirrored in `_SIGNATURES` and `CSearchParams` - a library built before
     is refused at load.
-    **Built so far**: the pure parts (`gumbel.hpp`, `gumbel.cpp`; nine tests in
-    `tests/test_gumbel.cpp`) and the search's arm (twelve more there: off and inert, the refusals,
+    **Tests**: the pure parts (`gumbel.hpp`, `gumbel.cpp`; nine tests in
+    `tests/test_gumbel.cpp`), the search's arm (twelve more there: off and inert, the refusals,
     the sample and the schedule at the root, the choice, a planted move, one simulation, unknown
     candidates, batching, the tree form and MCGS, one-move and mated roots, allocation faults, the
     timed decision and the game loop). The fault test found its own accounting short, not the
     arm: of the root's first delivery's 51 allocations, the last 4 come after the expansion is
     committed - the delivered leaf stays delivered, its playout counted, as the step API says - so
-    the faulted search is run on to the twin's total. The C API and the binding follow.
+    the faulted search is run on to the twin's total), the C API (`capi_gumbel_fields_defaults_
+    and_choice`: the fields at their offsets and defaults, the C search the C++ one by digest and
+    choice, the refusals) and the binding (`python/tests/engine/test_gumbel_root.py`: defaults and
+    layout, the record header's round trip, the step loop the engine's run digest for digest under
+    the board-move split and the tree form, the choice and refusals as `EngineArgumentError`, and
+    the engine's numbers against `train.completed_q` and `train.selfplay.mix`). **Checks**: in the
+    verification entry below the item's last commit.
 
 416. **Register E12 (Gumbel root search), part 2 - the training generator's arm: designed, not built;
     two questions for the user** (register E12, I21, D3, D4, I13, I15, I18; §8.4, §12.2, §12.8;
