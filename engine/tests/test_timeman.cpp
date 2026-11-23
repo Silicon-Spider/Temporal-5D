@@ -2149,6 +2149,73 @@ TEST(timeman_a_flat_root_whose_listing_a_deadline_cut_never_throws_out_of_play) 
 
 // ---- the deadline's reach that issue 406's tests lack (the review's M4) ----------------------
 
+TEST(timeman_a_turn_start_check_the_deadline_stopped_is_made_again_outside_it) {
+  // The E11 review's S5 (the correctness pass's p5, adopted): mate in one
+  // under the flat form. A first run with a deadline already passed cuts the
+  // children's turn-start checks (unknown, never terminal); the deadline
+  // cleared, a carried tree kept them unknown for good - no mate seen, the
+  // chosen child not the mate (the probe: 0 checkmates, root q 0.885). Now a
+  // node whose check the deadline stopped is checked again once it has not
+  // passed: the mates are found and the mating child chosen, as with no
+  // deadline at all.
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  for (const bool past : {true, false}) {
+    SearchParams sp = quiet_params();
+    sp.split = TurnSplit::Flat;
+    Search search(t5d_test::v3::mate_in_one(), sp);
+    if (past) search.set_deadline(std::chrono::steady_clock::now() - std::chrono::seconds(1));
+    search.run(*uniform, Limits{64});
+    const std::uint64_t cut = search.stats().unknown_verdicts;
+    if (past) CHECK(cut > 0);  // the premise: the deadline cut checks
+    search.set_deadline(std::nullopt);
+    search.run(*uniform, Limits{2048});
+    int mates = 0;
+    for (const RootChild& c : search.root_children()) {
+      if (c.child != kNoNode && search.node(c.child).terminal == Terminal::Checkmate) ++mates;
+    }
+    const RootChild chosen = search.root_children().at(search.choose().index);
+    CHECK(mates > 0);
+    CHECK(chosen.child != kNoNode && search.node(chosen.child).terminal == Terminal::Checkmate);
+    // Each node selection reached again was checked again, its unknown verdict
+    // replaced (no deadline now: none unknown again); the rest wait for a visit.
+    if (past) CHECK(search.stats().rechecked_turn_starts > 0);
+    CHECK_EQ(search.stats().unknown_verdicts + search.stats().rechecked_turn_starts, cut);
+  }
+}
+
+TEST(timeman_a_verification_the_deadline_would_cut_is_made_again_outside_it) {
+  // S5's second half: an unknown edge's verification is not marked done when
+  // the deadline cuts it - past the deadline none is started (a cut one would
+  // add nothing to the cheap tiers the expansion ran), and once the deadline
+  // has not passed the edges are verified (a verification marked done when
+  // cut was never made again: the edge stayed unknown for the rest of the
+  // tree). White in check, the expansion settling nothing beyond its cheap
+  // tiers, the lazy verification on.
+  const GameState s = game({"[4k3/8/8/8/8/8/4r3/4K3:0:1:w]"}, BoardSize{8, 8});
+  SearchParams sp = quiet_params();
+  sp.legality = LegalityOptions::budgeted(0, 0);
+  sp.verify_unknown = true;
+  Search search(s, sp);
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  search.set_deadline(std::chrono::steady_clock::now() - std::chrono::seconds(1));
+  search.run(*uniform, Limits{32});
+  const auto count = [&](bool verified) {
+    std::size_t n = 0;
+    const NodeView root = search.node(search.root());
+    for (std::size_t i = 0; i < root.edge_count; ++i) {
+      const EdgeView e = search.edge(search.root(), i);
+      if (!e.pruned && e.unknown && e.verified == verified) ++n;
+    }
+    return n;
+  };
+  CHECK(count(false) > 0);  // unknown edges left unverified past the deadline
+  CHECK_EQ(count(true), std::size_t{0});
+  const std::uint64_t before = search.stats().verified_legal + search.stats().verified_illegal;
+  search.set_deadline(std::nullopt);
+  search.run(*uniform, Limits{256});
+  CHECK(search.stats().verified_legal + search.stats().verified_illegal > before);  // made again, decided
+}
+
 TEST(timeman_past_the_deadline_the_classification_is_the_cheap_tiers_alone) {
   // E11's gating (kept at the merge with issue 406, M2): past the deadline no
   // tier-2 check is taken - checks, destination scans, greedy tries - and no

@@ -10,6 +10,30 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - E11 review round 2, S5: a check or verification the deadline cut is made again outside it
+
+The review's S5 (SC-M4). Since E11 made the hard bound every match decision's deadline, any batch
+crossing it could leave a turn start's check cut - never terminal for the rest of the game, since
+a node is checked once - and an edge's verification cut but marked done, never verified again.
+The rules stayed sound (Unknown, never a verdict); the search's values did not (the correctness
+pass's probe: a mate in one, the deadline passed in a first run and then cleared, 2048 more
+playouts - no checkmate seen, the mating child not chosen).
+- **A deadline-cut turn-start check** (not one the memory ceiling stopped) marks its node
+  (`Node::recheck`, as `FlatNode::relist` marks a cut listing); selection reaching it outside the
+  deadline checks it again, its earlier unknown verdict - and a turn cap it let stand - replaced
+  (`SearchStats::rechecked_turn_starts`). Never a node waiting for its evaluation.
+- **`e.verified` only for a verification the deadline did not cut**; none is started past the
+  deadline, since a cut one adds nothing to the expansion's cheap tiers
+  (`SearchStats::verifications_cut` counts the ones cut midway).
+- Tests: the probe's p5 - the mates found and the mating child chosen after the cut, each
+  rechecked node's unknown verdict replaced; an unknown edge left unverified past the deadline and
+  decided once it has not passed.
+- Docs: `t5d/mcts.hpp` (`set_deadline`), the README (issue 406's paragraph), `mcts.cpp`; issue 483.
+- `mcts.cpp` changed: the Lazy SMP test is owed and runs in the round's end checks.
+
+Spec: register H37 (Unknown, never a verdict - unchanged) and §8.6's hard bound as built (what it
+cuts is made again outside it - issue 483). No proposed edit; no measured figure.
+
 ### 2026-11-24 - E11 review round 2, S4: exception (1) lifts the hard bound for the root's own listing alone
 
 The review's S4 (SS-F3). The forced slice - before any root child has a visit - ran without the

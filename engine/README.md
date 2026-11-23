@@ -2859,8 +2859,12 @@ and `Limits` carries a node budget and a memory budget besides playouts and eval
 `stats().last_stop`). The deadline also reaches the rules engine's calls inside a batch
 (build-log issue 406): the leaves' legality classifications (`LegalityOptions::deadline`),
 the turn-start checks, the flat form's fallback listing and the lazy verifications, which it
-leaves Unknown - never a verdict, and so it stays in a tree carried to the next decision (a
-node is checked and expanded once); a cut classification is another candidate list, which the
+leaves Unknown - never a verdict. A turn start whose check it stopped (not the memory ceiling) is
+checked again when selection next reaches it outside the deadline, and an unknown edge's
+verification is neither started past the deadline nor marked done when the deadline cut it - so
+a carried tree does not keep the deadline's unknowns for the rest of the game (the E11 review's
+S5: `SearchStats::rechecked_turn_starts`, `verifications_cut`); the leaf's own expansion is made
+once; a cut classification is another candidate list, which the
 cache and the batch keep apart (above), and a flat node whose fallback listing it cut before a
 turn was found is not stuck but listed again by the next run outside a deadline (under the
 pull's rollback: a listing that throws leaves it to be listed still; build-log issue 412). The flat

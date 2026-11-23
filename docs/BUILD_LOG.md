@@ -8585,6 +8585,20 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     takes from an unevaluated root (issue 458). No game reaches the no-progress guard as built (a
     root that cannot be listed is stuck, and its run stops Finished first; a listing a deadline
     cuts stops at that deadline): it is a guard, tested in Python with stubbed slices.
+483. **What a deadline-cut check or verification leaves in a carried tree** (the E11 review's S5;
+    issue 406's deadline, which E11 made every match decision's hard bound). A turn start whose
+    check the deadline stopped was never terminal for the rest of the game (a node is checked
+    once), and an edge whose verification it cut was marked verified (never verified again): sound
+    rules - Unknown, never a verdict - but wrong search values from then on (the correctness pass's
+    probe: a mate in one after a cut, the deadline then cleared, 2048 more playouts - no mate seen,
+    the wrong move chosen). Built: `Node::recheck` - a check the deadline stopped, not the memory
+    ceiling, is made again when selection next reaches the node outside the deadline (never one
+    waiting for its evaluation), its earlier unknown verdict and any turn cap it let stand replaced
+    (`SearchStats::rechecked_turn_starts`); an unknown edge's verification is not started past the
+    deadline (a cut one adds nothing to the expansion's cheap tiers) and one the deadline cut is
+    not marked verified (`SearchStats::verifications_cut`). Nodes selection never reaches again
+    keep their unknown verdicts - harmless: no value flows through them. The Lazy SMP test runs
+    after this change (the scanner's search shares no code with it, but mcts.cpp changed).
 600. **Issue 535 resolved - D2's flat form, a node's creation and a re-root made
     exception-safe under an allocation failure - and two defects of its kind found beside
     it, fixed with it** (section 15.4's invariants under failure: visit counts consistent,
@@ -12015,3 +12029,5 @@ entry changes in the same edit as its code, which the standing rule defers to up
     (`Search::lift_root_listing`, `t5d_search_lift_root_listing`; run_timed and Python); the spec
     pass's probe_forced_scope numbers as a test (flat: 7 unknown verdicts; Two Timelines
     board-move: 10 unknown edges below the root).
+  - **S5**: a deadline-cut turn-start check made again outside the deadline, a cut verification
+    not marked done (issue 483); the correctness pass's p5 adopted.

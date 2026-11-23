@@ -1182,8 +1182,14 @@ struct SearchStats {
   std::uint64_t verified_legal = 0;    ///< (c) unknown edges verified legal
   std::uint64_t verified_illegal = 0;  ///< (c) ... verified illegal and removed
   std::uint64_t verified_unknown = 0;  ///< (c) ... still unknown after verification
+  /// (c) ... of which the deadline cut the verification: verified again outside
+  /// it, not counted verified (the E11 review's S5)
+  std::uint64_t verifications_cut = 0;
   std::uint64_t mate_checks = 0;       ///< turn starts given to the detector
   std::uint64_t unknown_verdicts = 0;  ///< ... that answered Unknown (H37: not terminal)
+  /// ... checked again because the deadline had stopped the check (S5): each
+  /// such node's earlier unknown verdict replaced by the new one's
+  std::uint64_t rechecked_turn_starts = 0;
   std::uint64_t checkmates = 0;        ///< terminal nodes found
   std::uint64_t stalemates = 0;
   std::uint64_t turn_caps = 0;         ///< nodes the turn cap ended (I11)
@@ -1555,8 +1561,10 @@ class Search {
   /// max_time), the leaves' legality classification and the verification of
   /// unknown edges (LegalityOptions::deadline). Past it they stop and answer
   /// Unknown - never a verdict (H37): a turn start whose check stopped is not
-  /// terminal, a move left unknown is flagged (verified once: a verification
-  /// the deadline stopped leaves the edge unknown; a flat node whose fallback
+  /// terminal - until checked again when selection next reaches it outside the
+  /// deadline (the E11 review's S5) - and a move left unknown is flagged (its
+  /// verification made once outside the deadline: none is started past it, and
+  /// one the deadline cut is made again - S5; a flat node whose fallback
   /// listing it cut before a turn is re-listed later - issue 406). The flat
   /// form's turn generator is node-budgeted only (generator_nodes; build-log
   /// spec issue 467). PERSISTENT: it holds across run() calls and the step

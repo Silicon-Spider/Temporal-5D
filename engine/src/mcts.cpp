@@ -87,7 +87,7 @@ struct Edge {
   bool submit = false;        // board-move, Q4's other reading: submit the action
   bool pruned = false;        // a dead end (no legal completion), or verified illegal
   bool unknown = false;       // (a) the expansion's budget left the move's legality open
-  bool verified = false;      // (c) verified once
+  bool verified = false;      // (c) verified once - by a verification the deadline did not cut (S5)
   double prior = 0;
   NodeId child = kNoNode;     // created on first selection
   std::uint32_t visits = 0;
@@ -338,6 +338,7 @@ struct Node {
   bool expanded = false;
   bool pending = false;       // waiting in the batch for its evaluation
   bool stuck = false;         // a turn start with no child and no verdict
+  bool recheck = false;       // a turn start whose check the deadline stopped: checked again outside it (S5)
   bool dead_end = false;      // a partial turn with no legal completion
   bool children_complete = true;
   bool submit_possible = false; // board-move, D8: a submit edge (obligations met, T5)
@@ -1168,8 +1169,10 @@ struct Search::Impl {
 
   // A legality budget, or a detector's, with run()'s deadline if it has one
   // (build-log issue 406). What the deadline stops is Unknown: a move left
-  // unknown, a turn start never terminal - and, in a tree carried to the next
-  // decision, so it stays (a node is checked and expanded once).
+  // unknown, a turn start never terminal - until made again outside it (the
+  // E11 review's S5: a cut turn-start check is redone when selection reaches
+  // the node, a cut verification when the edge is next picked; a node is
+  // expanded once).
   LegalityOptions timed(LegalityOptions o) const {
     if (deadline_) o.deadline = deadline_;
     return o;
@@ -1210,6 +1213,12 @@ struct Search::Impl {
     const auto t0 = std::chrono::steady_clock::now();
     const MateResult r = detect_mate(n.state, params_.detector, budget);
     stats_.seconds_mate += detail::seconds_since(t0);
+    // The E11 review's S5: a check the deadline stopped (not the memory
+    // ceiling) is the deadline's doing, not the node's - it is made again once
+    // the deadline has not passed (recheck), as a cut fallback listing is
+    // re-listed (FlatNode::relist); in a carried tree it would otherwise stay
+    // unknown - a mate never seen - for the rest of the game.
+    n.recheck = r.verdict == Outcome::Unknown && !r.stats.stopped_by_memory && deadline_passed();
     switch (r.verdict) {
       case Outcome::Checkmate:
         n.terminal = Terminal::Checkmate;
@@ -1231,6 +1240,21 @@ struct Search::Impl {
   }
 
   bool solved(const Node& n) const noexcept { return params_.proof_channel && n.lo == n.hi; }
+
+  // S5: node `id`'s turn-start check made again - the deadline stopped the
+  // last - its earlier unknown verdict (and the turn cap it let stand)
+  // replaced by this one's.
+  void recheck(NodeId id) {
+    Node& n = nodes_[id];
+    n.recheck = false;
+    ++stats_.rechecked_turn_starts;
+    if (stats_.unknown_verdicts > 0) --stats_.unknown_verdicts;
+    if (n.terminal == Terminal::TurnCap) {
+      n.terminal = Terminal::None;
+      if (stats_.turn_caps > 0) --stats_.turn_caps;
+    }
+    classify(n);
+  }
 
   // Whether the node's eval_* hold a value: its evaluation's, or (tree form,
   // tree_inherit_value) the one an inherited node takes from its parent.
@@ -1498,7 +1522,12 @@ struct Search::Impl {
     const MoveLegality v = classify_edge(pid, ei, options);
     stats_.seconds_verify += detail::seconds_since(t0);
     Edge& e = nodes_[pid].edges[ei];
-    e.verified = true;
+    // S5: a verification the deadline cut is not the verification - made again
+    // outside the deadline, the edge kept unknown meanwhile.
+    const bool cut = v == MoveLegality::Unknown && options.deadline &&
+                     std::chrono::steady_clock::now() >= *options.deadline;
+    e.verified = !cut;
+    if (cut) ++stats_.verifications_cut;
     switch (v) {
       case MoveLegality::Illegal:
         ++stats_.verified_illegal;
@@ -2977,6 +3006,9 @@ struct Search::Impl {
     nodes_[root_].vl += 1;
     NodeId cur = root_;
     for (;;) {
+      // S5: a turn start whose check the deadline stopped, checked again now
+      // that it has not passed (never one waiting for its evaluation).
+      if (nodes_[cur].recheck && !nodes_[cur].pending && !deadline_passed()) recheck(cur);
       Node& n = nodes_[cur];
       if (n.terminal != Terminal::None) {
         ++stats_.terminal_visits;
@@ -3055,7 +3087,7 @@ struct Search::Impl {
       // renormalised) and selection is repeated here - nothing backed up.
       if (params_.verify_unknown) {
         const Edge& e = nodes_[cur].edges[ei];
-        if (e.unknown && !e.verified &&
+        if (e.unknown && !e.verified && !deadline_passed() &&
             verify_edge(cur, ei, timed(params_.verify_legality)) == MoveLegality::Illegal) {
           continue;
         }
