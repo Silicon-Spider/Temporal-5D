@@ -584,8 +584,10 @@ def generate_game(
     short-term horizons) - the game's targets are built at generation, each decision's
     prior-to-target divergence recorded under it and the configuration named in the header; the
     reply prototype's targets too when ``keep_positions``. ``on_decision``: called with the live
-    search, the decision's record and its input once each decision is recorded, before its child
-    is played (the tests hold the record to the live search)."""
+    search, the decision's record and its input for each decision of an action once the action is
+    kept - played to its submission, or resigned - its searches held open until then; never for the
+    decisions of an action an unsettled choice drops (H22; the review of decision 13, L7). The tests
+    hold the record to the live search."""
     cfg.validate()
     if target_config is None:
         target_config = TargetConfig(short_term_horizons=tuple(net_cfg.short_term_horizons))
@@ -608,6 +610,19 @@ def generate_game(
     positions: list[Position] = []
     actions: list[list[Move]] = []
     shared: Search | None = None
+    #: on_decision's calls for the action under way - its live searches held open - made once the action
+    #: is kept, never for an action an unsettled choice drops (the review of decision 13, L7).
+    held: list[tuple[Search, DecisionRecord, Position]] = []
+
+    def release(call: bool) -> None:
+        for s_, d_, p_ in held:
+            if call:
+                on_decision(s_, d_, p_)
+        for s_, _, _ in held:
+            if s_ is not shared:
+                s_.close()
+        held.clear()
+
     end, winner = "", None
     unsettled = ""  # H22: an "unknown" end's question - "verdict" or "choice" (netplay.UNSETTLED_NOTES)
     turn_start: Game | None = None  # the action's turn start, while its moves are played one by one
@@ -649,7 +664,7 @@ def generate_game(
                 root_t = root_temperature(cfg, turn0 + a)
                 params = search_parameters(game, cfg, relations, seed=seed, noise=noise, root_temperature=root_t)
                 search = Search(game, params=params, share=shared)
-                if shared is not None:
+                if shared is not None and not any(shared is h[0] for h in held):
                     shared.close()  # the cache lives on in the new search
                 shared = search
                 stop = _run(search, evaluator, cfg, full=full, cap=cap, regs=regs)
@@ -740,7 +755,7 @@ def generate_game(
                 if keep_positions:
                     positions.append(position)
                 if on_decision is not None:
-                    on_decision(search, decisions[-1], position)
+                    held.append((search, decisions[-1], position))
                 if resigning:
                     resigned = True
                     end, winner = "resign", 1 - position.acting_player
@@ -758,8 +773,10 @@ def generate_game(
                 game.apply(child.moves[0])
                 action.append(child.moves[0])
             if resigned:
+                release(True)
                 break
             if unsettled:  # the action under way is not recorded: its decisions go, the game back at its turn start
+                release(False)
                 del decisions[first:]
                 del positions[first:]
                 events[:] = [e for e in events if e["decision"] < first]
@@ -769,6 +786,7 @@ def generate_game(
                 end = "unknown"
                 break
             actions.append(action)
+            release(True)
             if turn_start is not None:
                 turn_start.close()
                 turn_start = None
@@ -837,9 +855,12 @@ def generate_game(
             "proof_refs": [],
             "target_config": None,
         }
+        if unsettled:  # H22: an "unknown" end's question (``records``: an optional header key, as seeded_start)
+            header["unsettled"] = unsettled
         if picked is not None:  # I22: the game's origin (``records``: the optional header key)
             header["seeded_start"] = seeded_start_header(picked, turn0, start_snap, len(stored))
     finally:
+        release(False)
         if shared is not None:
             shared.close()
         if turn_start is not None:

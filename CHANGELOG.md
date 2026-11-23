@@ -10,6 +10,28 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - Decision 13's review: netplay's replay, the binding's range, the records, the callback (X5, L3, L5, L7)
+
+From the review of decision 13 (build-log issue 414). X5: `netplay.replay_problems` replays a
+game ended on an unsettled verdict through t5d-gate `--parse-only` (full mode asked the gate
+the question the game gave up on, with no budget), and a gate timeout is a note, never an
+abort (`replay_with_gate(parse_only=)`, `main`). L3: `Search.verify` refuses an out-of-range
+budget instead of wrapping it. L5: the pool's `--terminal-nodes`
+(`python/t5d/train/selfplay_pool.py`), a `TerminalNodes` record header for a budget other than
+the default (`engine/tools/t5d_play.cpp`, netplay), the unsettled question in t5d-play's
+summary and the pool's per-game line, and an optional `unsettled` header key in generator
+records (`GameRecord.unsettled`; format version 2 kept). L7: the generator's `on_decision`
+waits until the action is kept and never hears a dropped one. Docs: `engine/README.md`,
+netplay's and the generator's docstrings, `records.py`. Tests:
+`python/tests/engine/test_terminal_budget.py`, `python/tests/train/test_generator_budget.py`,
+`engine/tests/test_play_exe.cpp` (its default and exact records compared without the exact
+one's header). Checks: t5d-tests play_exe 5 of 5 (--werror build); pytest of the engine and
+train files that play games, 259 passed (T5D_REQUIRE_ENGINE=1); ruff clean.
+
+Spec: none - section 11.0's record says "unknown" as before; the header key and the CLI option
+are as-built details (section 16's H22 entry, proposed edit 308, names the budget). No truth
+source, search, prover or scanner path changed; the proof channel stays off.
+
 ### 2026-11-24 - Decision 13's review: the missing tests (X1, X6, X7, L4, L10)
 
 The review of decision 13's mutation pass left 16 survivors; its candidate tests are adopted

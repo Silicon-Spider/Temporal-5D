@@ -260,8 +260,10 @@ TEST(play_exe_max_seconds_ends_with_its_record) {
 TEST(play_exe_terminal_nodes_ends_an_unsettled_game_unscored_h22) {
   // Register H22 (§11.0): --terminal-nodes is the game loop's node budget. Within one node the
   // start's verdict is unknown: the game ends there, unscored - "*", no action, the Termination
-  // naming the question. The default budget and an exact one (UINT64_MAX) play the same game at
-  // this size (the ladder off: one thread, deterministic).
+  // naming the question, the summary too, and a TerminalNodes header the budget (not the default:
+  // the review of decision 13, L5). The default budget and an exact one (UINT64_MAX) play the same
+  // game at this size (the ladder off: one thread, deterministic): their records differ only by
+  // the exact one's TerminalNodes header.
   namespace fs = std::filesystem;
   const fs::path dir = fs::path(T5D_TEST_SCRATCH) / "play-exe";
   fs::create_directories(dir);
@@ -275,11 +277,19 @@ TEST(play_exe_terminal_nodes_ends_an_unsettled_game_unscored_h22) {
   CHECK(*rec.header("Termination") ==
         "unknown (the turn start's verdict stayed unknown within the game loop's budget, H22: unscored; never a mate)");
   CHECK(*rec.header("Result") == "*");
+  REQUIRE(rec.header("TerminalNodes") != nullptr);
+  CHECK(*rec.header("TerminalNodes") == "1");
   CHECK(rec.actions.empty());
+  CHECK(read_all(dir / "one-stderr.txt").find("0 actions, unknown (verdict), result *") != std::string::npos);
   std::vector<std::string> exact = base;
   exact.insert(exact.end(), {"--terminal-nodes", "18446744073709551615"});
   REQUIRE_EQ(run(T5D_PLAY_EXE, base, {}, dir / "budgeted.5dpgn", dir / "budgeted-stderr.txt"), 0);
   REQUIRE_EQ(run(T5D_PLAY_EXE, exact, {}, dir / "exact.5dpgn", dir / "exact-stderr.txt"), 0);
-  CHECK(read_all(dir / "budgeted.5dpgn") == read_all(dir / "exact.5dpgn"));
+  std::string exact_record = read_all(dir / "exact.5dpgn");
+  const std::size_t at = exact_record.find("[TerminalNodes \"18446744073709551615\"]");
+  REQUIRE(at != std::string::npos);
+  exact_record.erase(at, exact_record.find('\n', at) + 1 - at);  // the header's line, whatever its ending
+  CHECK(read_all(dir / "budgeted.5dpgn").find("TerminalNodes") == std::string::npos);
+  CHECK(read_all(dir / "budgeted.5dpgn") == exact_record);
   CHECK(read_all(dir / "budgeted.5dpgn").find("action_limit") != std::string::npos);
 }

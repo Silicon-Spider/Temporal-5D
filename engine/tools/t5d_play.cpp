@@ -372,6 +372,9 @@ int main(int argc, char** argv) {
                                         std::to_string(params.turn_cap.boards));
     }
     if (rules.encode() != 0) extra.emplace_back("Rules", tools::ruleset_text(rules));
+    if (params.terminal_nodes != kTerminalNodes) {  // H22: a non-default budget is named (the review of decision 13, L5)
+      extra.emplace_back("TerminalNodes", std::to_string(params.terminal_nodes));
+    }
     const std::string record = tools::play_record(g, v->name, extra);
     std::fputs(record.c_str(), stdout);
     std::fflush(stdout);
@@ -383,10 +386,13 @@ int main(int argc, char** argv) {
       f << audit::log_text(log);
       std::fprintf(stderr, "t5d-play: decision log %s - %zu events\n", decision_log.c_str(), log.events.size());
     }
+    // The end, an unscored one with its question (H22; the review of decision 13, L5).
+    const std::string end_text = std::string(game_end_name(g.end)) +
+                                 (g.unsettled == Unsettled::None ? "" : std::string(" (") + unsettled_name(g.unsettled) + ")");
     std::fprintf(stderr,
                  "t5d-play: %zu actions, %s, result %s, %llu decisions, %llu playouts, %llu "
                  "evaluations, %llu nodes, %.2f s, turn cap %s (capped positions met in search: %llu)\n",
-                 g.actions.size(), game_end_name(g.end), g.result().c_str(),
+                 g.actions.size(), end_text.c_str(), g.result().c_str(),
                  static_cast<unsigned long long>(g.decisions),
                  static_cast<unsigned long long>(g.playouts),
                  static_cast<unsigned long long>(g.evaluations),

@@ -495,7 +495,12 @@ class Search:
         (``t5d_search_verify``). The game loops pass their node budget (register H22, section 11.0:
         the terminal test's budget covers the chosen move's verification too); a move it leaves
         undecided is ``T5D_LEGALITY_UNKNOWN`` and stays a child. An illegal child is removed and
-        the children's indices change. Deterministic (``t5d_search_verify_budgeted``)."""
+        the children's indices change. Deterministic (``t5d_search_verify_budgeted``). A budget
+        outside 0 to ``T5D_NO_LIMIT`` is refused (``ValueError``), never wrapped into the C type
+        (the review of decision 13, L3: -1 read as exact, 2**64 as 0)."""
+        for name, value in (("checks", checks), ("nodes", nodes)):
+            if not 0 <= int(value) <= T5D_NO_LIMIT:
+                raise ValueError(f"{name}: 0 to T5D_NO_LIMIT, not {value}")
         out = c_int32()
         self._lib.call(
             "t5d_search_verify_budgeted",

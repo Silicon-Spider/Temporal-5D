@@ -11,6 +11,8 @@ dropped and the game put back at its turn start - and self-play's determinism un
 
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import replace
 
 import pytest
@@ -19,10 +21,20 @@ import torch
 from t5d.engine import Game, NetworkEvaluator, netplay
 from t5d.engine.capi import T5D_EVALUATOR_UNIFORM, T5D_LEGALITY_LEGAL, T5D_LEGALITY_UNKNOWN, T5D_NO_LIMIT
 from t5d.engine.errors import EngineArgumentError
-from t5d.engine.netplay import TERMINAL_NODES, UNSETTLED_NOTES, PlayConfig, network_config, play_game, turn_start_verdict
+from t5d.engine.netplay import (
+    TERMINAL_NODES,
+    UNSETTLED_NOTES,
+    PlayConfig,
+    gate_executable,
+    network_config,
+    play_game,
+    replay_problems,
+    replay_with_gate,
+    turn_start_verdict,
+)
 from t5d.engine.search import Search, search_params
 from t5d.net import build_model
-from tests.engine.helpers import requires_engine
+from tests.engine.helpers import REQUIRE_VAR, requires_engine
 
 pytestmark = requires_engine
 
@@ -181,8 +193,14 @@ def test_self_play_under_a_budget_is_deterministic(net):
         tiny = [play_game(ev, replace(base, terminal_nodes=1), net_cfg=cfg) for _ in range(2)]
     first = games[0]
     assert first.end == "turn_cap" and first.actions
+    unnamed = re.compile(r'^\[TerminalNodes "[0-9]+"\]\n', re.MULTILINE)  # the exact games name their budget (L5)
     for g in games[1:]:
-        assert (g.record, g.end, g.actions, g.final_fingerprint) == (first.record, first.end, first.actions, first.final_fingerprint)
+        assert (unnamed.sub("", g.record), g.end, g.actions, g.final_fingerprint) == (
+            unnamed.sub("", first.record),
+            first.end,
+            first.actions,
+            first.final_fingerprint,
+        )
     assert tiny[0].end == "unknown" and tiny[0].unsettled == "verdict" and tiny[0].actions == []
     assert tiny[1].record == tiny[0].record
 
@@ -391,3 +409,56 @@ def test_netplay_cli_takes_terminal_nodes(monkeypatch, capsys):
     assert seen == [1]
     games = [json.loads(line) for line in capsys.readouterr().out.splitlines() if '"unsettled"' in line]
     assert len(games) == 1 and games[0]["end"] == "unknown" and games[0]["unsettled"] == "verdict"
+
+
+# --- the review of decision 13: L3, L5 and X5 -----------------------------------------------------------
+
+
+def test_the_binding_refuses_a_budget_out_of_range():
+    """L3: a budget outside 0 to T5D_NO_LIMIT is refused, never wrapped into the C type (-1 read as exact,
+    2**64 as 0); the child stays as it was."""
+    with Game.from_fen([BARE_KINGS]) as g, _searched(g) as s:
+        for kwargs in ({"nodes": -1}, {"nodes": T5D_NO_LIMIT + 1}, {"checks": -1}, {"checks": T5D_NO_LIMIT + 1}):
+            with pytest.raises(ValueError, match="T5D_NO_LIMIT"):
+                s.verify(0, **kwargs)
+        assert s.child(0).legality == T5D_LEGALITY_UNKNOWN
+
+
+def test_a_record_names_a_budget_other_than_the_default(net):
+    """L5: a netplay record names the game loop's budget in a TerminalNodes header where it is not the
+    default - so two records that differ only by it say so - and is unchanged at the default."""
+    cfg, ev = net
+    base = PlayConfig(playouts=2, cap_turns=1, cap_boards=20, **QUIET)
+    with torch.no_grad():
+        small = play_game(ev, replace(base, terminal_nodes=1), net_cfg=cfg)
+        default = play_game(ev, base, net_cfg=cfg)
+    assert '[TerminalNodes "1"]' in small.record
+    assert "TerminalNodes" not in default.record
+
+
+@pytest.fixture
+def gate():
+    path = gate_executable()
+    if not path.is_file():
+        why = f"t5d-gate is not built beside the engine library (looked for {path})"
+        if os.environ.get(REQUIRE_VAR, "").strip() == "1":
+            pytest.fail(f"{REQUIRE_VAR}=1: {why}", pytrace=False)
+        pytest.skip(why)
+    return path
+
+
+def test_an_unsettled_verdicts_game_replays_without_its_final_verdict(net, gate):
+    """X5: a game ended on a verdict its budget left unsettled replays through the gate parse-only - full
+    mode would ask the gate that very verdict with no budget (minutes at large positions; here, at the mated
+    start, a mate it settles at once) - with the states and the final boards still checked; a replay past
+    its timeout is a note, never a failure."""
+    cfg, ev = net
+    play = PlayConfig(start_fen=(MATED,), playouts=2, cap_turns=0, cap_boards=0, terminal_nodes=_least(MATED) - 1, **QUIET)
+    with torch.no_grad():
+        res = play_game(ev, play, net_cfg=cfg)
+    assert (res.end, res.unsettled) == ("unknown", "verdict")
+    problems, note = replay_problems(res, gate=gate)
+    assert problems == [] and note.startswith("parse-only")
+    assert replay_with_gate(res.record, gate=gate).last_terminal == "checkmate"  # what full mode would have asked
+    problems, note = replay_problems(res, gate=gate, timeout=1e-6)
+    assert problems == [] and note.startswith("not replayed")

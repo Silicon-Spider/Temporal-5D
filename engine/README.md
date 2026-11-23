@@ -3038,7 +3038,9 @@ hold 300 boards on 50 timelines, and with root noise time travel can hold the pr
 back for good - a Standard game reached 509 boards on 110 timelines in 39 actions
 without passing turn 20). `--mate-nodes N` sets the search's terminal-check
 budget; `--terminal-nodes N` the game loop's (H22: 2,000,000; 18446744073709551615 exact) -
-a turn start or a choice it cannot settle ends the game unscored, `unknown` and `*`;
+a turn start or a choice it cannot settle ends the game unscored, `unknown` and `*`, the summary
+saying which question (`unknown (verdict)`), and a budget other than the default is named in a
+`TerminalNodes` header (the review of decision 13, L5);
 `--max-actions` (checked at turn starts) and `--max-seconds` (checked before
 every decision, each search's deadline, and the deadline of the game's turn-start verdicts
 and of a chosen move's exact verification - build-log issue 406: an action under way when

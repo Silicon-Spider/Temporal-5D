@@ -62,6 +62,11 @@ configuration that ``prior_to_target_kl`` was measured under - the builder's def
 generator was given none). A synthetic record (``trainer.synthetic_record``, never the
 generator's) also says ``synthetic``: the only rows the untrained build steps on.
 
+A game ended **unscored on an unsettled question** (register H22; ``end`` "unknown") also carries
+``unsettled`` - "verdict" (a turn start the game loop's node budget did not settle) or "choice" (no
+move shown legal within it, the verdict's witness left) - an optional key, present in no other
+record, so the version stays 2 (the review of decision 13, L5); the 5dpgn's Termination says the same.
+
 A **seeded game** (register I22, section 12: a game begun from a stored position;
 ``selfplay.SeededStartConfig``, off by default) also carries ``seeded_start`` - an optional key, as
 ``synthetic`` is, present in no other record, so the version stays 2: ``source``, ``kind``
@@ -382,6 +387,11 @@ class GameRecord:
     @property
     def n_actions(self) -> int:
         return int(self.header["result"]["actions"])
+
+    @property
+    def unsettled(self) -> str:
+        """An "unknown" end's question (register H22; module docstring): "verdict", "choice" or ""."""
+        return str(self.header.get("unsettled", ""))
 
     @property
     def seeded_start(self) -> dict | None:

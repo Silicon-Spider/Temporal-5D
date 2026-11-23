@@ -6724,6 +6724,26 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     the fast classification with every verification withheld (131 witness moves), its third left
     exact. L10: `unsettled_name`'s strings (M10). The observation on that self-play test (one game,
     54 s of its 62) is left: trimming it was not shown to keep every kill.
+    **X5, L3, L5, L7: netplay's replay, the binding's range, the records, the callback.** X5:
+    netplay's replay check of a game ended on a verdict its budget left unsettled asked the gate
+    that very verdict in full mode, with no budget (minutes at large positions; past the 600 s
+    timeout the uncaught exception aborted the run): `replay_problems` now replays such a game
+    `--parse-only` (the states and the final boards still checked against the engine's reader) and
+    makes a timeout a note, never a failure or an abort; `main` uses it. L3: `Search.verify` refuses
+    a budget outside 0 to T5D_NO_LIMIT (`ValueError`) instead of wrapping it into the C type (-1
+    read as exact, 2**64 as 0). L5: `python -m t5d.train.selfplay_pool --terminal-nodes`; t5d-play
+    and netplay records name a budget other than the default in a `TerminalNodes` header (the
+    default records unchanged, so default and exact records differ only by it); t5d-play's summary
+    and the pool's per-game line say an unscored end's question; the generator writes it as an
+    optional header key, `unsettled` ("verdict" or "choice"; `GameRecord.unsettled`), present in no
+    other record - format version 2 kept, as `seeded_start` was added (reading 7 of the table). L7:
+    the generator's `on_decision` is called for an action's decisions once the action is kept
+    (played to its submission, or resigned), its searches held open until then, and never for an
+    action an unsettled choice drops; the C++ loop and netplay keep a dropped action's decisions in
+    their counts and logs, as `GameRecord::decisions` now says (the audit lane's readers skip them).
+    Tests: the binding's range; a record naming its budget; an unsettled verdict's game replayed
+    parse-only, and a timeout a note; the generator's optional key; `on_decision` only for decisions
+    kept; the pool's `--terminal-nodes`; t5d-play's header and summary.
 
 402. **6f's settling scans: their wrapper is not on main** (§13.1 6f "verify the proof-export
     invariant under TT churn for Hunt and the settling scans (§11.3)"; §11.4 "df-pn at the

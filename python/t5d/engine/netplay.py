@@ -48,7 +48,8 @@ mirrors the engine's ``play_game`` (``src/selfplay.cpp``; ``t5d-play``) step for
   the record's Termination header say which question went unanswered.
 
 The record is the engine reader's long form (``engine/tools/play_record.cpp`` writes the
-same): headers Mode, Board, Result, Termination (I11's cap named a convention, not a rule),
+same): headers Mode, Board, Result, Termination (I11's cap named a convention, not a rule; an
+unscored end its question, H22), TerminalNodes where the game loop's budget is not the default,
 then the actions numbered by turn - each move as its source board, piece letter and
 squares, ``>``/``>>`` for jumps. ``python -m t5d.engine.netplay`` plays games from the
 command line and reports throughput (information, not a verdict: no figure here is a
@@ -620,6 +621,8 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
             ),
             ("TurnCap", f"turns {cfg.cap_turns}, boards {cfg.cap_boards}"),
         ]
+        if cfg.terminal_nodes != TERMINAL_NODES:  # H22: a non-default budget is named (the review of decision 13, L5)
+            extra.append(("TerminalNodes", str(cfg.terminal_nodes)))
         res.record = write_record(
             cfg.variant if cfg.start_fen is None else "custom",
             res.actions,
@@ -860,12 +863,14 @@ class Replay:
 _GATE_WARNING = "t5d-gate: warning: "
 
 
-def replay_with_gate(record: str, *, gate: Path | None = None, timeout: float = 600.0) -> Replay:
+def replay_with_gate(record: str, *, gate: Path | None = None, timeout: float = 600.0, parse_only: bool = False) -> Replay:
     """Replay ``record`` through the engine's gate adapter in full mode (a subprocess: the
     engine's own tool - legal replay, check status, legal actions and terminal at every
-    position), keeping the warnings its reader prints on standard error."""
+    position), keeping the warnings its reader prints on standard error. ``parse_only``: the
+    gate's ``--parse-only`` (the states, no verdict - ``Replay.last_terminal`` None)."""
     gate = gate_executable() if gate is None else gate
-    proc = subprocess.run([str(gate)], input=record.encode("utf-8"), capture_output=True, timeout=timeout, check=False)
+    args = [str(gate), "--parse-only"] if parse_only else [str(gate)]
+    proc = subprocess.run(args, input=record.encode("utf-8"), capture_output=True, timeout=timeout, check=False)
     if proc.returncode not in (0, 1):
         raise RuntimeError(f"t5d-gate exited {proc.returncode}: {proc.stderr.decode('utf-8', 'replace')}")
     warnings = tuple(
@@ -886,6 +891,21 @@ def replay_with_gate(record: str, *, gate: Path | None = None, timeout: float = 
         lines=lines,
         warnings=warnings,
     )
+
+
+def replay_problems(res: GameResult, *, gate: Path | None = None, timeout: float = 600.0) -> tuple[list[str], str]:
+    """``check_replay`` of the game against the gate's replay of its record, and a note. A game that
+    ended on a verdict the loop's budget left unsettled (H22: "unknown", ``unsettled`` "verdict") is
+    replayed ``parse_only``: full mode would ask the gate the very question the game gave up on,
+    with no budget - minutes at large positions; the states and the final boards are still checked
+    (the review of decision 13, X5). A replay past ``timeout`` is a note, never a failure or an
+    abort."""
+    parse_only = res.end == "unknown" and res.unsettled == "verdict"
+    try:
+        replay = replay_with_gate(res.record, gate=gate, timeout=timeout, parse_only=parse_only)
+    except subprocess.TimeoutExpired:
+        return [], f"not replayed: t5d-gate ran past {timeout:g} s"
+    return check_replay(res, replay), "parse-only: the final verdict is the one the game left unsettled" if parse_only else ""
 
 
 def gate_boards(game_snapshot) -> tuple[str, ...]:
@@ -1024,8 +1044,8 @@ def main(argv: list[str] | None = None) -> int:
                         res = play_game(evaluators if mode == "match" else evaluators[0], cfg, net_cfg=net_cfg)
                     s = res.summary()
                     if not args.no_replay:
-                        problems = check_replay(res, replay_with_gate(res.record))
-                        s["replay"] = "ok" if not problems else "; ".join(problems)
+                        problems, note = replay_problems(res)
+                        s["replay"] = ("ok" if not problems else "; ".join(problems)) + (f" ({note})" if note else "")
                         failed += bool(problems)
                     if args.out:
                         name = f"{variant.replace(' ', '').replace('-', '_')}_{split}_{mode}_{cfg.seed}.5dpgn"
@@ -1074,6 +1094,7 @@ __all__ = [
     "network_config",
     "pgn_move",
     "play_game",
+    "replay_problems",
     "replay_with_gate",
     "turn_start_verdict",
     "write_record",

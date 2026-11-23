@@ -255,3 +255,50 @@ def test_generator_drops_the_dropped_actions_resignation_event(monkeypatch):
     assert len(calls) == 2
     assert (rec.end, rec.n_actions, rec.decisions) == ("unknown", 0, [])
     assert rec.header["resign"]["events"] == []
+
+
+# --- the review of decision 13: L5 and L7 ----------------------------------------------------------------
+
+
+def test_an_unscored_record_says_which_question_in_an_optional_key(evaluator):
+    """L5: a record that ended unscored on a budget names its question in ``header["unsettled"]`` - an optional
+    key, absent from every other record, so the version stays 2 - as its Termination does."""
+    unknown = _generate(evaluator, replace(BASE, terminal_nodes=1)).record
+    scored = _generate(evaluator, BASE).record
+    assert (unknown.end, unknown.header["unsettled"], unknown.unsettled) == ("unknown", "verdict", "verdict")
+    assert "unsettled" not in scored.header and scored.unsettled == ""
+    assert unknown.header["record_version"] == scored.header["record_version"] == RECORD_VERSION
+
+
+def test_on_decision_hears_only_the_decisions_kept(evaluator, monkeypatch):
+    """L7: ``on_decision`` is called for each decision of an action once the action is kept - with its live
+    search - and never for the decisions of an action an unsettled choice drops."""
+    seen = []
+
+    def heard(search, record, position):
+        assert len(search.children()) > 0  # the live search, held open until the action was kept
+        seen.append(record.decision)
+
+    kept = _generate(evaluator, BASE, on_decision=heard).record
+    assert seen == [d.decision for d in kept.decisions] and seen
+    seen.clear()
+    _verify_real_for(1, monkeypatch)  # the first move real, the next choice unsettled, the witness withheld
+    cfg = replace(BASE, start_fen=THREE_BOARDS, cap_turns=0, cap_boards=0, search_overrides=UNVERIFIED_OVERRIDES)
+    dropped = _generate(evaluator, cfg, on_decision=heard).record
+    assert (dropped.end, dropped.decisions, seen) == ("unknown", [], [])
+
+
+def test_the_pool_takes_terminal_nodes(capsys):
+    """L5: ``python -m t5d.train.selfplay_pool --terminal-nodes`` reaches the games, and each game's line says
+    an unscored end's question."""
+    import json
+
+    from t5d.train.selfplay_pool import main
+
+    argv = ["--games", "1", "--concurrent", "1", "--net", "small", "--playouts", "6", "--cap-turns", "2", "--cap-boards", "20"]
+    argv += ["--threads", str(torch.get_num_threads()), "--no-hunt", "--no-settling", "--terminal-nodes", "1"]
+    assert main(argv) == 0
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
+    game = next(line for line in lines if "index" in line)
+    assert (game["end"], game["unsettled"], game["actions"]) == ("unknown", "verdict", 0)
+    assert lines[-1]["conditions"]["generator_config"]["terminal_nodes"] == 1
