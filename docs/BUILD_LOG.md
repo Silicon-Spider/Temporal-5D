@@ -86,6 +86,16 @@ where the spec is silent; each has its spec issue below.
 | 13 | Match play's interim reading: until E11's clock, the engine's own turn takes the same budgeted verdict as self-play and ends unknown where it cannot settle (the ruling: "the engine's own turn needs no verdict") | 413 (f), 414 |
 | 14 | The verdict's witness (X2): a step the root had not instantiated is played as a child of its own, unvisited and known legal, recorded under the existing "verified_fallback" code; netplay's match play then drops its carried search | 414 |
 | 15 | An optional `unsettled` header key in an unscored generator record, without a record-version bump (as row 7's keys) | 414 |
+| 16 | Register E12's "after I21's ranking" gates the experiment, not the code: the engine arm is built, off | 415 (a) |
+| 17 | Sequential halving's rounding (Karnin et al.): ceil(log2 m) phases, max(1, floor(n / (phases x survivors))) visits each a phase, the visits left over and any past n to the last two | 415 (b) |
+| 18 | The root's logit is ln of the search's root prior; a root policy temperature other than 1 is refused | 415 (c) |
+| 19 | n is a parameter the driver sets - its playout cap less one; 0 refused | 415 (d) |
+| 20 | Under batching a phase waits for its pending visits: the batch ends short, at most once a phase | 415 (e) |
+| 21 | A candidate lost in the first phase is replaced by the next of the sample's order; in later phases only dropped | 415 (f) |
+| 22 | Re-roots refused under the arm; MCGS and the tree form allowed | 415 (g) |
+| 23 | A timed decision is refused at `TimeManager::begin` (every timed decision's start, Python's timed loop included), not in `validate` or `run_timed` alone; the C++ game loop refuses the arm | 415 (h), (i) |
+| 24 | The Gumbel stream's salt is "GUMBEL12" and the variate counter-based, so a record derives an edge's g again and stores none | 415 (k) |
+| 25 | Root steering (the asset map, Hunt's suggestions) is refused under the arm, not dropped; `asset_map`'s default stays on | 415 (l) |
 
 **For the user** (beside the review's own list, next section; four of these were answered the same
 day - "The user's answers", below):
@@ -307,7 +317,8 @@ build. *(2026-11-23: they carry them now.)*
   section 15.2's tree-form row under the graph (decision 10); a node budget for the terminal test
   in Python's play loops and the training generator (decision 13 - *built on `lane/engine`, 2026-11-24: issue 413*); on/off switches for the asset
   map and Hunt's suggested lines for 6e's match tests; Gumbel root search behind a flag (E10),
-  after I21's ranking; MLH steering in Lc0's form once the moves-left head is trained.
+  after I21's ranking (register E12 - *part 1, the engine arm, being built on `lane/engine`,
+  2026-11-24: issue 415; the generator's arm designed and waiting, issue 416*); MLH steering in Lc0's form once the moves-left head is trained.
 - **Gate lane.** Nothing new. H48 waits for the user.
 - **The main loop.** Conclude the `lane/fix535` merge; merge this review's edits into each lane
   with main; when the engine, search and net lanes merge, their proposed edits 300-305, 331-341
@@ -771,8 +782,9 @@ pushed after every commit, taking main by merge, never rebase (re-check with `gi
   `t5d_search_verify_budgeted`; edits 306-308) and its review fixed (issue 414: the verdict's
   witness played where no child is known legal, `t5d_game_verdict`; the missing tests; edits
   309-311) - merged 2026-11-24 (main b18a7b3). MT-02's records into the corpus wait for the user
-  (issue 405). Next: register E12, the Gumbel root search (the hand-over's plan), after
-  `lane/search`'s merge.
+  (issue 405). Since then: main 5e77028 (the search lane) merged; register E12, the Gumbel root
+  search, part 1 - the engine arm, off (issue 415; edits 312-315; the generator's arm designed
+  and waiting on two questions, issue 416) - in progress: the pure parts built.
 - `lane/search` (from main 2b752ba, 2026-10-23) - E10 redone and merged (Hunt under 100
   boards, the settling scans under 50, the asset map - off in self-play until I2's steered
   visits are validated, issue 450 - Guard's hook built and off, H44's audit-lane tooling;
@@ -2253,7 +2265,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | E2, E3 | built behind flags, tested | Off; awaiting 6m and 6t. They read a node's uncertainty signal: the categorical's variance by default, the error head's output under 6m's switch (`uncertainty_source`, engine ABI round 2a; issue 149); their constants placeholders twice over (issues 81, 149) |
 | E8 | built behind its flag (off; `lane/search`, 2026-11-09; placeholders) | Difficulty-weighted allocation (`TimeParams::difficulty_weighting`, `t5d/timeman.hpp`): the root's effort distribution (D4's 16 bins, the top one censored) through the time context; the plan E7's soft bound x 2^(the bin at the 0.8 quantile - this game's running mean bin, seeded at 256 visits), clamped to [0.25, 4], to a floor of 32 evaluations and to E7's hard bound; won't-resolve (censored mass >= 0.5) plans for the hard bound (reading A) or E7's plan (B: `CapAtPlan`), and takes no overlap-with-churn extension; the guards code paths (the ex-post extensions still apply; the floor; the hard bound and the ladder's budgets untouched - I4). Off = E7 bit for bit (tested). The quantile is heads.effort_quantile's (tested across languages). Inert without an effort distribution - the built-in evaluators and netplay give none (issue 473). Issues 471-475, edits 339-341 |
 | E6 | not built (rule) | Refused |
-| E12 | not started; handed to the main loop's lanes (2026-11-23) | *Register E10 until edit 412 is applied - renamed by ruling, 2026-11-23 (issue 730).* Gumbel root search (section 8.4; 2026-11-15 review) - the engine arm after `lane/engine` and `lane/search` merge (a planner's design: the logic in new files `gumbel.hpp`/`gumbel.cpp`, about ten hooks in `mcts.cpp`, an appended params field, off; refused under the flat form, with root noise or steering, and on re-roots); its experiment after I21's ranking. The generator's arm waits for a ruling on what the root search value means under sequential halving. Issue 730: the name collides with the build's component E10 |
+| E12 | part 1 in progress (2026-11-24): the pure parts built | *Register E10 until edit 412 is applied - renamed by ruling, 2026-11-23 (issue 730).* Gumbel root search (section 8.4; 2026-11-15 review). Part 1, the engine arm behind `gumbel_root` (off), its C API and binding: issue 415, its readings rows 16-25 of the readings table, edits 312-315. Part 2, the generator's arm: designed, not built - its target is I21's, and the root value under halving and the record wait for the user (issue 416). Its experiment (6g) after I21's ranking |
 | F1, F2 | built, tested | 22,965,426 parameters (F1 after F5, B15, M20, A6, D3 and D4: 21,338,634 after F5 - 20,736 fewer than N5's 21,359,370, gain-only norms, no Q/K/V biases, spec issue 203 - plus B15's 1,623,168, spec issue 210, plus M20's 3,337: the policy's promotion offset, 3,341, less the learned register coordinates, 4 - plus A6's 8,768: the turn-state counts' MLP, spec issue 230 - less D3's 12,079: three short-term outputs, 771, and the error head, 257, on the value MLP's shared layer, and N1's 51-bin short value head, 13,107, gone, issue 231 - plus D4's 3,598: the soft policy, 69,390, and N1's always-built reply head, 65,792, now a prototype off - 69,133 with its offset when on, issue 232); the L24-ff12 preset, 46,894,834 (F2: 44,460,082 and B15's 2,434,752 over 24 layers). Unchanged by F6's Mish in the heads, by B11's fold (its flag is off; with it on, 40 scalars where there were 48) and by B16 (its 304 are in a network of the cached configuration only: 22,965,730 with `attn_scope = "block_causal"`) and B17 (off; with it on, 6,115,328 more - 29,080,754, or 23,729,842 with the vectors shared by the heads; spec issue 218) |
 | F5 | built, tested | Network: RMSNorm-style norms (a learned gain, no centring, no bias; FP32) everywhere in the trunk, no Q/K/V biases, the attention-output and FFN biases kept (spec issue 200), pre-norm. 6y's arm - post-norm with DeepNet's initialisation, `norm_placement="post"` - through the dense trunk and the cached path, its unstated details placeholders (issue 201); smolgen has no norm to keep (issue 202) |
 | F6 | built, tested | Network: Mish in the trunk FFN (`ffn_activation="mish"`) and in every head's hidden layers - the value head's MLP, the only head with one (CHECKPOINT 8's ruling on issue 204, `lane/net` N-F6heads: no switch - `head_activation` and its GELU removed); 6y's arm, squared ReLU (`"squared_relu"`), in the trunk only, through the dense trunk and the cached path - tested: no head follows it. Outside F6's words, kept as built: the embedding's Δt MLP (GELU) and B12's smolgen (SiLU) - spec issue 221 |
@@ -6839,6 +6851,115 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     DISABLED). No search path changed (`mcts.cpp`, the scanner and the prover untouched since
     193b517): no Lazy SMP run owed; no truth source changed: no nightly owed.
 
+415. **Register E12 (Gumbel root search), part 1 built: the engine arm behind its flag, its C API
+    and the binding** (register E12 - E10 until edit 412 is applied, issue 730 - with E1, I19, I21,
+    I5, C14, part K; §8.4 as the 2026-11-15 review edited it, §8.6, §12.2, §16). Built on
+    `lane/engine` from the handed-over plan (gumbel), on main with the search lane merged, every
+    "E10" of the plan read as register E12. Written from Danihelka et al. (ICLR 2022), Karnin,
+    Koren and Somekh (ICML 2013) and the Gumbel-top-k trick as the papers describe them; no
+    implementation opened (mctx, Lc0, KataGo), no code from any engine (H29).
+    **What is built.** `SearchParams::gumbel_root` (off), `gumbel_m` (16), `gumbel_simulations`
+    (0: the driver's), `gumbel_c_visit` (50), `gumbel_c_scale` (1); the pure parts in
+    `t5d/gumbel.hpp` and `src/gumbel.cpp` (the variate, the sample, the schedule, sigma, v_mix and
+    the halving's state, `gumbel::Root`); about ten hooks in `mcts.cpp` (validate's refusals, the
+    draw in `set_priors`' root branch before its commit point and adopted with it, the root's
+    children the sample in `widen`, the root's choice the halving's in `select_child`, a wait that
+    ends the batch, the re-roots, `choose` and `choose_by_visits` refused, `choose_gumbel()` and
+    `gumbel_view()`); the refusals at `TimeManager::begin` and `play_game`; the C ABI's five fields
+    in front of `expand` and `t5d_search_choose_gumbel` appended (the append-only ABI); `capi.py`'s
+    mirror, `Search.choose_gumbel()`. Off, no code path, allocation or digest changes (tested
+    under all three splits). The README's section "Gumbel root search" holds every form.
+    **Readings where the spec is silent** - each the planner's recommended answer, the user's to
+    confirm (the readings table, rows 16-25):
+    (a) "After I21's ranking" (register E12, §16) gates the experiment (6g), not the code: the
+    arm is built off, as the brief builds prototype rows behind flags.
+    (b) The schedule is sequential halving as Karnin et al. state it: ceil(log2 m) phases, each
+    survivor `max(1, floor(n / (phases x survivors)))` more visits a phase, the better ceil(half)
+    kept by g + ln prior + sigma(completed q) (ties to the lower edge), the visits the rounding
+    leaves over - and any playouts past n - spent on the last two equally. A placeholder, as m.
+    (c) The root's logit is ln of the search's root prior - after the policy temperature, the
+    unknown-move scale and the submit share - the distribution the search otherwise explores by;
+    `root_policy_temperature` other than 1 is refused (the draw replaces it, I19). With the
+    defaults it is the network's raw softmax, which I21's target reads (§16).
+    (d) n comes from the driver: `gumbel_simulations`, its playout cap less one (the root's own
+    evaluation is a playout; the step API gives the search no budget); 0 refused. Fewer playouts
+    end the search mid-schedule, the choice among the current survivors.
+    (e) Batches wait: when every survivor's visits for the phase are out and some not back, the
+    batch ends short (`Selected::Wait`) - the halving needs those values, and waiting keeps the
+    allocation exactly the schedule's, batched or synchronous. At most once a phase. (The plan
+    returned a collision there; a wait of its own ends the batch at once instead of selecting up
+    to `max_leaves` times more for nothing, and counts no collision.)
+    (f) A candidate found illegal at its first visit, or a dead end, gives its place in the first
+    phase to the next open edge of the order - still an exact sample without replacement - and in
+    a later phase is only dropped; with every survivor lost, the open edges already sampled are
+    searched.
+    (g) Re-roots are refused under the arm (C14: self-play's searches are fresh per move; carried
+    visits contradict equal allocation). MCGS and the tree form are allowed - the root's statistics
+    are its edges', and decision 10's graph (evaluated nodes only) changes nothing at the root.
+    (h) A timed decision is refused, at `TimeManager::begin` - the coordinator asked whether
+    `validate` or `run_timed` should refuse: neither alone. `validate` cannot (the parameters do
+    not know the clock), and `run_timed` alone would leave Python's timed loop, which begins its
+    decisions through `t5d_timeman_begin` and never calls `run_timed`, running the arm under a
+    clock. `begin(search, ...)` is where every timed decision starts, `run_timed`'s included, and
+    the refusal leaves the manager as it was. Why refuse: timed decisions are match play's (PUCT
+    and LCB, E5), and a clock would cut the schedule at an arbitrary phase.
+    (i) The C++ game loop (`play_game`, `t5d-play`) refuses the arm up front: it chooses by visits
+    or by E5/E9 and carries its tree, both refused under the arm; the generator's arm (part 2,
+    issue 416) is the arm's driver.
+    (j) `choose_gumbel()` refuses a root without a draw (unexpanded, or no open edge), a terminal
+    root - S5's re-check of a deadline-cut turn start can make the root terminal after its draw -
+    a batch waiting, and a root with no candidate left (the driver searches again).
+    (k) The salt is "GUMBEL12" (`0x47554D42454C3132`; the plan's "GUMBEL10" renamed with the
+    register row), and the variate counter-based: an edge's g is a function of
+    (search seed, root key, its index in the expansion's order) only - a record can derive it
+    again, so the record needs no g column (part 2's question (b)).
+    (l) `asset_map` and `hunt_suggest` (root steering) are refused, not silently dropped -
+    `asset_map` is on by default, so a Gumbel caller turns it off and the message says so; Hunt
+    and the settling scans stay on in their ranges (their proofs withheld, H41), their PV-change
+    trigger reading a most visited child that moves on halving's rhythm.
+    **What the plan predates.** Decision 13's node-budgeted terminal test, unscored ending and
+    witness step are the game loops' - the C++ loop refuses the arm (i), and the generator's arm
+    takes them over in part 2 (issue 416). E11's clock: (h). Decision 10's tree form under graph
+    search: (g). Issue 535's discipline: the draw allocates only before `set_priors`' commit point
+    and is adopted by a nothrow move; the halving's buffers are reserved at the draw, so selection
+    allocates nothing; a fault test fails every allocation of the root's expansion in turn. S5's
+    re-check: (j). The ABI: fields in front of `expand`, the layout table and the defaults, the
+    function appended and mirrored in `_SIGNATURES` and `CSearchParams` - a library built before
+    is refused at load.
+    **Built so far**: the pure parts (`gumbel.hpp`, `gumbel.cpp`; nine tests in
+    `tests/test_gumbel.cpp`); the search's arm, the C API and the binding follow.
+
+416. **Register E12 (Gumbel root search), part 2 - the training generator's arm: designed, not built;
+    two questions for the user** (register E12, I21, D3, D4, I13, I15, I18; §8.4, §12.2, §12.8;
+    decision 13). Under the arm the policy target must be I21's completed-Q target, not the visit
+    distribution - a halving search's visits are the schedule's, not a policy - and the target
+    builder does not write I21's yet (the net lane). **The design, recorded:** `GeneratorConfig.
+    gumbel_root` (off); on, its validate refuses split "flat", `kl.enabled` (I20's stop reads a
+    visit distribution) and `asset_map`; `search_parameters` passes `gumbel_root=1`,
+    `gumbel_simulations=max(1, cap - 1)`, `root_noise=0` and `root_policy_temperature=1.0` to the
+    full and the cheap searches alike (§8.4: every self-play search takes the Gumbel root); the
+    choice is `Search.choose_gumbel()`, made known legal as `_choose` does now - illegal: removed
+    and chosen again, a rerun where no child is left; still unknown within decision 13's budget:
+    the most visited child known legal, else the verdict's witness step (issue 414), recorded
+    "verified_fallback"; each decision records `root_noise` False, `root_policy_temperature` 1.0,
+    `move_temperature` 0.0 and the choice "gumbel"; the target builder builds no pruned-visit
+    policy target from a Gumbel decision, the completed-Q target in its place (with I21's). Until
+    it is built, `GeneratorConfig.search_overrides` can reach the engine's arm; the engine refuses
+    the default full search (root noise on) at construction and a move temperature at the choice.
+    **For the user:**
+    (a) What is "the root search value" under sequential halving? The backed-up root Q averages
+    equal visits to sampled moves, and D3's categorical and short-term targets, I13's
+    deblundering, I18's resignation and D4's effort label all read root statistics.
+    Recommended: the improved policy's value, the sum over the candidates of pi'(a) x completed
+    q(a), computed target-side from the record as the completed-Q target is; resignation reads the
+    same figure; the effort label masked under the arm until it is defined.
+    (b) The record format: a Gumbel decision's choice is neither "sampled" nor "most_visited",
+    and the record holds no g. Recommended: append "gumbel" to `CHOICE_CODES` without a version
+    bump (no existing value changes meaning) and store no g - it is a function of `search_seed`,
+    `root_key` and the candidate index by the formula pinned in `gumbel.hpp` (issue 415 (k)); if a
+    format bump comes first for another reason, a per-child g column goes in the same bump.
+    Proposed edit 315 records both in register part K.
+
 402. **6f's settling scans: their wrapper is not on main** (§13.1 6f "verify the proof-export
     invariant under TT churn for Hunt and the settling scans (§11.3)"; §11.4 "df-pn at the
     root and on PV changes | Under 50 boards"; register H1 v3, H19). The settling scans are
@@ -10577,6 +10698,49 @@ repository's copies, which upstream has still to take:
     unscored (§11.0) keeps its search-derived targets and masks its outcome-derived ones." Proposed
     - "... masks its outcome-derived ones; a choice that ends it unscored leaves out the action
     under way, which has no record (§11.0)." Why: as edit 310.
+312. **§16 (register E12 as built, part 1)**: now - under "Ruled in the 2026-11-15 review, and
+    not yet built": "**E10**: Gumbel root search as an arm of the search (§8.4), after I21's
+    ranking." (E12 once edit 412 is applied.) Proposed - there: "**E12**: the training
+    generator's Gumbel arm - its policy target I21's, the root value under halving and the record
+    to rule (BUILD_LOG issue 416); the arm's ablation (6g) after I21's ranking." And under
+    "Search", after E8: "**E12, Gumbel root search** (a prototype, off: `gumbel_root`). The
+    variate g = -ln(-ln u), u = (floor(x / 2^12) + 0.5) x 2^-52, x SplitMix64's finaliser of the
+    stream plus 0x9E3779B97F4A7C15 x (the edge's index in the expansion's order + 1), the stream
+    the finaliser of the search seed, the root key's and the salt "GUMBEL12": an edge's g is the
+    record's to derive again. The root's logit is ln of its prior; the sample the order's first
+    m_eff = min(m, n, open edges), m 16. n, the schedule's visits, is the driver's playout cap
+    less one. Sequential halving: ceil(log2 m) phases, each survivor max(1, floor(n / (phases x
+    survivors))) more visits, the better ceil(half) kept by g + ln prior + σ(completed q), the
+    visits left over - and any playouts past n - to the last two. σ and v_mix are I21's: c_visit
+    50, c_scale 1, q mapped onto [0, 1]; an unvisited candidate's completed q is v_mix. A candidate
+    lost in the first phase gives its place to the next of the order; later ones are only dropped.
+    A batch waits for its phase's pending visits. Refused with the flat form, root noise, a root
+    policy temperature, the asset map's and Hunt's root steering, the proof channel, re-roots,
+    match play's choice, a move temperature, a timed decision and the C++ game loop. MCGS and the
+    tree form allowed." Why: issue 415.
+313. **Register E12's row (E10 until edit 412)**: now - status "Prototype", the row's text as the
+    2026-11-15 review wrote it. Proposed - append: "As built (part 1): the engine arm behind
+    `gumbel_root`, off; the generator's arm not built (its target I21's; the root value under
+    halving and the record to rule) - §16." Why: issue 415; the register should not read as
+    unbuilt.
+314. **§8.4's Gumbel paragraph (the readings the spec is silent on)**: now - "... spend the
+    simulations on them by sequential halving, each phase visiting the survivors equally and
+    dropping the worse half by g + logit + σ(q̂); play the last survivor." and "... a candidate of
+    unknown legality is verified when it is first visited, as under PUCT (§8.1)." Proposed - add
+    after the second: "One found illegal (or a dead end) in the first phase gives its place to the
+    next move of the sample's order - still a sample without replacement - and later is only
+    dropped. A phase's scores wait for its visits' values: under batching, selection waits rather
+    than spending visits the schedule has not given. The logit is that of the root's prior; the
+    root policy temperature is replaced, not compounded. The schedule's rounding, the simulation
+    count's source and the forms are §16's placeholders. A Gumbel search is one decision's: no
+    tree is carried (C14), and it takes no clock (match play's, §8.6)." Why: issue 415 (b)-(h);
+    the spec is silent on each, and each changes what the arm allocates.
+315. **Register part K (the generator's arm)**: now - one row: "Gumbel root sampling under the
+    flat form ... | 6x's verdict on D2 | 8.4". Proposed - add two rows: "What the root search value
+    is under sequential halving - D3's targets, I13, I18 and D4's effort label read it (E12) | the
+    user's ruling | 8.4, 12.2, 12.8" and "How a Gumbel decision is recorded - its choice code, and
+    whether g is stored or derived (E12) | the user's ruling | 12.8". Why: issue 416; both block
+    the generator's arm.
 
 <!-- A new list, so that the numbers from 137 render as written. -->
 

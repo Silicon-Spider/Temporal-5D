@@ -10,6 +10,28 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - Register E12 (Gumbel root search), part 1: the pure parts
+
+Register E12's sample and halving as pure functions, before any search uses them (build-log
+issue 415): `engine/include/t5d/gumbel.hpp` and `engine/src/gumbel.cpp` - the Gumbel variate
+(52-bit, counter-based: an edge's g a function of the stream and its index only), the stream
+from the search seed and the root key (salt "GUMBEL12"), the Gumbel-top-k order, sequential
+halving's schedule (Karnin et al.: ceil(log2 m) phases, the leftovers to the last two), sigma
+and v_mix in I21's form (q mapped onto [0, 1]; the target side's numbers), and `gumbel::Root`,
+the halving's state - which edge to visit next, when to wait for pending visits, the first
+phase's refill, the choice - allocating nothing after its draw. Written from Danihelka et al.
+(ICLR 2022), Karnin, Koren and Somekh (ICML 2013) and the Gumbel-top-k trick; no
+implementation opened (H29). `engine/tests/test_gumbel.cpp`: nine tests - the variate's ends
+and moments, the sample's laws and its softmax frequencies, the schedule's hand counts and laws,
+sigma and v_mix on the numbers `train/completed_q.py` pins, the halving driven as a bandit
+(every survivor at its target at each halving, the kept half the test's own), the wait, the
+refill and the drop, the choice better than the prior and, at c_scale 0, a sample of it. Not a
+truth source. The build log carries the item's readings (issue 415, rows 16-25 of the readings
+table), the generator's arm's design and two questions (issue 416), and edits 312-315.
+
+Spec: §8.4, §16, register E12 (E10 until edit 412), I21, part K - proposed edits 312-315; the
+spec's numbers unchanged (m 16, c_visit 50, c_scale 1, the paper's placeholders).
+
 ### 2026-11-24 - Build log: the current state at the search lane's merge
 
 `docs/BUILD_LOG.md`:
