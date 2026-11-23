@@ -4603,9 +4603,14 @@ batches - stops, goes on or extends the soft bound, `end` records the root's val
 next decision's falling-eval signal. `run_timed(search, evaluator, tm, context, clock)`
 drives a `Search` with them, in slices of `batch_size` playouts (`Search::run`'s own loop:
 a step-API driver that runs the same slices builds the same tree). The C API gives the
-same calls (`t5d_timeman_*`, `t5d_search_run_timed`, `t5d_search_set_deadline`) and Python
-mirrors them (`search.TimeManager`, `evaluator.run_timed_search` - whose `clock`, like
-`run_timed`'s `Clock`, puts a driver's clock in place of the wall clock).
+same calls (`t5d_timeman_*`, `t5d_search_run_timed`, `t5d_search_set_deadline`, and - the E11
+review's S2 - `t5d_search_deadline` and `t5d_search_set_deadline_at`, which read the persistent
+deadline back as a steady-clock time point and set that same point again) and Python mirrors
+them (`search.TimeManager`, `Search.deadline` and `set_deadline_at`, `evaluator.run_timed_search`
+- whose `clock`, like `run_timed`'s `Clock`, puts a driver's clock in place of the wall clock).
+`run_timed_search` is the engine's `run_timed` in Python: the same forced-slice condition (no
+root child visited), the caller's deadline restored exactly, and `tm.end` however the run returns
+(S2); `run_timed` ends the decision after a throw too.
 
 **Allocation: the moves-left integral (§8.6).** An evaluation at N boards costs
 `s(N) = scale x (f + (1 - f) x shape(N) / shape(100))`: `shape` is the dense FLOP model,
@@ -4655,7 +4660,8 @@ quiescence (issue 467). One deadline mechanism serves the time manager and issue
 `Limits::seconds` (the merge, the review's M2): every conversion through `deadline_after` (0 and
 1e9 s or more none, NaN and negatives refused); `Search::set_deadline` persistent, `run()` giving
 its batches the earlier of it and its own seconds and restoring it on return; `run_timed`
-restoring the caller's deadline and taking a game's `max_seconds` as its slices' seconds. Match
+restoring the caller's deadline (Python's `run_timed_search` too, exactly - S2) and taking a
+game's `max_seconds` as its slices' seconds. Match
 play's steps after the search sit inside the bound (§8.6's post-search scan "inside the hard
 bound"; the review's H1): the chosen move's exact verification gets what the bound leaves, and
 where it is cut or the move illegal the most visited child known legal is played. Two

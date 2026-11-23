@@ -2249,6 +2249,37 @@ TEST(capi_search_time_management_e8_through_the_c_api) {
   CHECK(offsetof(t5d_time_params, difficulty_weighting) > offsetof(t5d_time_params, extend_instability));
 }
 
+TEST(capi_search_the_deadline_reads_back_and_restores_exactly) {
+  // The E11 review's S2: t5d_search_deadline reports the persistent deadline -
+  // its steady-clock time point (T5D_NO_DEADLINE: none) and the seconds left
+  // (+inf: none; 0 or less once passed) - and t5d_search_set_deadline_at sets
+  // that same time point back, not one recomputed from now.
+  const Game g = variant_game("Standard");
+  const SearchHandle s = new_search(g.get(), quick_params());
+  int64_t at = 0;
+  double left = 0;
+  REQUIRE_EQ(t5d_search_deadline(s.get(), &at, &left, nullptr), T5D_OK);
+  CHECK_EQ(at, int64_t{T5D_NO_DEADLINE});
+  CHECK(std::isinf(left) && left > 0);
+  REQUIRE_EQ(t5d_search_set_deadline(s.get(), 100.0, nullptr), T5D_OK);
+  int64_t held = 0;
+  REQUIRE_EQ(t5d_search_deadline(s.get(), &held, &left, nullptr), T5D_OK);
+  CHECK(held != int64_t{T5D_NO_DEADLINE});
+  CHECK(left > 99.0 && left <= 100.0);
+  REQUIRE_EQ(t5d_search_set_deadline_at(s.get(), held - int64_t{200'000'000'000}, nullptr), T5D_OK);  // 100 s ago
+  REQUIRE_EQ(t5d_search_deadline(s.get(), nullptr, &left, nullptr), T5D_OK);
+  CHECK(left < -99.0 && left > -101.0);
+  REQUIRE_EQ(t5d_search_set_deadline_at(s.get(), held, nullptr), T5D_OK);
+  REQUIRE_EQ(t5d_search_deadline(s.get(), &at, nullptr, nullptr), T5D_OK);
+  CHECK_EQ(at, held);  // the same time point
+  REQUIRE_EQ(t5d_search_set_deadline_at(s.get(), T5D_NO_DEADLINE, nullptr), T5D_OK);
+  REQUIRE_EQ(t5d_search_deadline(s.get(), &at, &left, nullptr), T5D_OK);
+  CHECK_EQ(at, int64_t{T5D_NO_DEADLINE});
+  CHECK(std::isinf(left));
+  CHECK_EQ(t5d_search_deadline(nullptr, &at, &left, nullptr), T5D_ERR_ARGUMENT);
+  CHECK_EQ(t5d_search_set_deadline_at(nullptr, held, nullptr), T5D_ERR_ARGUMENT);
+}
+
 TEST(capi_search_a_cleared_deadline_is_cleared) {
   // M3's test 3 (the C API's set_deadline): in check, with exact legality, a
   // deadline already passed leaves edges unknown (the premise); one set and

@@ -984,6 +984,36 @@ t5d_status t5d_search_set_deadline(t5d_search* search, double seconds, char** er
   });
 }
 
+t5d_status t5d_search_deadline(const t5d_search* search, int64_t* steady_ns, double* seconds_left, char** error) {
+  return guarded(error, [&]() -> t5d_status {
+    if (search == nullptr) throw std::invalid_argument("search is NULL");
+    const std::optional<std::chrono::steady_clock::time_point> d = search->search.deadline();
+    if (steady_ns != nullptr) {
+      *steady_ns = d ? static_cast<int64_t>(
+                           std::chrono::duration_cast<std::chrono::nanoseconds>(d->time_since_epoch()).count())
+                     : T5D_NO_DEADLINE;
+    }
+    if (seconds_left != nullptr) {
+      *seconds_left = d ? std::chrono::duration<double>(*d - std::chrono::steady_clock::now()).count()
+                        : std::numeric_limits<double>::infinity();
+    }
+    return T5D_OK;
+  });
+}
+
+t5d_status t5d_search_set_deadline_at(t5d_search* search, int64_t steady_ns, char** error) {
+  return guarded(error, [&]() -> t5d_status {
+    if (search == nullptr) throw std::invalid_argument("search is NULL");
+    if (steady_ns == T5D_NO_DEADLINE) {
+      search->search.set_deadline(std::nullopt);
+    } else {
+      search->search.set_deadline(std::chrono::steady_clock::time_point(
+          std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::nanoseconds(steady_ns))));
+    }
+    return T5D_OK;
+  });
+}
+
 t5d_status t5d_search_run_timed(t5d_search* search, int32_t evaluator, uint64_t evaluator_seed, t5d_timeman* tm,
                                 const t5d_time_context* context, int32_t wall_clock, t5d_time_plan* plan,
                                 t5d_time_verdict* verdict, char** error) {

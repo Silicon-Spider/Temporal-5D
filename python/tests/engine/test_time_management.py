@@ -28,6 +28,7 @@ from t5d.engine.capi import (
     T5D_LEGALITY_ILLEGAL,
     T5D_LEGALITY_LEGAL,
     T5D_LEGALITY_UNKNOWN,
+    T5D_NO_DEADLINE,
     T5D_SPLIT_BOARD_MOVE,
     T5D_SPLIT_FLAT,
     T5D_STOP_EVALUATIONS,
@@ -550,35 +551,130 @@ def test_e8_off_leaves_the_plan_alone():
             a.begin(s, remaining=30.0, effort=[1.0] * 3)
 
 
-def test_run_timed_search_sets_the_bound_lifts_it_for_the_forced_slice_and_clears_it(monkeypatch):
-    """The review's M3 (test 4) and L3, with M1's forced slice: on the wall clock the hard bound is
-    the search's deadline - a 0 s bound (a clock at the overhead) a deadline already passed (1e-9 s),
-    never 0, which means none - lifted for a slice before any root child has a visit and set again
-    after it, and cleared when the run ends."""
-    calls: list[float] = []
-    real = Search.set_deadline
+def test_run_timed_search_sets_the_bound_lifts_it_for_the_forced_slice_and_restores_the_callers(monkeypatch):
+    """The review's M3 (test 4) and L3, with M1's forced slice and S2: on the wall clock the hard
+    bound is the search's deadline - a 0 s bound (a clock at the overhead) a deadline already
+    passed (1e-9 s), never 0, which means none - the caller's deadline (``set_deadline_at``) for a
+    slice before any root child has a visit and the bound's same time point again after it (what
+    is left of it, not the whole bound again - the mutation pass's Y03), and the caller's restored,
+    exactly, when the run ends."""
+    calls: list[tuple[str, float]] = []
+    real_set, real_at = Search.set_deadline, Search.set_deadline_at
 
-    def spy(self, seconds):
-        calls.append(float(seconds))
-        real(self, seconds)
+    def spy_set(self, seconds):
+        calls.append(("set", float(seconds)))
+        real_set(self, seconds)
 
-    monkeypatch.setattr(Search, "set_deadline", spy)
+    def spy_at(self, steady_ns):
+        calls.append(("at", int(steady_ns)))
+        real_at(self, steady_ns)
+
+    monkeypatch.setattr(Search, "set_deadline", spy_set)
+    monkeypatch.setattr(Search, "set_deadline_at", spy_at)
     quiet = search_params(hunt=0, settling=0)
     with Game.variant("Standard") as g, Search(g, params=quiet) as s, TimeManager() as tm:
         s.run(T5D_EVALUATOR_UNIFORM, 32)  # visited: no forced slice
         run = run_timed_search(s, UniformEvaluator(), tm, remaining=3.0)
-        assert calls == [run.plan.hard_seconds, 0.0]
+        assert calls == [("set", run.plan.hard_seconds), ("at", T5D_NO_DEADLINE)]
+        assert s.deadline()[0] == T5D_NO_DEADLINE
     calls.clear()
     with Game.variant("Standard") as g, Search(g, params=quiet) as s, TimeManager() as tm:
         run = run_timed_search(s, UniformEvaluator(), tm, remaining=3.0)  # a fresh root
-        assert calls[0] == run.plan.hard_seconds and calls[1] == 0.0  # lifted for the forced slice
-        assert len(calls) >= 4 and calls[2] > 0.0 and calls[-1] == 0.0  # set again, then cleared
+        assert calls[0] == ("set", run.plan.hard_seconds)
+        assert calls[1] == ("at", T5D_NO_DEADLINE)  # the forced slice: the caller's (none)
+        bound = calls[2]
+        assert bound[0] == "at" and bound[1] != T5D_NO_DEADLINE  # the bound's time point again
+        assert calls[-1] == ("at", T5D_NO_DEADLINE)  # restored
     calls.clear()
     with Game.variant("Standard") as g, Search(g, params=quiet) as s, TimeManager() as tm:
         s.run(T5D_EVALUATOR_UNIFORM, 32)
         run = run_timed_search(s, UniformEvaluator(), tm, remaining=time_params().overhead_seconds)
         assert run.plan.hard_seconds == 0.0
-        assert calls == [1e-9, 0.0]
+        assert calls == [("set", 1e-9), ("at", T5D_NO_DEADLINE)]
+    calls.clear()
+    with Game.variant("Standard") as g, Search(g, params=quiet) as s, TimeManager() as tm:
+        real_set(s, 100.0)  # the caller's own deadline, later than the bound
+        held, _ = s.deadline()
+        s.run(T5D_EVALUATOR_UNIFORM, 32)
+        run_timed_search(s, UniformEvaluator(), tm, remaining=3.0)
+        assert s.deadline()[0] == held  # restored, the same time point (S2: never cleared)
+        real_set(s, 1e-3)  # one earlier than the bound: kept, never replaced
+        held, _ = s.deadline()
+        calls.clear()
+        run_timed_search(s, UniformEvaluator(), tm, remaining=600.0)
+        assert not [c for c in calls if c[0] == "set"] and s.deadline()[0] == held
+
+
+def test_run_timed_search_ends_the_decision_when_a_slice_raises(monkeypatch):
+    """S2: ``tm.end`` however the run returns - an evaluator that raises still ends the decision,
+    and the caller's deadline is restored."""
+    ended: list[bool] = []
+    real_end = TimeManager.end
+
+    def spy_end(self, search):
+        ended.append(True)
+        real_end(self, search)
+
+    monkeypatch.setattr(TimeManager, "end", spy_end)
+
+    class Raising(UniformEvaluator):
+        def __call__(self, positions):
+            raise RuntimeError("the evaluator failed")
+
+    with Game.variant("Standard") as g, Search(g, params=search_params(hunt=0, settling=0)) as s, TimeManager() as tm:
+        s.set_deadline(100.0)
+        held, _ = s.deadline()
+        with pytest.raises(RuntimeError, match="the evaluator failed"):
+            run_timed_search(s, Raising(), tm, remaining=3.0)
+        assert ended == [True] and s.deadline()[0] == held
+
+
+def test_run_timed_search_returns_on_a_carried_root_waiting_to_be_relisted():
+    """S2 (the correctness pass's probe_py1, adopted): a carried flat root whose listing a passed
+    deadline cut, the hard bound already spent (the clock at the overhead) - Python used its own
+    forced condition (``root_visits < 2``) where the engine's is "no root child visited", kept the
+    bound inside the slices, never re-listed, and ran on; it returns, as the engine does."""
+    import threading
+
+    def params():
+        return search_params(split=T5D_SPLIT_FLAT, generator_nodes=1, hunt=0, settling=0, asset_map=0)
+
+    def prepared(game):
+        s = Search(game, params=params())
+        s.run(T5D_EVALUATOR_UNIFORM, 1)  # the root listed, its children made
+        s.set_deadline(1e-9)  # a deadline already passed
+        time.sleep(0.01)
+        s.run(T5D_EVALUATOR_UNIFORM, 24)  # the children's listings cut
+        s.set_deadline(0.0)
+        return s
+
+    with Game.variant("Standard") as g:
+        emptied = None
+        probe = prepared(g)
+        for c in probe.children():
+            if c.visits == 0:
+                continue
+            with prepared(g) as x:
+                x.advance(c.index)
+                if not x.children():
+                    emptied = c.index
+                    break
+        probe.close()
+        assert emptied is not None, "the premise: a visited child left with no turns"
+        search = prepared(g)
+        search.advance(emptied)
+        tp = time_params()
+        out: list = []
+        with TimeManager(tp) as tm:
+            worker = threading.Thread(
+                target=lambda: out.append(run_timed_search(search, UniformEvaluator(), tm, remaining=float(tp.overhead_seconds))),
+                daemon=True,
+            )
+            worker.start()
+            worker.join(60.0)
+            assert not worker.is_alive(), "run_timed_search did not return within 60 s (a hang)"
+        assert out and out[0].verdict.stop != T5D_TIME_STOP_NONE
+        search.close()
 
 
 def _check_position_search(**kw):

@@ -674,26 +674,33 @@ TimedRun run_timed(Search& search, Evaluator& evaluator, TimeManager& tm, const 
   // synchronous mode's batch is one leaf.
   Limits slice;
   slice.playouts = search.params().synchronous ? 1 : std::max<std::size_t>(search.params().batch_size, 1);
-  for (;;) {
-    const double elapsed = clock != nullptr ? clock->now() - t0 : std::numeric_limits<double>::quiet_NaN();
-    out.verdict = tm.check(search, elapsed);
-    if (out.verdict.stop != TimeStop::None) break;
-    if (cap) slice.seconds = std::max(std::chrono::duration<double>(time_left(*cap)).count(), 1e-6);
-    // The exception (a move needs a visit): until a root child has one, the
-    // slice runs without the hard bound inside it, so that the root's listing
-    // and classification complete (the E11 review's M1: a cut listing would
-    // leave a root with nothing to choose) - the caller's cap still holds.
-    const std::vector<RootChild> children = search.root_children();
-    const bool forced = std::none_of(children.begin(), children.end(), [](const RootChild& c) { return c.visits > 0; });
-    if (hard) search.set_deadline(forced ? held : hard);
-    const StopReason r = search.run(evaluator, slice);
-    if (r != StopReason::Playouts && r != StopReason::Evaluations) {
-      out.search_stop = r;
-      out.verdict.stop = r == StopReason::Finished && search.root_solved() && search.params().proof_channel
-                             ? TimeStop::Solved
-                             : TimeStop::Search;
-      break;
+  // The decision ends however the run returns (the E11 review's S2): a slice
+  // that throws ends it too, the manager not left active.
+  try {
+    for (;;) {
+      const double elapsed = clock != nullptr ? clock->now() - t0 : std::numeric_limits<double>::quiet_NaN();
+      out.verdict = tm.check(search, elapsed);
+      if (out.verdict.stop != TimeStop::None) break;
+      if (cap) slice.seconds = std::max(std::chrono::duration<double>(time_left(*cap)).count(), 1e-6);
+      // The exception (a move needs a visit): until a root child has one, the
+      // slice runs without the hard bound inside it, so that the root's listing
+      // and classification complete (the E11 review's M1: a cut listing would
+      // leave a root with nothing to choose) - the caller's cap still holds.
+      const std::vector<RootChild> children = search.root_children();
+      const bool forced = std::none_of(children.begin(), children.end(), [](const RootChild& c) { return c.visits > 0; });
+      if (hard) search.set_deadline(forced ? held : hard);
+      const StopReason r = search.run(evaluator, slice);
+      if (r != StopReason::Playouts && r != StopReason::Evaluations) {
+        out.search_stop = r;
+        out.verdict.stop = r == StopReason::Finished && search.root_solved() && search.params().proof_channel
+                               ? TimeStop::Solved
+                               : TimeStop::Search;
+        break;
+      }
     }
+  } catch (...) {
+    tm.end(search);
+    throw;
   }
   out.evaluations = st.evaluations - e0;
   out.playouts = st.playouts - p0;

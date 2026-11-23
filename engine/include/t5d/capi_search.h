@@ -207,6 +207,9 @@ typedef struct t5d_search t5d_search;
 #define T5D_STOP_DEADLINE 6   /* the deadline */
 /* No limit, for the budgets below. */
 #define T5D_NO_LIMIT UINT64_MAX
+/* A deadline that is none, as t5d_search_deadline reports it and
+ * t5d_search_set_deadline_at takes it (stage E11, the E11 review's S2). */
+#define T5D_NO_DEADLINE INT64_MAX
 
 /* Layouts: each struct below is appended to, never reordered (t5d_layout's
  * contract; t5d_search_layout reports every offset). A struct of t5d/capi.h's
@@ -905,6 +908,18 @@ T5D_API t5d_status t5d_timeman_new_game(t5d_timeman* tm);
  * negative value is refused (t5d/mcts.hpp's THE DEADLINE). It does not stop a
  * run between batches. */
 T5D_API t5d_status t5d_search_set_deadline(t5d_search* search, double seconds, char** error);
+/* The search's persistent deadline (stage E11, the E11 review's S2): `*steady_ns`
+ * its time point on the library's steady clock, in nanoseconds since that
+ * clock's epoch - T5D_NO_DEADLINE for none; `*seconds_left` the seconds until
+ * it - negative or 0 once it has passed, +infinity for none. Either pointer may
+ * be NULL. A caller that sets a deadline for a while restores the one it found
+ * with t5d_search_set_deadline_at, exactly (t5d/timeman.hpp's run_timed does the
+ * same in C++). */
+T5D_API t5d_status t5d_search_deadline(const t5d_search* search, int64_t* steady_ns, double* seconds_left,
+                                       char** error);
+/* Sets the persistent deadline to a time point as t5d_search_deadline reports
+ * it (T5D_NO_DEADLINE: none) - the same deadline, not one recomputed from now. */
+T5D_API t5d_status t5d_search_set_deadline_at(t5d_search* search, int64_t steady_ns, char** error);
 /* One timed decision with a built-in evaluator (T5D_EVALUATOR_*): begin, batches
  * until a stop, end. wall_clock 1: the steady clock (the search's deadline set
  * to the hard bound for the run - the earlier of it and one already set, which

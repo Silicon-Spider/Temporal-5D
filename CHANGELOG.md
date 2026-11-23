@@ -10,6 +10,33 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - E11 review round 2, S2: Python's timed run is the engine's - its forced slice, the caller's deadline restored, the decision always ended
+
+The review's S2 (SC-M1, SS-F7, SC-L2, observation 1). Python's `run_timed_search` could hang where
+the engine's `run_timed` returns, and it cleared the caller's deadline instead of restoring it.
+- **The forced slice's condition** is the engine's - no root child visited. Python's own
+  (`root_visits < 2` as well) kept the hard bound inside the slices at a carried flat root waiting
+  to be re-listed, which then never was, and the run never ended (the correctness pass's probe:
+  1.6M playouts in 20 s, no child).
+- **A deadline getter in the C API** (appended): `t5d_search_deadline` reports the persistent
+  deadline as a steady-clock time point in nanoseconds (`T5D_NO_DEADLINE`: none) with the seconds
+  left, and `t5d_search_set_deadline_at` sets such a point back - the same deadline, not one
+  recomputed from now, which a getter alone would give. Python mirrors both (`Search.deadline`,
+  `Search.set_deadline_at`, `_SIGNATURES`, `capi.T5D_NO_DEADLINE`).
+- **`run_timed_search` restores the caller's deadline exactly**, as the engine's `run_timed`
+  restores `held`: the bound is the earlier of the plan's and the caller's, the forced slice runs
+  under the caller's, and the run ends with the caller's set back.
+- **`tm.end` however the run returns**: in `finally` in Python, and in C++ `run_timed` ends the
+  decision before a slice's exception goes on (the manager was left active).
+- Tests: the C API's round trip (none, a deadline, one passed, restored exactly, the refusals);
+  `run_timed` ending the decision after a throw; Python's set and restore by spy (Y03: the bound's
+  same time point after the forced slice), a caller's deadline restored exactly, one earlier than
+  the bound kept; the decision ended after an evaluator raises; the correctness pass's probe_py1 -
+  a carried flat root waiting to be re-listed under a spent bound - returning (a 60 s watchdog).
+
+Spec: none - the C API and the Python mirror of E11's `run_timed` (§8.6's guards as built,
+unchanged). No proposed edit; no measured figure.
+
 ### 2026-11-24 - E11 review round 2, S1: a flag only when the clock has run out; a search that cannot move ends the game unscored
 
 The review of E11/E8 phases 1, 1B and 2 (`rv-search2`), its HIGH finding. A clocked decision whose

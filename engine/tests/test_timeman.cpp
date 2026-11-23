@@ -1658,6 +1658,7 @@ TEST(timeman_run_timed_restores_the_deadline_when_the_evaluator_throws) {
   ctx.remaining_seconds = 10;
   CHECK_THROWS_AS(run_timed(search, spy, tm, ctx, &clock), std::runtime_error);
   CHECK(!search.deadline().has_value());
+  CHECK(!tm.in_decision());  // the decision ended however the run returned (the E11 review's S2)
 }
 
 TEST(timeman_run_keeps_the_persistent_deadline_and_its_own_inside) {

@@ -67,7 +67,7 @@ import contextlib
 import ctypes
 import math
 from collections.abc import Sequence
-from ctypes import byref, c_double, c_float, c_int32, c_size_t, c_uint64, c_void_p
+from ctypes import byref, c_double, c_float, c_int32, c_int64, c_size_t, c_uint64, c_void_p
 from dataclasses import dataclass
 
 import numpy as np
@@ -587,6 +587,20 @@ class Search:
         """The deadline, ``seconds`` from now, at which the rules engine's calls inside a batch stop
         (answering Unknown, never a verdict - H37); 0: none."""
         self._lib.call("t5d_search_set_deadline", self._live(), c_double(float(seconds)), error=True)
+
+    def deadline(self) -> tuple[int, float]:
+        """The persistent deadline (``t5d_search_deadline``; stage E11, the E11 review's S2): its time
+        point on the library's steady clock in nanoseconds (``T5D_NO_DEADLINE``: none) - for
+        ``set_deadline_at`` to restore it exactly - and the seconds left until it (0 or less once
+        passed, ``inf`` for none)."""
+        at, left = c_int64(), c_double()
+        self._lib.call("t5d_search_deadline", self._live(), byref(at), byref(left), error=True)
+        return int(at.value), float(left.value)
+
+    def set_deadline_at(self, steady_ns: int) -> None:
+        """The persistent deadline set to a time point ``deadline()`` reported (``T5D_NO_DEADLINE``:
+        none) - the same deadline, not one recomputed from now."""
+        self._lib.call("t5d_search_set_deadline_at", self._live(), c_int64(int(steady_ns)), error=True)
 
     def run_timed(
         self,

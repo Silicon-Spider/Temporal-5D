@@ -35,7 +35,7 @@ import ctypes
 import os
 import sys
 import threading
-from ctypes import POINTER, c_char, c_char_p, c_double, c_float, c_int8, c_int32, c_size_t, c_uint8, c_uint32, c_uint64, c_void_p
+from ctypes import POINTER, c_char, c_char_p, c_double, c_float, c_int8, c_int32, c_int64, c_size_t, c_uint8, c_uint32, c_uint64, c_void_p
 from pathlib import Path
 
 import numpy as np
@@ -343,6 +343,8 @@ T5D_BOOST_ADDITIVE, T5D_BOOST_MULTIPLICATIVE = 0, 1
 T5D_STEERED_COUNTERFACTUAL, T5D_STEERED_BOOSTED_CHILD = 0, 1
 #: No limit, for the search's budgets (UINT64_MAX).
 T5D_NO_LIMIT = 2**64 - 1
+#: A deadline that is none (t5d_search_deadline, t5d_search_set_deadline_at; the E11 review's S2).
+T5D_NO_DEADLINE = 2**63 - 1
 
 
 class CSearchParams(ctypes.Structure):
@@ -879,6 +881,8 @@ _SIGNATURES: dict[str, tuple[object, list[object]]] = {
     "t5d_timeman_end": (c_int32, [_TIMEMAN, _SEARCH, _ERR]),
     "t5d_timeman_new_game": (c_int32, [_TIMEMAN]),
     "t5d_search_set_deadline": (c_int32, [_SEARCH, c_double, _ERR]),
+    "t5d_search_deadline": (c_int32, [_SEARCH, POINTER(c_int64), POINTER(c_double), _ERR]),
+    "t5d_search_set_deadline_at": (c_int32, [_SEARCH, c_int64, _ERR]),
     "t5d_search_run_timed": (
         c_int32,
         [_SEARCH, c_int32, c_uint64, _TIMEMAN, POINTER(CTimeContext), c_int32, POINTER(CTimePlan), POINTER(CTimeVerdict), _ERR],

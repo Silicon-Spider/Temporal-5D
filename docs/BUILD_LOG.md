@@ -11989,3 +11989,6 @@ entry changes in the same edit as its code, which the standing rule defers to up
     time left unscored (`Unsettled::Search`, issue 480; the no-visit cap only on a clock that does
     not advance); every verification stopped with time left unscored (`Unsettled::Choice`); the
     proof channel's solved root not local to play (issue 481). Tests in C++ and netplay.
+  - **S2**: Python's forced-slice condition the engine's; `t5d_search_deadline` and
+    `t5d_search_set_deadline_at` (appended) so that `run_timed_search` restores the caller's
+    deadline exactly; `tm.end` however the run returns (Python and C++). probe_py1 adopted.
