@@ -32,13 +32,16 @@
  *    Under D2's FLAT FORM (T5D_SPLIT_FLAT) every leaf is a turn start, its
  *    candidates classified as the ply split's are (D1), and the search derives
  *    each board's distribution over its options from them and from the leaf's
- *    BOARD LOGITS - optional: one float32 per expansion board
- *    (leaf.expansion.board_count, in its order), the board's "leave it" logit,
- *    read at the acting player's playable boards (NaN: none given for that
- *    board - t5d_search_params.leave_share; NULL: none at all) - then generates
- *    whole legal turns best first by their summed log-probabilities (register
- *    D2; t5d/turngen.hpp). It replaced the enumerating whole-turn arm and its
- *    256-action listing cap (retired).
+ *    BOARD LOGITS: one float32 per expansion board (leaf.expansion.board_count,
+ *    in its order), the board's "leave it" logit, read at the acting player's
+ *    playable boards - then generates whole legal turns best first by their
+ *    summed log-probabilities (register D2; t5d/turngen.hpp). The network gives
+ *    every board's (D2's flat head: Python's NetworkEvaluator delivers them,
+ *    the cached path alike), so a flat search it evaluates never falls back;
+ *    the channel stays optional for evaluators that give none - NaN for a
+ *    board, NULL for all - whose boards leave at t5d_search_params.leave_share.
+ *    It replaced the enumerating whole-turn arm and its 256-action listing cap
+ *    (retired).
  *  - SUBMIT (register D8; rulebook R8): turns have variable length, so under
  *    the board-move split submitting is an action of its own wherever it is
  *    possible (leaf.submit_possible: the obligations met, T5), legal only where
@@ -312,7 +315,8 @@ typedef struct t5d_search_params {
   int32_t flat_unit;              /* T5D_FLAT_UNIT_*: a child a distinct successor or an action */
   int32_t flat_jumps;             /* T5D_FLAT_JUMPS_* */
   double leave_share;             /* a board's "leave it" probability where no board logit is given
-                                     for it (in (0, 1); 0.5) */
+                                     for it (in (0, 1); 0.5) - a fallback: the network gives every
+                                     board's (D2's flat head) */
   double flat_k0_max;             /* the cap on k0 from the turn distribution's entropy (>= 1; 16) */
   uint64_t flat_fallback;         /* a node whose generator stopped before its first turn: up to this
                                      many turns from E4's listing instead (0: none - stuck; 64) */
@@ -461,13 +465,20 @@ typedef struct t5d_search_summary {
 
 /* A run's budgets (t5d/mcts.hpp, Limits): T5D_NO_LIMIT for none (seconds: 0). playouts and
  * evaluations count from the call; nodes and bytes are the graph's. A run
- * stops between batches once one is reached. */
+ * stops between batches once one is reached; the deadline (seconds) also
+ * reaches the rules engine's calls inside a batch - legality classifications,
+ * turn-start checks, verifications - which it leaves Unknown (Limits).
+ * seconds: 0, or 1e9 or more (+infinity included), sets no deadline; NaN or
+ * a negative value is refused (t5d/mcts.hpp's THE DEADLINE). Inside the run the
+ * earlier of it and the search's persistent deadline (t5d_search_set_deadline)
+ * applies. t5d_search_verify takes no deadline; the step calls (gather,
+ * deliver) take the persistent one. */
 typedef struct t5d_search_limits {
   uint64_t playouts;
   uint64_t evaluations;
   uint64_t nodes;
   uint64_t bytes;   /* t5d_search_summary.memory_bytes */
-  double seconds;   /* a wall-clock deadline from the call; 0: none (not deterministic) */
+  double seconds;   /* a wall-clock deadline from the call, inside batches too; 0: none (not deterministic) */
 } t5d_search_limits;
 
 /* One child of the root (t5d_search_child), from the root player's view. */
@@ -528,9 +539,10 @@ typedef struct t5d_evaluations {
   const float* moves_left;      /* one per leaf (>= 0; NaN: none given), or NULL */
   size_t moves_left_count;      /* the leaf count, or 0 */
   /* D2's flat form: each leaf's board logits - leaf.expansion.board_count float32 per leaf,
-     concatenated in the batch's order: each board's "leave it" logit, read at the acting
-     player's playable boards under the flat form (NaN: none for that board - leave_share),
-     checked (no infinity) and not read under the other splits - or NULL with count 0: none */
+     concatenated in the batch's order: each board's "leave it" logit (the network's flat
+     head gives every board's), read at the acting player's playable boards under the flat
+     form (NaN: none for that board - leave_share), checked (no infinity) and not read under
+     the other splits - or NULL with count 0: none (an evaluator with no such head) */
   const float* board_logits;
   size_t board_logit_count;    /* = the leaves' board counts summed, or 0 */
 } t5d_evaluations;
@@ -843,12 +855,17 @@ T5D_API t5d_status t5d_timeman_check(t5d_timeman* tm, const t5d_search* search, 
 T5D_API t5d_status t5d_timeman_end(t5d_timeman* tm, const t5d_search* search, char** error);
 /* A new game: the falling-eval reference forgotten, the scale kept. */
 T5D_API t5d_status t5d_timeman_new_game(t5d_timeman* tm);
-/* The search's deadline for the rules engine's calls inside a batch, `seconds`
- * from now (> 0); 0: none. */
+/* The search's PERSISTENT deadline for the rules engine's calls inside a batch -
+ * the step calls' batches and t5d_search_run_limits' (where the earlier of it
+ * and the run's own seconds applies, and it is kept after the run) - `seconds`
+ * from now. 0, or 1e9 or more (+infinity included): none (clears it); NaN or a
+ * negative value is refused (t5d/mcts.hpp's THE DEADLINE). It does not stop a
+ * run between batches. */
 T5D_API t5d_status t5d_search_set_deadline(t5d_search* search, double seconds, char** error);
 /* One timed decision with a built-in evaluator (T5D_EVALUATOR_*): begin, batches
  * until a stop, end. wall_clock 1: the steady clock (the search's deadline set
- * for the run); 0: the model clock. `plan` and `verdict` may be NULL. */
+ * to the hard bound for the run - the earlier of it and one already set, which
+ * is restored after); 0: the model clock. `plan` and `verdict` may be NULL. */
 T5D_API t5d_status t5d_search_run_timed(t5d_search* search, int32_t evaluator, uint64_t evaluator_seed,
                                         t5d_timeman* tm, const t5d_time_context* context, int32_t wall_clock,
                                         t5d_time_plan* plan, t5d_time_verdict* verdict, char** error);

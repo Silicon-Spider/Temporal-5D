@@ -4,6 +4,7 @@
 // P1-P13) - each section naming the finding it answers.
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -12,8 +13,10 @@
 #include <memory>
 #include <new>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -1479,4 +1482,81 @@ TEST(mcts_the_flat_roots_steering_tables) {
     CHECK_EQ(visits_off, std::size_t{0});
     CHECK_NOTHROW(steered.check_invariants());
   }
+}
+
+// ---- M1 beside issue 535: a re-listing under the pull's rollback --------------------------------
+
+namespace {
+
+// Delegates to another evaluator after sleeping: a run's deadline passes inside its batch, between
+// gather and deliver (the flat form's generator and fallback listing).
+class SleepFirst final : public Evaluator {
+ public:
+  SleepFirst(Evaluator& inner, double seconds) : inner_(inner), seconds_(seconds) {}
+  void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
+    std::this_thread::sleep_for(std::chrono::duration<double>(seconds_));
+    inner_.evaluate(batch, out);
+  }
+  void on_new_root(const GameState& root, std::uint64_t epoch) override { inner_.on_new_root(root, epoch); }
+
+ private:
+  Evaluator& inner_;
+  double seconds_;
+};
+
+}  // namespace
+
+TEST(mcts_fault_a_failed_relisting_leaves_the_root_to_be_listed) {
+  // The engine lane's M1 (a flat node whose fallback listing the deadline cut is listed again
+  // outside the deadline, never stuck) met issue 535's exception safety in the merge of main
+  // 4e9267e: the re-listing ran outside pull_turns' rollback, so a fault in it left the node's
+  // turn tables part-built, or the node with no turn and no longer to be listed - stuck for good.
+  // A flat root so cut (its generator stopped before a turn, the listing at a passed deadline),
+  // then every allocation of the gather that lists it, failing in turn - densely at the start and
+  // over the last 64, every 5th between: the invariants hold, no generator is counted dropped (the
+  // root had none), a gather that threw leaves the root without turns and not stuck, and a later
+  // playout lists it and visits a child.
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  SleepFirst slow(*uniform, 0.03);
+  SearchParams p = base(TurnSplit::Flat, false);
+  p.generator_nodes = 1;
+  const GameState root = start("Standard");
+  const auto prepared = [&] {
+    Search s(root, p);
+    Limits cut{64};
+    cut.seconds = 0.01;
+    REQUIRE(s.run(slow, cut) == StopReason::Deadline);
+    REQUIRE(s.root_children().empty());
+    REQUIRE(!s.node(s.root()).stuck);
+    return s;
+  };
+  long long total = 0;
+  {
+    Search s = prepared();
+    total = allocations_of([&] { (void)s.gather(1); });
+    REQUIRE(!s.root_children().empty());
+  }
+  std::size_t faults = 0;
+  std::size_t unlisted = 0;
+  std::size_t wrong = 0;
+  for (long long k = 0; k < total; k += k < 400 || k + 64 >= total ? 1 : 5) {
+    Search s = prepared();
+    const std::uint64_t dropped = s.stats().dropped_generators;
+    const bool threw = faulted(k, [&] { (void)s.gather(1); });
+    if (!threw) s.abandon();
+    faults += threw ? 1u : 0u;
+    CHECK_NOTHROW(s.check_invariants());
+    if (s.stats().dropped_generators != dropped) ++wrong;
+    if (s.root_children().empty()) {
+      ++unlisted;
+      if (s.node(s.root()).stuck || s.stats().stuck != 0) ++wrong;
+    }
+    if (s.run(*uniform, Limits{1}) != StopReason::Playouts || s.root_children().empty()) ++wrong;
+    CHECK_NOTHROW(s.check_invariants());
+  }
+  std::printf("  re-listing: %lld allocations in the gather, %zu faults, %zu left unlisted, %zu wrong\n", total,
+              faults, unlisted, wrong);
+  CHECK_EQ(wrong, std::size_t{0});
+  CHECK(unlisted > 0);
+  CHECK(faults > 0);
 }

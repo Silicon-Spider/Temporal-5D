@@ -314,6 +314,10 @@ struct FlatNode {
   std::vector<double> clean_scores;          // ... under `clean`
   std::vector<double> boosts;                // stage E10: each turn's steering boost (0: none)
   bool listed = false;                       // its turns are the fallback's listing's
+  // The fallback listing was cut by run()'s deadline before it found a turn:
+  // no evidence that the node has none, so it is not stuck - the next
+  // widening outside a deadline lists it again (the review of 2026-11-09, M1).
+  bool relist = false;
 
   std::size_t bytes() const noexcept {
     return sizeof(FlatNode) + 16 + (scores.capacity() + clean_scores.capacity() + boosts.capacity()) * sizeof(double) +
@@ -395,8 +399,9 @@ struct Pending {
   std::vector<Step> path;
   std::size_t slot = 0;
   NodeId leaf = kNoNode;
-  std::size_t request = 0;  // its evaluation: one per distinct (state, count) in the batch (A6)
+  std::size_t request = 0;  // its evaluation: one per distinct input in the batch (state, count A6, candidates)
   bool steered = false;     // stage E10: the root's choice on its path was steered (SteeredRule)
+  std::uint64_t candidates = 0;  // its expansion's candidate_digest (H1 of the 2026-11-09 review)
 };
 
 enum class Selected : std::uint8_t { Pending, Done, Collision, DeadEnd };
@@ -689,16 +694,69 @@ Choice select_final(std::span<const FinalCandidate> children, const SearchParams
 }
 
 // ---------------------------------------------------------------------------
+// The deadline (THE DEADLINE in mcts.hpp)
+// ---------------------------------------------------------------------------
+
+std::optional<std::chrono::steady_clock::time_point> deadline_after(std::chrono::steady_clock::time_point start,
+                                                                    double seconds, const char* what) {
+  if (std::isnan(seconds) || seconds < 0) throw std::invalid_argument(std::string(what) + ": 0 (none) or more");
+  // +infinity and anything from kNoDeadlineSeconds: none - decided before the
+  // conversion, which overflows the clock's ticks beyond about 9.2e9 s.
+  if (seconds == 0 || seconds >= kNoDeadlineSeconds) return std::nullopt;
+  return start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(seconds));
+}
+
+std::chrono::nanoseconds time_left(std::chrono::steady_clock::time_point deadline) noexcept {
+  const auto now = std::chrono::steady_clock::now();
+  if (now >= deadline) return std::chrono::nanoseconds{0};
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(deadline - now);
+}
+
+// ---------------------------------------------------------------------------
+// The candidate list's digest (EvalCache)
+// ---------------------------------------------------------------------------
+
+std::uint64_t candidate_digest(const Expansion& x) noexcept {
+  const MoveList& moves = x.moves();
+  const std::span<const MoveLegality> legality = x.move_legality();
+  const auto u32 = [](std::int32_t v) { return static_cast<std::uint64_t>(static_cast<std::uint32_t>(v)); };
+  const auto u8 = [](std::int8_t v) { return static_cast<std::uint64_t>(static_cast<std::uint8_t>(v)); };
+  std::uint64_t h = detail::mix64(std::uint64_t{0x63616E6469646174} + static_cast<std::uint64_t>(moves.size()));
+  for (std::size_t i = 0; i < moves.size(); ++i) {
+    const Move& m = moves[i];
+    const std::uint64_t legal = i < legality.size() ? static_cast<std::uint64_t>(legality[i]) + 1 : 0;
+    h = detail::combine(h, (u32(m.from_timeline) << 32) | u32(m.from_half_turn));
+    h = detail::combine(h, (u32(m.to_timeline) << 32) | u32(m.to_half_turn));
+    h = detail::combine(h, u8(m.from_square) | (u8(m.to_square) << 8) | (u8(m.aux_square) << 16) |
+                               (static_cast<std::uint64_t>(m.promotion) << 24) |
+                               (static_cast<std::uint64_t>(m.flags) << 32) | (legal << 40));
+  }
+  return h;
+}
+
+// ---------------------------------------------------------------------------
 // The evaluation cache
 // ---------------------------------------------------------------------------
 
 const Evaluation* EvalCache::find(std::uint64_t key, int moves_made, std::uint64_t epoch, const GameState& state,
-                                  bool compare_origins, bool board_logits) const {
+                                  std::uint64_t candidates, bool compare_origins, bool board_logits) const {
   const auto [first, last] = entries_.equal_range(key);
   for (auto it = first; it != last; ++it) {
-    if (it->second.epoch == epoch && it->second.moves_made == moves_made &&
+    if (it->second.epoch == epoch && it->second.moves_made == moves_made && it->second.candidates == candidates &&
         (it->second.board_logits || !board_logits) && detail::same_state(it->second.state, state, compare_origins)) {
       return &it->second.evaluation;
+    }
+  }
+  return nullptr;
+}
+
+const std::array<float, kValueBins>* EvalCache::find_value(std::uint64_t key, int moves_made, std::uint64_t epoch,
+                                                           const GameState& state, bool compare_origins) const {
+  const auto [first, last] = entries_.equal_range(key);
+  for (auto it = first; it != last; ++it) {
+    if (it->second.epoch == epoch && it->second.moves_made == moves_made && it->second.evaluation.value &&
+        detail::same_state(it->second.state, state, compare_origins)) {
+      return &*it->second.evaluation.value;
     }
   }
   return nullptr;
@@ -715,10 +773,11 @@ std::size_t EvalCache::entry_bytes(const GameState& state, const Evaluation& eva
 }
 
 void EvalCache::insert(std::uint64_t key, int moves_made, std::uint64_t epoch, const GameState& state,
-                       const Evaluation& evaluation, std::size_t new_boards, bool board_logits) {
+                       std::uint64_t candidates, const Evaluation& evaluation, std::size_t new_boards,
+                       bool board_logits) {
   if (entries_.size() >= capacity_) return;
-  if (find(key, moves_made, epoch, state, true, board_logits) != nullptr) return;
-  Entry e{state, moves_made, epoch, board_logits, evaluation, 0};
+  if (find(key, moves_made, epoch, state, candidates, true, board_logits) != nullptr) return;
+  Entry e{state, moves_made, epoch, candidates, board_logits, evaluation, 0};
   e.evaluation.logits.shrink_to_fit();
   e.bytes = entry_bytes(e.state, e.evaluation, new_boards);
   if (bytes_ + e.bytes > max_bytes_) return;
@@ -776,10 +835,17 @@ struct Search::Impl {
   // visits when it became so ("visits until the decision stabilises", §8.6).
   std::size_t best_edge_ = kNoEdge;
   std::uint32_t best_since_ = 0;
-  // Stage E11: the hard bound inside a batch (Search::set_deadline) - the
-  // rules engine's calls below stop at it, answering Unknown (H37).
-  std::optional<std::chrono::steady_clock::time_point> deadline_;
   std::vector<Step> path_;
+  // THE DEADLINE (mcts.hpp) the rules engine's calls inside a batch are given
+  // - the legality classifications, the turn-start checks, the flat form's
+  // fallback listing, the lazy verifications - so that it reaches the
+  // detector, not only the next batch (build-log issue 406), answering
+  // Unknown past it (H37). ONE mechanism (the merge of issue 406 and stage
+  // E11, the E11 review's M2): the persistent deadline Search::set_deadline
+  // sets (the time manager's hard bound; the step API's batches read it), and
+  // inside run() the earlier of it and run()'s own Limits::seconds, the
+  // persistent one restored when run() returns - never cleared by it.
+  std::optional<std::chrono::steady_clock::time_point> deadline_;
   std::size_t tree_bytes_ = 0;  // the nodes' counts (Node::bytes), summed
 
   // ---- stage E10: the verification ladder (t5d/ladder.hpp) ------------------------
@@ -1095,18 +1161,19 @@ struct Search::Impl {
     return n.moves_made == moves_made && detail::same_state(n.state, s, compare_origins()) ? it->second : kNoNode;
   }
 
-  // Stage E11: a budget, or legality options, with the deadline's time left
-  // (none set: unchanged).
-  void timed(SearchBudget& budget) const {
-    if (!deadline_) return;
-    budget.max_time = std::max(std::chrono::nanoseconds{0}, std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                                                *deadline_ - std::chrono::steady_clock::now()));
-  }
-  LegalityOptions timed(const LegalityOptions& options) const {
-    LegalityOptions o = options;
+  // A legality budget, or a detector's, with run()'s deadline if it has one
+  // (build-log issue 406). What the deadline stops is Unknown: a move left
+  // unknown, a turn start never terminal - and, in a tree carried to the next
+  // decision, so it stays (a node is checked and expanded once).
+  LegalityOptions timed(LegalityOptions o) const {
     if (deadline_) o.deadline = deadline_;
     return o;
   }
+  void timed(SearchBudget& b) const {
+    if (deadline_) b.max_time = time_left(*deadline_);
+  }
+  // Whether run()'s deadline has passed (false outside run() and without one).
+  bool deadline_passed() const noexcept { return deadline_ && std::chrono::steady_clock::now() >= *deadline_; }
 
   // A turn start: the game's end, by E4's exhaustive detector only (H37), or
   // the turn cap's convention (I11).
@@ -1115,7 +1182,7 @@ struct Search::Impl {
     SearchBudget budget;
     budget.max_nodes = params_.mate_nodes;
     budget.max_bytes = params_.mate_bytes;
-    timed(budget);
+    timed(budget);  // stopped by the deadline: Unknown, never a terminal
     const auto t0 = std::chrono::steady_clock::now();
     const MateResult r = detect_mate(n.state, params_.detector, budget);
     stats_.seconds_mate += detail::seconds_since(t0);
@@ -1765,7 +1832,7 @@ struct Search::Impl {
       throw;
     }
     account(n);
-    if (n.edges.empty()) {
+    if (n.edges.empty() && !n.flat->relist) {
       n.stuck = true;
       ++stats_.stuck;
     }
@@ -1797,7 +1864,17 @@ struct Search::Impl {
   // turns). The drop is counted, and the exception goes on.
   std::size_t pull_turns(Node& n, std::size_t want) {
     detail::FlatNode& f = *n.flat;
-    if (!f.generator || n.edges.size() >= want) return 0;
+    // M1: a node whose fallback listing the deadline cut before its first turn
+    // (no generator left, no turn) is listed again once the deadline is not
+    // passed (a later run, or none) - under the rollback below, as a
+    // generator's turns are (issue 535): a listing that throws leaves the node
+    // without turns and still to be listed.
+    const bool relisting = !f.generator;
+    if (relisting) {
+      if (!f.relist || !n.edges.empty() || deadline_passed()) return 0;
+    } else if (n.edges.size() >= want) {
+      return 0;
+    }
     const auto t0 = std::chrono::steady_clock::now();
     const std::size_t edges0 = n.edges.size();
     const std::size_t moves0 = n.action_moves.size();
@@ -1806,6 +1883,7 @@ struct Search::Impl {
     const std::size_t clean0 = f.clean_scores.size();
     const std::size_t boosts0 = f.boosts.size();
     const bool listed0 = f.listed;
+    const bool relist0 = f.relist;
     // What this call counts for the turns it makes (turn_boost counts the
     // boosts their priors take), taken back with them.
     const std::uint64_t generated0 = stats_.generated_turns;
@@ -1815,7 +1893,11 @@ struct Search::Impl {
     const std::uint64_t stopped0 = stats_.stopped_generators;
     std::size_t added = 0;
     try {
-      while (n.edges.size() < want) {
+      if (relisting) {
+        f.relist = false;
+        added = fallback_turns(n);
+      }
+      while (f.generator && n.edges.size() < want) {
         std::optional<GeneratedTurn> turn = f.generator->next();
         if (!turn) {
           // Done: every turn generated (the children complete, if the turns
@@ -1850,6 +1932,7 @@ struct Search::Impl {
       truncate(f.clean_scores, clean0);
       truncate(f.boosts, boosts0);
       f.listed = listed0;
+      f.relist = relist0;
       f.generator.reset();
       n.children_complete = false;
       stats_.generated_turns = generated0;
@@ -1857,7 +1940,7 @@ struct Search::Impl {
       stats_.asset_boosted_edges = boosted0;
       stats_.suggestion_edges = suggested0;
       if (edges0 == 0) stats_.stopped_generators = stopped0;  // review finding L5
-      ++stats_.dropped_generators;
+      if (!relisting) ++stats_.dropped_generators;  // a re-listing drops none
       account(n);
       throw;
     }
@@ -1918,6 +2001,10 @@ struct Search::Impl {
     // where it was exhaustive and play does not activate.
     n.children_complete = list.stats.exhaustive && !list.reached_cap && !n.state.rules().play_activates;
     f.listed = true;
+    // M1: stopped with nothing found once the deadline had passed - the
+    // deadline's doing, not the node's (none of its turns was looked for):
+    // listed again outside the deadline, never stuck for it.
+    f.relist = added == 0 && list.stats.stopped_by_budget && !list.stats.stopped_by_memory && deadline_passed();
     ++stats_.fallback_listings;
     stats_.generated_turns += added;
     return added;
@@ -2928,8 +3015,13 @@ struct Search::Impl {
           release(path_);
           return Selected::DeadEnd;
         }
-        n.stuck = true;
-        ++stats_.stuck;
+        // A flat node whose fallback listing the deadline cut (M1): not
+        // stuck - this visit backs up its value as a stuck node's would, and
+        // a widening outside the deadline lists its turns.
+        if (!(n.flat && n.flat->relist)) {
+          n.stuck = true;
+          ++stats_.stuck;
+        }
         backup(path_, node_q(n), node_d(n), 1.0, true);
         return Selected::Done;
       }
@@ -2988,10 +3080,15 @@ struct Search::Impl {
       release(path_);
       return Selected::DeadEnd;
     }
-    // The cache and the batch match the whole network input: the state and the
-    // moves made in its action (A6), at the epoch.
+    // The cache and the batch match the whole network input: the state, the
+    // moves made in its action (A6), the epoch - and the candidate list the
+    // logits score, which is not the state's alone: run()'s deadline can cut
+    // a classification, leaving moves an uncut one proves illegal (the review
+    // of 2026-11-09, H1; §8.7's "one network input").
+    const std::uint64_t candidates = candidate_digest(x);
     if (cache_) {
-      if (const Evaluation* ev = cache_->find(n.key, n.moves_made, epoch_, n.state, compare_origins(), flat())) {
+      if (const Evaluation* ev =
+              cache_->find(n.key, n.moves_made, epoch_, n.state, candidates, compare_origins(), flat())) {
         const Evaluation copy = *ev;
         take_evaluation(id, copy, x);
         ++stats_.cache_hits;
@@ -3001,17 +3098,19 @@ struct Search::Impl {
       }
     }
     // One evaluation per distinct input in the batch: a tree can hold one
-    // state with one count in two nodes (a transposition it does not merge).
+    // state with one count in two nodes (a transposition it does not merge) -
+    // one request only where their candidate lists agree too (H1).
     std::size_t request = unique_requests_;
     for (const Pending& other : pending_) {
       const Node& o = nodes_[other.leaf];
-      if (o.key == n.key && o.moves_made == n.moves_made && detail::same_state(o.state, n.state, compare_origins())) {
+      if (o.key == n.key && o.moves_made == n.moves_made && other.candidates == candidates &&
+          detail::same_state(o.state, n.state, compare_origins())) {
         request = other.request;
         ++stats_.batch_duplicates;
         break;
       }
     }
-    pending_.push_back(Pending{path_, pending_.size(), id, request, path_steered_});  // first: it may throw
+    pending_.push_back(Pending{path_, pending_.size(), id, request, path_steered_, candidates});  // first: it may throw
     if (request == unique_requests_) ++unique_requests_;
     n.pending = true;
     return Selected::Pending;
@@ -3111,7 +3210,7 @@ struct Search::Impl {
         backup(pd.path, n.eval_mean, n.eval_draw, backup_weight(n.eval_var), true, pd.steered);
         ++delivered;
         // A duplicate is not stored twice.
-        if (cache_) cache_->insert(n.key, n.moves_made, epoch_, n.state, ev, n.new_boards, flat());
+        if (cache_) cache_->insert(n.key, n.moves_made, epoch_, n.state, pd.candidates, ev, n.new_boards, flat());
       }
     } catch (...) {
       // What was delivered stays; the rest of the batch is abandoned.
@@ -3982,7 +4081,21 @@ StopReason Search::run(Evaluator& evaluator, const Limits& limits) {
     s.stats_.last_stop = r;
     return r;
   };
-  if (std::isnan(limits.seconds) || limits.seconds < 0) throw std::invalid_argument("Limits::seconds: 0 (none) or more");
+  // THE DEADLINE (mcts.hpp): none for 0 or from kNoDeadlineSeconds (+inf
+  // included); NaN and negatives refused. run()'s own deadline stops it
+  // between batches; inside each batch the rules engine's calls get the
+  // earlier of it and the persistent deadline (Search::set_deadline), which is
+  // restored when run() returns (the E11 review's M2: one mechanism). The
+  // persistent deadline does not stop run() between batches - that is the time
+  // manager's check, whose forced slice (a move needs a visit) must run.
+  const std::optional<std::chrono::steady_clock::time_point> own = deadline_after(t0, limits.seconds, "Limits::seconds");
+  struct DeadlineScope {
+    Impl& s;
+    std::optional<std::chrono::steady_clock::time_point> held;
+    ~DeadlineScope() { s.deadline_ = held; }
+  } scope{s, s.deadline_};
+  if (own && (!s.deadline_ || *own < *s.deadline_)) s.deadline_ = own;
+  const auto own_passed = [&own] { return own && std::chrono::steady_clock::now() >= *own; };
   if (s.notified_generation_ != s.root_generation_) {
     evaluator.on_new_root(s.nodes_[s.root_].state, s.epoch_);
     s.notified_generation_ = s.root_generation_;
@@ -3998,7 +4111,7 @@ StopReason Search::run(Evaluator& evaluator, const Limits& limits) {
     if (s.root_finished()) return stop(StopReason::Finished);
     if (s.nodes_.size() >= limits.nodes) return stop(StopReason::Nodes);
     if (s.memory_bytes() >= limits.bytes) return stop(StopReason::Memory);
-    if (limits.seconds > 0 && detail::seconds_since(t0) >= limits.seconds) return stop(StopReason::Deadline);
+    if (own_passed()) return stop(StopReason::Deadline);
     const std::uint64_t batch = std::max<std::size_t>(s.params_.batch_size, 1);
     const auto want = static_cast<std::size_t>(std::min(batch, limits.evaluations - evaluated));
     const std::uint64_t before = s.stats_.playouts;
@@ -4402,9 +4515,11 @@ std::optional<std::array<float, kValueBins>> Search::root_child_value(std::size_
   if (!s.cache_ || e.child == kNoNode) return std::nullopt;
   const Node& n = s.nodes_[e.child];
   if (!n.has_eval || n.inherited) return std::nullopt;
-  const Evaluation* ev = s.cache_->find(n.key, n.moves_made, s.epoch_, n.state, s.compare_origins(), false);
-  if (ev == nullptr || !ev->value) return std::nullopt;
-  std::array<float, kValueBins> out = *ev->value;
+  // Whatever the candidate list the entry was stored with (EvalCache::find_value):
+  // the merge with issue 406's candidate_digest made find() take it.
+  const std::array<float, kValueBins>* value = s.cache_->find_value(n.key, n.moves_made, s.epoch_, n.state, s.compare_origins());
+  if (value == nullptr) return std::nullopt;
+  std::array<float, kValueBins> out = *value;
   // The child's acting player's view, turned to the root player's.
   if (detail::sign_between(r, n) < 0) std::reverse(out.begin(), out.end());
   return out;

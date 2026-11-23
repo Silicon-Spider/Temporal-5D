@@ -973,14 +973,9 @@ t5d_status t5d_timeman_new_game(t5d_timeman* tm) {
 t5d_status t5d_search_set_deadline(t5d_search* search, double seconds, char** error) {
   return guarded(error, [&]() -> t5d_status {
     if (search == nullptr) throw std::invalid_argument("search is NULL");
-    if (!(std::isfinite(seconds) && seconds >= 0)) throw std::invalid_argument("seconds: finite, 0 (none) or more");
-    if (seconds == 0) {
-      search->search.set_deadline(std::nullopt);
-    } else {
-      search->search.set_deadline(std::chrono::steady_clock::now() +
-                                  std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                                      std::chrono::duration<double>(seconds)));
-    }
+    // THE DEADLINE (t5d/mcts.hpp): 0 none, as is kNoDeadlineSeconds or more
+    // (+infinity included); NaN and negatives refused (the E11 review's L2).
+    search->search.set_deadline(t5d::mcts::deadline_after(std::chrono::steady_clock::now(), seconds, "seconds"));
     return T5D_OK;
   });
 }

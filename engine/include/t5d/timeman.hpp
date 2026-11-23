@@ -588,10 +588,16 @@ struct TimedRun {
 /// Runs `search` with `evaluator` for one decision under `tm`: begin, then
 /// slices - each Search::run for batch_size playouts (a step-API driver that
 /// runs the same slices builds the same tree) - until check says stop, then
-/// end. `clock` null: the model clock (deterministic). A
-/// steady clock gives the search the hard bound as its deadline for the run.
+/// end. `clock` null: the model clock (deterministic). A steady clock gives
+/// the search the hard bound as its persistent deadline for the run (the
+/// earlier of it and one the caller set, which is restored on return) - but
+/// not inside a slice run before any root child has a visit (the exception: a
+/// move needs a visit; the E11 review's M1). `max_seconds` (0: none; THE
+/// DEADLINE in t5d/mcts.hpp): the caller's own limit from the call - a game's
+/// safety stop - each slice's Limits::seconds, so that the search stops at it
+/// (StopReason::Deadline, TimeStop::Search).
 TimedRun run_timed(Search& search, Evaluator& evaluator, TimeManager& tm, const TimeContext& ctx,
-                   Clock* clock = nullptr);
+                   Clock* clock = nullptr, double max_seconds = 0);
 
 }  // namespace t5d::mcts
 

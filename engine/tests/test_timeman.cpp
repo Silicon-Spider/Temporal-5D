@@ -1540,3 +1540,169 @@ TEST(timeman_the_kld_matches_children_by_step) {
     CHECK(std::adjacent_find(keys.begin(), keys.end()) == keys.end());
   }
 }
+
+// ---- the hard bound inside every batch: set, restored (the E11 review's M2, M3) -------------
+
+namespace {
+
+// A steady clock the test moves: run_timed takes it for the wall clock (it
+// gives the search its deadline), while the time it reads is the test's.
+class SteadyManual final : public Clock {
+ public:
+  double t = 0;
+  double now() override { return t; }
+  bool steady() const noexcept override { return true; }
+};
+
+// Records the search's deadline at every evaluator call (inside a batch), and
+// whether the root had a visited child when the call's batch began; advances
+// the clock; may throw.
+class DeadlineSpy final : public Evaluator {
+ public:
+  Search* search = nullptr;
+  SteadyManual* clock = nullptr;
+  int throw_at = -1;
+  int calls = 0;
+  std::vector<std::optional<std::chrono::steady_clock::time_point>> seen;
+  void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
+    if (calls == throw_at) throw std::runtime_error("the spy throws on purpose");
+    inner_->evaluate(batch, out);
+    seen.push_back(search->deadline());
+    if (clock != nullptr) clock->t += 1e-4 * static_cast<double>(batch.size());
+    ++calls;
+  }
+
+ private:
+  std::unique_ptr<Evaluator> inner_ = make_evaluator(BuiltinEvaluator::Uniform);
+};
+
+bool near_time(std::chrono::steady_clock::time_point a, std::chrono::steady_clock::time_point lo,
+               std::chrono::steady_clock::time_point hi) {
+  return a >= lo && a <= hi;
+}
+
+}  // namespace
+
+TEST(timeman_run_timed_holds_the_hard_bound_inside_every_batch_and_restores_the_deadline) {
+  // M3's test 1, against the one mechanism of the merge (M2): on a steady
+  // clock every batch of every slice runs with the hard bound as the search's
+  // deadline - not only the first slice (the merge hazard M2 found: a scope
+  // in Search::run that cleared it) - and after the run the deadline is the
+  // caller's again. The root is searched first, so that no slice is the
+  // forced one (a move needs a visit).
+  using Clk = std::chrono::steady_clock;
+  for (const bool held : {false, true}) {
+    Search search(variant("Standard"), quiet_params());
+    const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+    search.run(*uniform, Limits{32});
+    const std::optional<Clk::time_point> callers =
+        held ? std::optional(Clk::now() + std::chrono::hours(1)) : std::nullopt;
+    search.set_deadline(callers);
+    SteadyManual clock;
+    DeadlineSpy spy;
+    spy.search = &search;
+    spy.clock = &clock;
+    TimeManager tm;
+    TimeContext ctx;
+    ctx.remaining_seconds = 10;
+    const auto before = Clk::now();
+    const TimedRun r = run_timed(search, spy, tm, ctx, &clock);
+    const auto after = Clk::now();
+    REQUIRE(spy.calls >= 3);  // several slices
+    const auto hard = std::chrono::duration_cast<Clk::duration>(std::chrono::duration<double>(r.plan.hard_seconds));
+    for (const std::optional<Clk::time_point>& d : spy.seen) {
+      REQUIRE(d.has_value());
+      CHECK(near_time(*d, before + hard - std::chrono::milliseconds(1), after + hard));
+    }
+    CHECK(search.deadline() == callers);  // the caller's, restored
+  }
+  // A caller's deadline earlier than the hard bound is the one that holds.
+  Search search(variant("Standard"), quiet_params());
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  search.run(*uniform, Limits{32});
+  const auto early = Clk::now() + std::chrono::milliseconds(1);
+  search.set_deadline(early);
+  SteadyManual clock;
+  DeadlineSpy spy;
+  spy.search = &search;
+  spy.clock = &clock;
+  TimeManager tm;
+  TimeContext ctx;
+  ctx.remaining_seconds = 600;
+  run_timed(search, spy, tm, ctx, &clock);
+  for (const std::optional<Clk::time_point>& d : spy.seen) CHECK(d == std::optional(early));
+  CHECK(search.deadline() == std::optional(early));
+}
+
+TEST(timeman_the_forced_slice_runs_without_the_hard_bound) {
+  // The exception (a move needs a visit; the E11 review's M1): from a fresh
+  // root the slices before any root child has a visit run without the hard
+  // bound inside them - the root's listing and classification complete - and
+  // the slices after it with it. Batched: the first slice's two calls (the
+  // root, then its children); synchronous: the first two one-leaf slices.
+  for (const bool sync : {false, true}) {
+    SearchParams sp = quiet_params();
+    sp.synchronous = sync;
+    Search search(variant("Standard"), sp);
+    SteadyManual clock;
+    DeadlineSpy spy;
+    spy.search = &search;
+    spy.clock = &clock;
+    TimeManager tm;
+    TimeContext ctx;
+    ctx.remaining_seconds = 10;
+    run_timed(search, spy, tm, ctx, &clock);
+    REQUIRE(spy.calls >= 3);
+    CHECK(!spy.seen[0].has_value());
+    CHECK(!spy.seen[1].has_value());
+    for (std::size_t i = 2; i < spy.seen.size(); ++i) CHECK(spy.seen[i].has_value());
+    CHECK(!search.deadline().has_value());
+  }
+}
+
+TEST(timeman_run_timed_restores_the_deadline_when_the_evaluator_throws) {
+  // M3's test 2: an evaluator that throws on a later batch - the caller's
+  // deadline (none) is restored all the same.
+  Search search(variant("Standard"), quiet_params());
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  search.run(*uniform, Limits{32});
+  SteadyManual clock;
+  DeadlineSpy spy;
+  spy.search = &search;
+  spy.clock = &clock;
+  spy.throw_at = 1;
+  TimeManager tm;
+  TimeContext ctx;
+  ctx.remaining_seconds = 10;
+  CHECK_THROWS_AS(run_timed(search, spy, tm, ctx, &clock), std::runtime_error);
+  CHECK(!search.deadline().has_value());
+}
+
+TEST(timeman_run_keeps_the_persistent_deadline_and_its_own_inside) {
+  // The merge's rule (M2): run() gives the calls inside its batches the
+  // earlier of the persistent deadline and its own Limits::seconds, and
+  // restores the persistent one on return - never clears it.
+  using Clk = std::chrono::steady_clock;
+  Search search(variant("Standard"), quiet_params());
+  DeadlineSpy spy;
+  spy.search = &search;
+  const auto far = Clk::now() + std::chrono::hours(2);
+  search.set_deadline(far);
+  Limits own{24};
+  own.seconds = 600;  // ten minutes: earlier than the persistent two hours
+  const auto before = Clk::now();
+  search.run(spy, own);
+  const auto after = Clk::now();
+  REQUIRE(!spy.seen.empty());
+  for (const std::optional<Clk::time_point>& d : spy.seen) {
+    REQUIRE(d.has_value());
+    CHECK(near_time(*d, before + std::chrono::seconds(600), after + std::chrono::seconds(600)));
+  }
+  CHECK(search.deadline() == std::optional(far));
+  // Without its own, run() hands on the persistent one, and keeps it.
+  spy.seen.clear();
+  search.run(spy, Limits{48});
+  REQUIRE(!spy.seen.empty());
+  for (const std::optional<Clk::time_point>& d : spy.seen) CHECK(d == std::optional(far));
+  CHECK(search.deadline() == std::optional(far));
+}

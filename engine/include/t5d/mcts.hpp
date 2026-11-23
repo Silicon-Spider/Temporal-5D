@@ -55,10 +55,12 @@
 //    - its moves, the non-branching jumps arriving on it (FlatJumps), and
 //    leaving it - at the policy temperature (the root's I19 temperature too);
 //    a turn's score is the sum over the boards of its options'
-//    log-probabilities, and its prior follows from the scores (FlatPrior). A
-//    board with no leave logit (none given, or NaN) gives leaving it
-//    SearchParams::leave_share. Root noise is drawn per board, over its
-//    options, before generation. The generator ends turns itself (D8): the
+//    log-probabilities, and its prior follows from the scores (FlatPrior). The
+//    network gives every board's leave logit (D2's flat head; Python's
+//    NetworkEvaluator, the cached path alike), and so do the built-in
+//    evaluators when asked; a board an evaluator gives none (none given, or
+//    NaN) leaves at SearchParams::leave_share. Root noise is drawn per board,
+//    over its options, before generation. The generator ends turns itself (D8): the
 //    evaluator's submit logit is not read and the C API reports
 //    submit_possible 0. A node whose generator a budget stopped
 //    (generator_nodes, the memory ceiling) has incomplete children and is
@@ -212,9 +214,11 @@
 // through an edge whose Q - or draw probability D (D3) - lags the node's by
 // more than epsilon backs up the residual correction of both instead of
 // descending (Czech, Korus and Kersting 2021).
-// Evaluations are a function of the state, the moves made in its action and
-// the refresh epoch (EvalCache: §15.2's "same state + epoch -> same
-// evaluation", the count part of what the state means to the network), so a
+// Evaluations are a function of the state, the moves made in its action, the
+// refresh epoch and the candidate list the network scores (EvalCache: §15.2's
+// "same state + epoch -> same evaluation", the count part of what the state
+// means to the network, and the list the classification's budget leaves -
+// which run()'s deadline can cut, the review of 2026-11-09, H1), so a
 // transposition is a zero-cost evaluation.
 //
 // THE PROOF CHANNEL'S CONSUMER (H2, E9), behind SearchParams::proof_channel -
@@ -594,7 +598,9 @@ struct SearchParams {
   /// A playable board's "leave it" probability where the evaluator gives no
   /// leave logit for it (Evaluation::board_logits empty, or NaN there): its
   /// moves share the rest in their own proportions (as submit_share stands in
-  /// for D8's submit logit). In (0, 1). Placeholder 0.5.
+  /// for D8's submit logit). A fallback: the network gives every board's (D2's
+  /// flat head), so a flat search it evaluates never reads this. In (0, 1).
+  /// Placeholder 0.5.
   double leave_share = 0.5;
   /// The flat form's k0 is E1's, from the entropy of the turn distribution -
   /// the boards' entropies summed (the boards are independent) - capped here:
@@ -814,6 +820,35 @@ struct SearchParams {
   bool ladder_certify = true;
 };
 
+// ---------------------------------------------------------------------------
+// THE DEADLINE (build-log issue 406; the review of 2026-11-09, H1, M1, M2).
+// A wall-clock limit in seconds - Limits::seconds for one run(),
+// PlayParams::max_seconds for a game (t5d/selfplay.hpp), the C API's
+// t5d_search_limits.seconds - becomes a steady-clock time point here, once
+// (deadline_after), and that time point is what reaches the rules engine:
+// LegalityOptions::deadline for a classification, SearchBudget::max_time
+// (time_left) for a detector or a listing. What it stops is Unknown, never a
+// verdict. 0 sets none, and so does kNoDeadlineSeconds or more (+infinity
+// included); NaN and negatives are refused. Not deterministic: for tools and
+// match play, never training.
+// ---------------------------------------------------------------------------
+
+/// Seconds at or beyond which a time limit sets no deadline: one that far out
+/// is none, and a double beyond about 9.2e9 s overflows the clock's
+/// nanosecond ticks.
+inline constexpr double kNoDeadlineSeconds = 1e9;
+
+/// The deadline `seconds` after `start`: none for 0, or for
+/// kNoDeadlineSeconds or more (+infinity included). Throws
+/// std::invalid_argument for NaN or a negative value, naming `what` ("0
+/// (none) or more").
+std::optional<std::chrono::steady_clock::time_point> deadline_after(std::chrono::steady_clock::time_point start,
+                                                                    double seconds, const char* what);
+
+/// The time left before `deadline` (a time point deadline_after made, so
+/// never more than kNoDeadlineSeconds away), never negative.
+std::chrono::nanoseconds time_left(std::chrono::steady_clock::time_point deadline) noexcept;
+
 /// What a search may spend in one run().
 struct Limits {
   std::uint64_t playouts = 800;  ///< completed simulations (visits to the root)
@@ -826,8 +861,23 @@ struct Limits {
   /// and under D2's tree form the nodes each of their paths expanded on
   /// inherited priors, up to one per move of a turn).
   std::uint64_t bytes = std::numeric_limits<std::uint64_t>::max();
-  /// A deadline in wall-clock seconds from the call, checked between batches;
-  /// 0: none. Not deterministic - for tools and match play, never training.
+  /// A deadline in wall-clock seconds from the call (THE DEADLINE, above),
+  /// checked between batches and handed to the rules engine's calls inside a
+  /// batch - the leaves' legality classifications (LegalityOptions::deadline),
+  /// the turn-start checks, the flat form's fallback listing and the lazy
+  /// verifications (c) - so that it reaches the detector (build-log issue 406;
+  /// what it stops is Unknown, never a verdict). Not the flat form's turn
+  /// generator: a generator lives across decisions, and its node budget bounds
+  /// it (a run can overshoot by a generation: about 1.3 s past a 0.5 s
+  /// deadline at issue 406's 18-board Q3 node, 1.5-1.9 s at a 155-board turn
+  /// start). A classification the deadline cut keeps more moves (unknown) than
+  /// an uncut one of the same state - another candidate list, another network
+  /// input: the evaluation cache and the batch keep the two apart (EvalCache).
+  /// A flat node whose fallback listing the deadline cut before it found a
+  /// turn is not stuck: the next run outside a deadline lists it again. 0, or
+  /// kNoDeadlineSeconds or more (+infinity included): none. NaN or a negative
+  /// value: refused (std::invalid_argument). Not deterministic - for tools and
+  /// match play, never training.
   double seconds = 0;
 };
 
@@ -835,7 +885,9 @@ struct Limits {
 enum class StopReason : std::uint8_t {
   Playouts = 0,  ///< Limits::playouts reached
   Evaluations,   ///< Limits::evaluations reached
-  Finished,      ///< the root is terminal or solved (or stuck): nothing to search
+  Finished,      ///< the root is terminal or solved (or stuck): nothing to search -
+                 ///< never a root emptied by a fallback listing the deadline cut
+                 ///< (not stuck: the run stops Deadline, and a later run lists it)
   Exhausted,     ///< no simulation could be made
   Nodes,         ///< Limits::nodes reached
   Memory,        ///< Limits::bytes reached
@@ -902,10 +954,13 @@ struct Evaluation {
   float moves_left = std::numeric_limits<float>::quiet_NaN();
   /// D2's flat form (register D2's head change): one logit per expansion board
   /// (expansion->board_count(), in its order) - the board's "leave it" logit,
-  /// read at the mover's playable boards beside its moves' logits (NaN there:
-  /// none given for that board - SearchParams::leave_share); empty: none at
-  /// all. Read under the flat form only; checked (its size, no infinity)
-  /// under every arm.
+  /// read at the mover's playable boards beside its moves' logits. The network
+  /// gives every board's (D2's flat head: Python's NetworkEvaluator delivers
+  /// them, the cached path alike), as do the built-in evaluators when the
+  /// request asks (EvalRequest::board_logits); an evaluator with no such head
+  /// gives NaN there - none for that board - or leaves it empty - none at all -
+  /// and those boards leave at SearchParams::leave_share. Read under the flat
+  /// form only; checked (its size, no infinity) under every arm.
   std::vector<float> board_logits;
 };
 
@@ -1013,11 +1068,24 @@ bool final_eligible(std::span<const FinalCandidate> children, std::size_t i,
 
 // ---------------------------------------------------------------------------
 // The evaluation cache: evaluations keyed by the state, the moves made in its
-// action (A6) and the refresh epoch (C11, C14, §8.7). It has no lock, like
-// the search (single-threaded, H15): the searches that share one (C14's
-// fresh search per move) must be run one at a time - the caller's duty;
-// nothing checks it.
+// action (A6), the refresh epoch (C11, C14, §8.7) and the candidate list the
+// logits score (candidate_digest: the expansion's moves, in order, and each
+// one's legality). The list is part of the network's input, and one state can
+// have two: run()'s deadline can cut a classification, which then keeps moves
+// an uncut one proves illegal (the review of 2026-11-09, H1) - so an entry is
+// served only to an expansion with the same list, never by the state alone.
+// It has no lock, like the search (single-threaded, H15): the searches that
+// share one (C14's fresh search per move) must be run one at a time - the
+// caller's duty; nothing checks it.
 // ---------------------------------------------------------------------------
+
+/// The candidate list an evaluation's logits score, as one 64-bit digest: the
+/// expansion's moves in order (their squares, timelines, half-turns,
+/// promotion and flags) and each one's legality (Expansion::move_legality:
+/// Legal, or Unknown - left undecided by a budget or a deadline). Two lists
+/// collide with probability about 2^-64; the count is mixed in, so lists of
+/// different lengths never do.
+std::uint64_t candidate_digest(const Expansion& x) noexcept;
 
 class EvalCache {
  public:
@@ -1030,18 +1098,29 @@ class EvalCache {
                      std::size_t max_bytes = std::size_t{256} << 20)
       : capacity_(capacity), max_bytes_(max_bytes) {}
   /// The cached evaluation of `state`, with `moves_made` moves made in its
-  /// action (A6: the network sees the count), at `epoch` - every part compared
-  /// exactly (keys may collide) - or nullptr. `board_logits`: the request asks
-  /// for D2's per-board leave logits (EvalRequest::board_logits) - an entry
-  /// stored from a request that did not ask for them is not served to one
-  /// that does (a cache shared by a flat search and another arm's).
+  /// action (A6: the network sees the count), at `epoch`, of the candidate
+  /// list `candidates` (candidate_digest) - every part compared exactly (keys
+  /// may collide) - or nullptr. `board_logits`: the request asks for D2's
+  /// per-board leave logits (EvalRequest::board_logits) - an entry stored
+  /// from a request that did not ask for them is not served to one that does
+  /// (a cache shared by a flat search and another arm's).
   const Evaluation* find(std::uint64_t key, int moves_made, std::uint64_t epoch, const GameState& state,
-                         bool compare_origins, bool board_logits = false) const;
-  /// Stores it (unless full); `new_boards`: the boards the step into the
-  /// state made - its own, the rest shared with its predecessors;
-  /// `board_logits`: whether its request asked for them (find).
+                         std::uint64_t candidates, bool compare_origins, bool board_logits = false) const;
+  /// Stage E11: the value categorical of an entry for `state` with
+  /// `moves_made` at `epoch`, whatever its candidate list - the time
+  /// manager's overlap signal reads a root child's own categorical, an
+  /// estimate of the position (two entries of one state differ only where a
+  /// deadline cut one's classification) - or nullptr (none, or none with a
+  /// categorical).
+  const std::array<float, kValueBins>* find_value(std::uint64_t key, int moves_made, std::uint64_t epoch,
+                                                  const GameState& state, bool compare_origins) const;
+  /// Stores it (unless full, or held already); `candidates`: its expansion's
+  /// candidate_digest; `new_boards`: the boards the step into the state made -
+  /// its own, the rest shared with its predecessors; `board_logits`: whether
+  /// its request asked for them (find).
   void insert(std::uint64_t key, int moves_made, std::uint64_t epoch, const GameState& state,
-              const Evaluation& evaluation, std::size_t new_boards = 1, bool board_logits = false);
+              std::uint64_t candidates, const Evaluation& evaluation, std::size_t new_boards = 1,
+              bool board_logits = false);
   /// Removes every entry whose state has fewer than `boards` boards, and
   /// returns how many. Every move adds a board and none is ever removed, so
   /// such a state is behind a root of `boards` boards for good: no search
@@ -1066,6 +1145,7 @@ class EvalCache {
     GameState state;
     int moves_made;  // A6: the moves made in the state's action
     std::uint64_t epoch;
+    std::uint64_t candidates;  // the candidate list its logits score (candidate_digest)
     bool board_logits;  // its request asked for D2's per-board leave logits
     Evaluation evaluation;
     std::size_t bytes;  // entry_bytes, as counted on insertion
@@ -1476,11 +1556,17 @@ class Search {
   /// unknown edges (LegalityOptions::deadline). Past it they stop and answer
   /// Unknown - never a verdict (H37): a turn start whose check stopped is not
   /// terminal, a move left unknown is flagged (verified once: a verification
-  /// the deadline stopped leaves the edge unknown). The flat form's turn
-  /// generator is node-budgeted only (generator_nodes; build-log spec issue
-  /// 467). nullopt (the default): none - the search's calls are budgeted by
-  /// nodes alone, as before; a set deadline makes the search depend on the
-  /// clock (never in the synchronous mode's reproducible runs).
+  /// the deadline stopped leaves the edge unknown; a flat node whose fallback
+  /// listing it cut before a turn is re-listed later - issue 406). The flat
+  /// form's turn generator is node-budgeted only (generator_nodes; build-log
+  /// spec issue 467). PERSISTENT: it holds across run() calls and the step
+  /// API's batches until set again; inside run() the rules engine's calls get
+  /// the earlier of it and run()'s own Limits::seconds (THE DEADLINE, above),
+  /// and run() restores it on return - one mechanism (the E11 review's M2). It
+  /// does not stop run() between batches (Limits::seconds does). nullopt (the
+  /// default): none - the search's calls are budgeted by nodes alone, as
+  /// before; a set deadline makes the search depend on the clock (never in the
+  /// synchronous mode's reproducible runs).
   void set_deadline(std::optional<std::chrono::steady_clock::time_point> deadline) noexcept;
   std::optional<std::chrono::steady_clock::time_point> deadline() const noexcept;
   /// E5/E9: the child to play, by index into root_children(). Throws

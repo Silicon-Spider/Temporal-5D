@@ -1674,6 +1674,30 @@ TEST(capi_search_shares_its_cache_and_runs_within_budgets) {
   CHECK_EQ(stop, T5D_STOP_DEADLINE);
   limits.seconds = -1;
   CHECK_EQ(t5d_search_run_limits(timed.get(), T5D_EVALUATOR_RANDOM, 3, &limits, &stop, nullptr), T5D_ERR_ARGUMENT);
+  limits.seconds = std::nan("");
+  CHECK_EQ(t5d_search_run_limits(timed.get(), T5D_EVALUATOR_RANDOM, 3, &limits, &stop, nullptr), T5D_ERR_ARGUMENT);
+  // 1e9 seconds or more, +infinity included, set no deadline (the review of 2026-11-09, M2: they
+  // overflowed the conversion to the clock's ticks into a deadline long passed). The same search
+  // as with 0: deterministic, the random evaluator seeded.
+  for (const double far : {1e10, std::numeric_limits<double>::infinity()}) {
+    const SearchHandle none = new_search(g.get(), p);
+    const SearchHandle beyond = new_search(g.get(), p);
+    t5d_search_limits l0{300, T5D_NO_LIMIT, T5D_NO_LIMIT, T5D_NO_LIMIT, 0.0};
+    t5d_search_limits l1{300, T5D_NO_LIMIT, T5D_NO_LIMIT, T5D_NO_LIMIT, far};
+    int32_t s0 = -1;
+    int32_t s1 = -1;
+    REQUIRE_EQ(t5d_search_run_limits(none.get(), T5D_EVALUATOR_RANDOM, 3, &l0, &s0, nullptr), T5D_OK);
+    REQUIRE_EQ(t5d_search_run_limits(beyond.get(), T5D_EVALUATOR_RANDOM, 3, &l1, &s1, nullptr), T5D_OK);
+    CHECK_EQ(s1, T5D_STOP_PLAYOUTS);
+    CHECK_EQ(s1, s0);
+    t5d_search_summary i0;
+    t5d_search_summary i1;
+    REQUIRE_EQ(t5d_search_info(none.get(), &i0), T5D_OK);
+    REQUIRE_EQ(t5d_search_info(beyond.get(), &i1), T5D_OK);
+    CHECK_EQ(i1.nodes, i0.nodes);
+    CHECK_EQ(i1.unknown_edges, i0.unknown_edges);
+    CHECK_EQ(i1.unknown_verdicts, i0.unknown_verdicts);
+  }
   size_t v = 0;
   REQUIRE_EQ(t5d_search_layout("t5d_search_limits", nullptr, &v), T5D_OK);
   CHECK_EQ(v, sizeof(t5d_search_limits));
@@ -2069,4 +2093,37 @@ TEST(capi_search_time_management_e8_through_the_c_api) {
   REQUIRE_EQ(t5d_search_layout("t5d_time_plan", "reference_bin", &at), T5D_OK);
   CHECK_EQ(at, offsetof(t5d_time_plan, reference_bin));
   CHECK(offsetof(t5d_time_params, difficulty_weighting) > offsetof(t5d_time_params, extend_instability));
+}
+
+TEST(capi_search_a_cleared_deadline_is_cleared) {
+  // M3's test 3 (the C API's set_deadline): in check, with exact legality, a
+  // deadline already passed leaves edges unknown (the premise); one set and
+  // then cleared with 0 leaves none - as does one of 1e9 s or more, which is
+  // none (THE DEADLINE; the E11 review's L2).
+  for (const double second : {-1.0, 0.0, 1e9, std::numeric_limits<double>::infinity()}) {
+    t5d_game* raw = nullptr;
+    const char* boards[] = {"[4k3/8/8/8/8/8/4r3/4K3:0:1:w]"};
+    REQUIRE_EQ(t5d_game_new_from_fen(boards, 1, 8, 8, T5D_PARITY_ODD, T5D_TO_MOVE_WHITE, 0, &raw, nullptr), T5D_OK);
+    const Game g(raw);
+    t5d_search_params sp = quick_params();
+    sp.hunt = 0;
+    sp.settling = 0;
+    sp.legality_checks = T5D_NO_LIMIT;
+    sp.legality_nodes = T5D_NO_LIMIT;
+    const SearchHandle s = new_search(g.get(), sp);
+    if (second < 0) {
+      REQUIRE_EQ(t5d_search_set_deadline(s.get(), 1e-9, nullptr), T5D_OK);  // passed by the run
+    } else {
+      REQUIRE_EQ(t5d_search_set_deadline(s.get(), 5.0, nullptr), T5D_OK);
+      REQUIRE_EQ(t5d_search_set_deadline(s.get(), second, nullptr), T5D_OK);
+    }
+    REQUIRE_EQ(t5d_search_run(s.get(), T5D_EVALUATOR_UNIFORM, 1, 16, nullptr), T5D_OK);
+    t5d_search_summary info{};
+    REQUIRE_EQ(t5d_search_info(s.get(), &info), T5D_OK);
+    if (second < 0) {
+      CHECK(info.unknown_edges > 0);
+    } else {
+      CHECK_EQ(info.unknown_edges, std::uint64_t{0});
+    }
+  }
 }

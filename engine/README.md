@@ -161,6 +161,9 @@ Targets (all in `build/engine`):
 | `t5d-scan6b` | experiment 6b: the scanner's horizon per node budget (see "Stage E5b") |
 | `t5d-play` | the engine plays itself and prints the 5dpgn record (see "Stage E6a") |
 | `t5d-tree-count` | D2's tree form against the ply split on recorded games' turn starts: evaluation counts (`tools/t5d_tree_count.cpp`; docs/MEASUREMENTS.md) |
+| `t5d-solver-check` | the search's solver against df-pn at the turn starts of records, per board-count range (register H41; see "Step 2: H41's cross-checks") |
+| `t5d-proof-records` | the solver's proof lines as 5dpgn records, one per root-to-mate line, for the gate (register H41; see "Step 2: H41's cross-checks") |
+| `t5d-legality-cost` | the legality classification's and E4's cost position by position, and a search's time split (build-log issues 406-408; see "Stage E5a") |
 
 Release builds use -O2; every target builds with `-Wall -Wextra -Wpedantic -Wshadow
 -Wconversion -Wsign-conversion`, warning-free (`--werror` makes that binding). On
@@ -1947,6 +1950,91 @@ fast mode (35-49% in the others), and its branches another 9-17% when they may b
 scanned. `t5d-bench
 --legal-profile` prints every tier's share.
 
+### What exact legality costs, and the deadlines that reach it (build-log issues 406-408)
+
+`LegalityOptions::exact()` sets no node budget, so an exact classification can be slow.
+`t5d-legality-cost` measures it position by position:
+
+```
+t5d-legality-cost [--rules ENCODING] [--budget NODES|exact ...] [--checks N] [--time-limit S]
+                  [--mate] [--search PLAYOUTS [--split ply|tree|flat]
+                  [--search-legality NODES|exact] [--search-seconds S]] [--every K] RECORD ...
+```
+
+At each record's last position - or the position its `LegalityPath` header's moves reach
+(the export notation, `|` for a submission), with `LegalityMoves` naming the moves to
+classify there - or every K-th turn start: the classification under each budget (ascending,
+stopping at the first that leaves nothing unknown; the seconds, the search nodes and how the
+moves were settled), E4's detector under the same budgets (`--mate`), and one search from
+the position with where its time went (`--search`; E10's ladder off). `--time-limit` cuts
+each run at a deadline (Unknown, never a verdict). Single-threaded and indicative. The
+fixtures in `testdata/legality-cost/` are issue 406's positions - each record's
+`LegalityCost` header says where it comes from - and docs/MEASUREMENTS.md has their figures:
+an 18-board position under Q3 that takes 11.9 million nodes (some 19 s) to classify exactly,
+43 of its moves proved illegal by one exhaustive search each; a 192-board position of a
+default-rules game where one move's exact classification ran past 30 minutes; the game's
+next turn start, where its exhaustive verdict ran past 20 minutes. None of it is a budget
+left unhonoured - every move a search applies is a node, the abstract check's steps are
+charged in bulk, a time limit is read every 64 nodes (about 1.5-3.5 µs a node throughout) -
+so what would make it cheaper is algorithmic (build-log issue 407).
+
+**Deadlines.** One mechanism (`t5d/mcts.hpp`, "THE DEADLINE"): a limit in seconds -
+`Limits::seconds`, `PlayParams::max_seconds`, the C API's `t5d_search_limits.seconds` -
+becomes a steady-clock time point once (`deadline_after`: none for 0, and none for 1e9 s or
+more, +infinity included - a double that large overflowed the conversion to the clock's
+ticks into a deadline long past, the review of 2026-11-09's M2; NaN and negatives refused),
+and that time point is what reaches the rules engine. `LegalityOptions::deadline` (none by
+default): each of tier 3's searches gets the time left, and none starts once it has passed -
+the moves they would have settled are Unknown. A search's `Limits::seconds` reaches the rules
+engine's calls inside a batch (see "Stage E6a"), and a game's `PlayParams::max_seconds` - each
+search's `Limits::seconds` being the time left, recomputed before every run - its turn-start
+verdicts (stopped: the game ends `TimeLimit` at that turn start) and the exact verification of
+a chosen move (stopped with no root child known legal: `TimeLimit`, the action under way not
+recorded). After the deadline the play loop runs no search and makes no choice: a decision
+whose search it stopped, or with no child left to choose, ends the game there (M1: a flat
+root whose fallback listing the deadline cut is not stuck - the next run outside a deadline
+lists it - and the loop ends `TimeLimit` instead of throwing "no visited child"); a timed-out
+decision's search work still counts in the game's totals (L5), and so does a fresh search's
+root check in its constructor (L2). What a deadline stops is Unknown, never a verdict (H37). A
+classification it cut keeps moves an uncut one proves illegal: another candidate list, which
+the evaluation cache and the batch keep apart (H1; see "Stage E6a"). What it does not reach
+bounds its overshoot: the flat form's turn generator, under its node budget (about 1.3 s past a
+0.5 s stop at issue 406's 18-board Q3 node; 1.5-1.9 s at a 155-board turn start - the review's
+measurements); a fresh search's root check (the turn-start detector under `mate_nodes`,
+0.02-0.05 s at that node); the proof channel's paths (`place()`'s verification,
+`check_certificate` in `offer` and in Guard - off, H41); the ladder's synchronous jobs
+(node-bounded). It is the C++ play loop's (`t5d-play --max-seconds`): the C API's
+`t5d_search_verify` and its step calls take no deadline, and Python's play loops set none.
+Self-play for training sets no deadline (it is not deterministic): there the turn-start
+verdict and the chosen move's verification stay exact with no node limit, as the documents
+have them (build-log issue 408). Tested (`tests/test_legality_cost.cpp`): a deadline leaves
+moves unknown and never misclassifies one; issue 406's root under the flat form with exact
+legality stops at a 0.5-second deadline (it ran past 17 minutes for 800 playouts); played with
+exact legality and a 1-second safety stop, its game ends with its actions legal - its
+`TimeLimit` coming from the next turn start's verdict (the flat form's root children are
+never unknown, so no verification runs there); the default-rules turn start whose verdict ran
+past 20 minutes ends a game with a 2-second stop in about 2 s (`TimeLimit`, no action); the
+cache and the batch never serve a cut list another list's evaluation, either way round and
+through `play_game`; a cut fallback listing leaves its root re-listable and the game ends
+`TimeLimit` (issue 406's Q3 node, the flat form's defaults, self-play and match play); 1e9 s
+or more, +infinity included, change nothing - the same search, the same game, the same
+`t5d-play` record; a timed-out decision's playouts and verification counted. And each place
+the deadline is handed to, held at a position where the call would otherwise run long (the
+review of 2026-11-09's M3 and M4; before, the search test's root classified in 240 nodes, so
+its deadline never met a costly classification, and the play test allowed 20 s for a 1 s
+stop): the root's own exact classification at the 18-board node (cut inside the first batch,
+under 8 s - 0.8 s measured, 16 s untimed); one 600-second tier-3 search (Unknown at a 0.5 s
+deadline); a far deadline changes nothing (the same digest); the turn-start checks at a
+155-board root's ~190-board children; exact lazy verifications at the 192-board node;
+inherited expansions in the tree form; a deadline that does not outlive its run, nor reach a
+node a re-root builds between runs; a chosen move's exact verification cut with no child
+known legal (`TimeLimit`, no decision, at the deadline), and with one (the most visited
+child known legal played instead); a late turn-start verdict given the time left. Each
+wall-clock bound is at least 5x the time measured unmutated and below the mutant's, both
+numbers in the test. And the tool on every fixture - the 191-board verdict cut by
+`--time-limit` included - its search line saying what the search applied (the legality, the
+lazy verifications' budget, the deadline).
+
 ## Stage E5b: the tactical scanner and t5d-scan6b
 
 The verification layer's brute-force auditor (spec §11.1-§11.3; register H1-H6, H15,
@@ -2445,8 +2533,11 @@ the flat form was built, 2026-10-23, the flat form taking its slot, 1):
   the C API's `t5d_evaluations.board_logits`) give each playable board of the mover's a
   distribution - a log-softmax at the policy temperature (the root's I19 temperature too)
   over its own moves, the non-branching jumps arriving on it (`flat_jumps`: both boards, or
-  the source's only) and leaving it; a board given no leave logit (none, or NaN) leaves at
-  `leave_share` (0.5) and shares the rest among its moves. A turn's **score** is its options'
+  the source's only) and leaving it. The network gives every board's leave logit (D2's flat
+  head - Python's `NetworkEvaluator` delivers them, the cached path alike - so a flat search
+  it evaluates never falls back), and so do the built-in evaluators when asked; a board an
+  evaluator gives none (none, or NaN) leaves at `leave_share` (0.5) and shares the rest among
+  its moves. A turn's **score** is its options'
   log-probabilities summed over the boards (a move the expansion did not offer scores its
   board's lowest option); its **prior** the softmax of the generated turns' scores,
   renormalised as more are generated (`flat_prior` Generated), or exp(score) (Product).
@@ -2680,8 +2771,16 @@ search's root takes it from its caller (`Search(root, params, moves_made)`; the 
 API reads the game handle's). Before A6 the identity held only the turn-start flag,
 and the evaluator was told nothing of it - "a path property the network must not see";
 now `EvalRequest::moves_made` carries the count with the leaf's expansion, and an
-evaluation is a function of the state, the count and the epoch: the evaluation cache
-and a batch's de-duplication match all three (§15.2's purity row). An exact comparison
+evaluation is a function of the state, the count, the epoch and the candidate list the
+network scores: the evaluation cache and a batch's de-duplication match all four (§15.2's
+purity row). The list is the classification's (legal and unknown moves kept, the proved
+illegal dropped), and one state can have two: `run()`'s deadline can cut a classification,
+which then keeps moves an uncut one drops - so each entry and each request carries
+`candidate_digest` (the moves in order and each one's legality; 64 bits, the count mixed in)
+and is served only to the same list. Matched on the state alone, a cached evaluation met an
+expansion with another number of candidates and the search threw "an evaluation has N logits
+for M candidate moves" (the review of 2026-11-09, H1: 15 of 520 timed games, 6 of 120
+`t5d-play --max-seconds` runs). An exact comparison
 follows every key match (a collision gets an unshared node; `key_bits`, a test seam not
 in the C API, cuts the keys short so that the tests meet collisions). Statistics
 live on the edges (path statistics; in a tree they equal the child's). Reaching an
@@ -2757,7 +2856,17 @@ actions, states' own heap, the MCGS table; within 0.75-1.33 of the heap in the t
 and `Limits` carries a node budget and a memory budget besides playouts and evaluations:
 `run` stops between batches when one is reached - or when a wall-clock deadline
 (`Limits::seconds`, for tools and match play, never training) passes - and returns why (`StopReason`, also
-`stats().last_stop`).
+`stats().last_stop`). The deadline also reaches the rules engine's calls inside a batch
+(build-log issue 406): the leaves' legality classifications (`LegalityOptions::deadline`),
+the turn-start checks, the flat form's fallback listing and the lazy verifications, which it
+leaves Unknown - never a verdict, and so it stays in a tree carried to the next decision (a
+node is checked and expanded once); a cut classification is another candidate list, which the
+cache and the batch keep apart (above), and a flat node whose fallback listing it cut before a
+turn was found is not stuck but listed again by the next run outside a deadline (under the
+pull's rollback: a listing that throws leaves it to be listed still; build-log issue 412). The flat
+form's turn generator keeps its node budget alone: a generator lives across decisions (a run
+can overshoot by a generation). 0, or 1e9 s or more (+infinity included), is no deadline; NaN
+and negatives are refused ("THE DEADLINE" in `t5d/mcts.hpp`).
 
 **Determinism** (H15). One thread; with a deterministic evaluator a search is
 bit-reproducible (`digest()` hashes every node's and edge's statistics in a canonical
@@ -2921,9 +3030,12 @@ hold 300 boards on 50 timelines, and with root noise time travel can hold the pr
 back for good - a Standard game reached 509 boards on 110 timelines in 39 actions
 without passing turn 20). `--mate-nodes N` sets the search's terminal-check
 budget; `--max-actions` (checked at turn starts) and `--max-seconds` (checked before
-every decision, and each search's deadline: an action under way when it passes is not
-recorded) are safety stops - the record ends `*`, its Termination header naming the
-stop. Every number is range-checked (never wrapped into a narrower type; reals finite):
+every decision, each search's deadline, and the deadline of the game's turn-start verdicts
+and of a chosen move's exact verification - build-log issue 406: an action under way when
+it passes is not recorded; 1e9 or more is no stop) are safety stops - the record ends `*`,
+its Termination header naming the stop, and is printed (the review of 2026-11-09's H1 and M1
+made a stopped game throw at times, exit 1 with no record). Without `--max-seconds` a turn-start verdict has no limit but memory (H37):
+on large positions it can take many minutes (build-log issue 408). Every number is range-checked (never wrapped into a narrower type; reals finite):
 a bad one exits 2. The rules come through
 the tools' shared option reader (`tools::ruleset_option`), so the default is the
 engine's - Q4 as ruled, R8 - and `--no-moves-after-shift` (Q4's Guide-literal reading)
@@ -3133,7 +3245,14 @@ tree. Under any other ruleset (Q4's Guide-literal reading among them, which puts
 shifts the present last; Q1's consecutive rule, Q3, Q6, Q21's alternative) the turn
 is not decomposed: the node's children are E4's listing of the legal actions
 (`list_legal_actions`, exhaustive, capped), and a capped listing makes the node
-unprovable (AND) or undisprovable (OR) - never a false verdict.
+unprovable (AND) or undisprovable (OR) - never a false verdict. So does Q3's play
+activation, whatever the listing: two orders of one set of moves can reach two states under
+one action key, of which the listing keeps one, so a successor may be missing (build-log
+issue 411: before the review of 2026-11-09 a literal-class prover under Q3 proved a false
+Win(3), which `check_certificate` confirmed, and disproved a true mate in one). Under Q3 the
+prover proves only what needs no listed defender - a mate in one, the defender mated at once
+by E4's verdict - and disproves no attacker turn it listed; `check_certificate` passes a
+defender's listing under Q3 only where its distinct results reach `count_legal_successors`.
 
 **How a turn is completed incrementally, not re-solved per line.** A partial action
 is a node of the tree, so its completions are searched once and shared by every line
@@ -3860,14 +3979,24 @@ proofs whether E4 confirmed them or not (Guard's 48 refutations were, 1 was
 incomplete). They gave the same verdicts.
 
 **The truth's sources since M17.** M17 was measured at `f3d36c9`. The truth's sources
-(`T5D_TRUTH_SOURCES`) have changed three times since, so a build of today's tree has
+(`T5D_TRUTH_SOURCES`) have changed six times since, so a build of today's tree has
 another code signature than M17's:
 - `cc1e224` typed the prover's hash constants (for g++ 13/14);
 - A6's first commit (`7c932d2`) changed which thread's line the prover reports;
 - on 2026-10-22 the shared stores' lock became a `std::mutex` per shard (`ShardLock`:
-  "The stores' lock", under Lazy SMP).
+  "The stores' lock", under Lazy SMP);
+- issue 406's deadlines (2026-11-02) gave the classification `LegalityOptions::deadline`
+  (`legal.hpp`, `legal.cpp`);
+- MT-03's review fixes (2026-11-08) made the prover's TT refuse solved entries (`prover.hpp`,
+  `prover.cpp`; behaviour-preserving);
+- the review of 2026-11-09's H2 (build-log issue 411) stopped the prover drawing a verdict
+  from E4's listing of actions under Q3's play activation and made `check_certificate` hold a
+  Q3 defender listing to `count_legal_successors` (`prover.cpp`, `certificate.cpp`).
 
-None of them changes verdict logic. No proof, disproof, distance or verdict is decided
+None of the first five changes verdict logic; the sixth changes it under Q3 alone (verdicts
+it drew from a listing that can miss a successor are no longer drawn - at the default rulesets
+nothing changes). The nightly gate runs on each such tree before it merges into main (M5 of
+the review of 2026-11-09: the record had said no truth source changed). No proof, disproof, distance or verdict is decided
 differently, and the committed truth's provenance records no signature ("unrecorded").
 M17's verdicts stand on what they were read from: every refutation and mate counted was
 confirmed against E4 alone. What the lock does change is speed. 6b″ ran Guard and Hunt at
@@ -3997,6 +4126,250 @@ old size where it was cut):
   6b″'s counting of unconfirmed proofs and its withholding, the three thresholds and
   range edges off by one, the unreadable label, the provenance's order and record
   checks, Hunt's export refusal) - all 26 caught.
+## Step 2: H41's cross-checks and 6f's TT churn
+
+Register H41 commits the search's in-tree solver to the proof channel and has its proofs
+"cross-checked against df-pn and oracle mate verdicts" (spec §11.1, §15.4); §13.1's 6f asks
+for the proof-export invariant verified under TT churn (§11.3). The proof channel stays
+off: every search below runs with `proof_channel = true` in a test or an offline tool, and
+no proof enters a store (`proof_store` stays refused). Every search below runs with E10's
+ladder off - Hunt, the settling scans and the asset map (`hunt`, `settling`, `asset_map`;
+since main's E10 merged into `lane/engine`, 2026-11-01): the ladder's proofs would enter the
+tree as injected proofs that no solved subtree supports, and the solver's own are what is
+checked; with the map off the searches are those the figures below were taken with.
+
+### The solver's claims, and df-pn (`tools/solver_proofs.hpp`)
+
+The search keeps bounds `[lo, hi]` per node (its mover's view), not a distance. The
+distance is derived from the solved subtree (`solver_claims`, `solver_claim`): a
+checkmate node is Loss(0), a stalemate a Draw; a node proven won is Win(k), k the least
+over its children proven lost for it (a same-mover child - the ply split's and the tree
+form's mid-action nodes - its own Win, an opponent's Loss(j) as j + 1); a node proven lost
+is Loss(k), k the greatest over its children, every one proven lost; a node proven drawn
+is a Draw. Pruned edges, dead ends and edges of unknown legality are read as the search's
+own bound update reads them; a solved node its children do not support throws.
+
+`DfpnChecker` compares each solved TURN START with df-pn in the literal class (seeds All,
+completion Every - exactly "mate within d"), one thread, a node budget, its own stores:
+- Win(k): df-pn at depth k proves Win(j <= k) or answers Unknown, never Disproven;
+- Loss(k): at every successor (E4's exhaustive listing) df-pn at depth k - 1 proves the
+  opponent's mate or answers Unknown, never Disproven; at the node itself it proves
+  nothing (depth k);
+- Draw: df-pn proves nothing at the node, and the opponent's mate is not proven after
+  every action (both at `draw_depth`, 3 - a placeholder, build-log issue 400);
+- every df-pn proof is certified by `check_certificate` (E4 alone).
+Unknown gives no verdict and is counted; answers are memoised by position and depth.
+Game ends (E4's own verdicts, which the search scores) are counted, not asked.
+
+Tests (`tests/test_mcts.cpp`, `tests/test_solver_refs.hpp` for the positions and arms):
+- `mcts_df_pn_checker_flags_each_false_claim` and `mcts_df_pn_checker_memo_keys_on_depth`
+  (since MT-01's review, 2026-11-01: the checker had no seeded-fault test) - the checker fed
+  one false claim per rule (a Win(1) at the mate in two and a Win(3) at the forced draw, both
+  disproven; a Loss(2) and a Draw at the mate in one, where df-pn proves the mover's mate; a
+  Loss(2) at the forced draw, whose successors escape; a Draw at the forced loss, after every
+  action of which the opponent mates), each a contradiction, and three true claims, none; the
+  mate in two asked within 1 (disproven) and within 3 (proven): two searches, then a memo hit.
+- `mcts_solver_agrees_with_df_pn_on_constructed_mates` - the fourteen constructed positions
+  (mate in one, cross-board mate, stale checkmate in one, mate in two, history royal mate,
+  forced draw, forced loss; since the review four losses whose defences lose at different
+  speeds - two Loss(4), two Loss(6) - and three more draws, found by a seeded search over 4x4
+  set-ups and held by df-pn) under both Q4 readings and five arms (the ply split and the flat
+  form, each as a tree and as MCGS's graph; the tree form), 20,000 playouts: every root solved
+  and held to its claim under every arm (Win(1) four times, Win(3), Loss(2), Loss(4) twice,
+  Loss(6) twice, Draw four times); 140 searches, 1,846 claims at solved nodes (604 win, 654
+  loss, 588 draw; 1,022 game ends), 1,224 comparisons, 1,214 decided and agreeing, 10
+  unknown - per rule 599 win, 140 and 315 loss (at the node, at the successors), 80 and 80
+  draw; 684 claims inside the proofs (beyond the roots); 214 df-pn searches (the rest from
+  its memo), 159 proofs, all certified by E4; 50 solved losses whose children are at more
+  than one distance - Loss(k) the longest defence's, which the derivation's greatest decides.
+  Under these workloads (exact legality, batch 8, no verify) no solved Win node holds
+  winning children at two distances - `win_spread` 0, held as a regression guard - but not by
+  construction: `Search::verify` clearing an unknown edge, and MCGS with an unknown edge or
+  batches of 64 or more, can leave one; `mcts_solver_derives_the_least_win_after_verify`
+  holds the derivation's least and its winning edge there (the review of 2026-11-09, L1:
+  build-log issue 409 had called the least never a choice). Inner claims capped at 1.3x the
+  measured (terminal turn starts are not inner claims). About 8 s.
+- `mcts_solver_agrees_with_df_pn_under_every_ruleset` - `two_board_positions` (6 per Q4
+  reading) and `sparse_positions` under all 27 rulesets (1 game, 2 turns), three arms (ply,
+  tree, flat), 250 playouts, df-pn 50,000 nodes: 1,629 searches (640 roots solved), 5,704
+  claims (2,432 win, 2,603 loss, 669 draw; 2,819 game ends), 3,683 comparisons, 3,638
+  decided and agreeing, 45 unknown; 1,707 df-pn searches, 1,473 proofs, every one certified
+  by E4, 203 disproofs (before build-log issue 411 - under Q3 df-pn now draws no verdict from
+  E4's listing - 3,662 decided, 21 unknown, 1,477 proofs, 209 disproofs). About 75 s on a
+  shared machine.
+- `long_mcts_solver_agrees_with_df_pn` - 12 two-board positions per reading and one game of
+  3 turns under every ruleset, five arms, 800 playouts, df-pn 200,000 nodes (certificate
+  checks at most 20,000 defender positions), the search's legality exact within 2,000,000
+  nodes per classification (a move left unknown proves nothing; build-log issue 406): 4,050
+  searches (1,943 roots solved), 59,249 claims (32,846 game ends), 29,967 comparisons,
+  29,219 decided and agreeing, 748 unknown; 7,980 df-pn searches, 7,234 proofs, every one
+  certified by E4, 377 disproofs. 48 minutes on a loaded machine (it prints a line per
+  ruleset; Q3's play activation took 7 minutes, Q20's alternative 20). Re-run on 2026-11-23
+  after build-log issue 411, with the review's L4 floors (52.8 minutes): 29,128 decided and
+  agreeing, 839 unknown, 7,980 df-pn searches, 7,229 proofs, every one certified, 366
+  disproofs - the 91 fewer decided are Q3's, where df-pn no longer draws a verdict from E4's
+  listing.
+Each asserts zero contradictions and zero certificate failures; since the review the three
+of them also floor the decided comparisons of each rule, the distinct df-pn searches and the
+claims inside the proofs, and ceil the undecided and the inner claims (from each one's
+baseline, with margin: `DfpnTally`'s per-rule counts, `rules_summary`; the long twin's since
+the review of 2026-11-09, L4 - it alone combines budgeted legality with MCGS arms).
+
+### t5d-solver-check (the offline mode)
+
+```
+t5d-solver-check [--record-list FILE --record-root DIR] [--every K] [--max-roots N]
+    [--min-boards N] [--max-boards N] [--rules ENC | --no-moves-after-shift]
+    [--split ply|tree|flat ...] [--playouts N] [--mate-nodes N] [--legality-nodes N] [--dfpn-nodes N]
+    [--max-depth D] [--draw-depth D] [--no-certify] [--check-positions N]
+    [--per-position] RECORD ...
+```
+
+6b's roots construction (`sixb_roots`: the records' turn starts, distinct, read as 6b read
+them) over the records given; at each root not terminal and not breaking C4, a search per
+arm (default all three) with the proof channel on - offline, no store - exact legality (or
+exact within `--legality-nodes`, issue 406), the uniform evaluator and E10's ladder off;
+every solved turn start compared as above. One `RANGE` line per
+board-count range (< 50, 50-99, 100-199, 200+), never pooled - its tally and, since the review
+of 2026-11-09 (L8), its per-rule counts and inner claims (`rules_summary`; the test holds
+them to sum to the tally); `CONTRADICTION` and
+`CERTIFICATE` lines for findings; exit status 0 clean, 3 findings, 1 unreadable records,
+2 a bad command line. `tests/test_proof_tools.cpp` runs it on records of random play it
+writes itself (four sparse starts, custom set-ups through `play_record`).
+
+It is meant for 6b's 805 roots (§11.4's "above 100 boards, proofs come only from the
+search's solver"), but those roots' records are the gate corpus's - under
+`oracles/third_party/` through `oracles/corpus/manifest.toml` - and no record list
+outside the oracle tree exists on this machine: that run is not made here (build-log
+issue 401).
+
+### t5d-proof-records (MT-02's engine side)
+
+```
+t5d-proof-records --out DIR [--rules ENC | --no-moves-after-shift] [--every K]
+    [--split ply|tree|flat] [--playouts N] [--mate-nodes N] [--legality-nodes N]
+    [--max-lines N] [--max-records N] [--ladder] RECORD ...
+```
+
+H41's cross-check against the oracles' mate verdicts runs through the gate, one way: the
+engine writes the solver's proof lines as 5dpgn records, the harness compares them - never
+back. At each turn start of the records given (the engine's own: a constructed position as
+a custom set-up with no action, or a game `t5d-play` played from a named variant), a search
+with the proof channel on - offline, no store - exact legality (or within
+`--legality-nodes`, issue 406), the uniform evaluator, E10's ladder off. Where it proves the
+root won,
+`proof_tree` (`tools/solver_proofs.hpp`) reads the proof tree: the winning action at each of
+the attacker's turns (through the mid-action nodes of the ply split and the tree form, or
+the flat form's whole turn), every defence at each of the defender's - distinct by
+successor and checked against E4's exhaustive listing, the same set - and replays every line
+to E4's checkmate. One record per root-to-mate line, by `play_record`, from the input's own
+start (its custom 5DFEN set-up or its named variant) through the actions before the root,
+then the line - 5DFEN records no creators or origins, so a mid-game root is never set up
+from its boards. Headers: `ProofLine`, `ProofRoot` (actions before the root), `ProofClaim`,
+`ProofSplit`, `ProofDefences` (`i:n` - after i actions the defender is to move with n
+defences, each E4's), `ProofRules` (non-default rules), `ProofFrom` (the input's content id,
+never its path). `FILES.tsv` lists each record's SHA-256, size and name. A root whose
+search, claim or proof tree fails - the derivation refusing a solved node its children do
+not support, an invariant - is that root's ERROR, and the run goes on (since MT-02's review,
+2026-11-01; it used to abort without `FILES.tsv`). `--ladder`, a diagnostic, leaves E10's
+ladder on (synchronous, so deterministic): its injected proofs are not the solver's, and the
+roots they reach fail that way. Exit status 0 clean, 3 an error (that root's records not
+written; the others' are, and `FILES.tsv`), 1 unreadable input or unwritable output, 2 a bad
+command line. It reads nothing but its arguments.
+
+The records go to `--out` - a build or scratch directory - never into the gate corpus:
+adding them there (`source = "local"`, licence, notes), `verify` and re-recording the golden
+files on a quiet machine is the harness side, a separate reviewed change, and whether
+engine-generated lines may enter the pinned corpus at all is put to the user (build-log
+issue 405).
+
+`tests/test_proof_tools.cpp`, `proof_records_exe_lines_replay_through_the_gate_to_their_mates`:
+the four constructed mates as custom set-ups and a record of random play under each D2 arm,
+and a `t5d-play` game of Very Small - Open (played with E10's ladder off) under the ply split
+(every other turn start): 33
+records (15 from the named variant's game), every one listed in `FILES.tsv` with its size and
+SHA-256, each replayed by `t5d-gate` (full mode, cap 1,000) to its checkmate with no earlier
+position terminal; at each of the 20 defender turn starts the records name, the proof
+tree's defences are E4's distinct successors (`count_legal_successors`) and the gate's
+`legal_actions` E4's count (`count_legal_actions`); each record's line as long as its claim -
+"win k" counts half-turns, so k actions after `ProofRoot`'s (since the review: the line was
+never compared with the claim); and with `--ladder` on the played game every fourth turn
+start, status 3, the roots that fail reported ("the search or its claims failed"), the run
+finished and `FILES.tsv` written. About 100 s on a loaded machine.
+
+### H19 under TT churn (6f; `tests/test_prover.cpp`, `tests/test_hunt.cpp`)
+
+§13.1 6f: "verify the proof-export invariant under TT churn for Hunt and the settling scans
+(§11.3)". The structural half holds by construction: the prover's transposition table keeps
+estimates only - it refuses a proven (pn 0) or disproven (dn 0) entry, and the prover never
+offers it one (a solved node goes to the stores at once) - so no fact can live only in it,
+whatever its size (`prover_tt_keeps_estimates_never_facts`, through `detail::
+estimate_tt_read_back`; since MT-03's review, 2026-11-01). The tests below check the
+consequence: with `tt_entries` 1 or 2 every fact a search relies on must be in the stores.
+(The review found the churn of the first three tests barely moves their searches - a 1-entry
+TT changed the expansions at 66 of 2,034 random roots, never a status - hence the workloads
+where it carries weight, below.)
+- `prover_proofs_survive_tt_churn_h19` - settling as the scans run it (full df-pn,
+  `prove_only` off, external `MemorySolvedStore` and `DisproofStore`, one thread, by nodes):
+  the constructed mates (both Q4 readings, both classes, depth 3) and `sparse_positions`
+  under every ruleset with both Q4 readings (the default class at depth 3, the literal at
+  depth 1), each at `tt_entries` 1 and 2 against the default TT: the same answer wherever
+  both decide (3,884 roots, no difference); every result held to the references
+  (`Tally`: 4,817 confirmed, 10 beyond them); every proven root's Win in the solved store at
+  return; every disproven root's disproof in the disproof store at the search's class and
+  depth - or, where the search found the side to move lost or stalemated outright, that game
+  fact in the solved store, checked: a Loss the game tree confirms after every successor (the
+  brute-force reference's - under Q3 E4's listing can miss one, issue 411), a stalemate by E4's verdict
+  (6 roots) - and never a Win for it (since the review: any entry but a Win used to stand in
+  unchecked); stored entries checked - a Win or Loss against the game tree, a Draw as E4's
+  stalemate (since the review: the game tree at depth 0 answered Unknown wherever a legal
+  action exists, so a false Draw counted "beyond") - 4,262 of 4,290 confirmed, 28 beyond the
+  game tree's budget, at most 1% asserted (a sample of each store, its first entries;
+  "beyond" is the tree's overflow alone - an Unknown without it, every line within the
+  distance seen and no such result, fails: the review of 2026-11-09, L3); a fresh prover over the same stores answers each
+  decided root with `store_hits >= 1` and `expansions == 0` (3,884); every proof re-asked two
+  half-turns shallower gives no proof beyond that depth (408); a proof's continuation - the
+  attacker to move again after its action and the longest defence - answered from the stores
+  alone (408, "on PV changes"); and a sequence of related roots (consecutive turn starts of
+  random games) sharing one pair of stores under a 1-entry TT, every root it decided re-asked
+  and answered with no expansion (943). The figures since issue 411 (Q3's verdicts no longer
+  drawn from E4's listing; before it 3,966 roots, 4,907 confirmed, 7 facts, 4,278 of 4,290
+  entries, 424 and 951). About 90 s.
+- `prover_churn_takes_effect_where_the_tt_carries_weight` (since the review) - three-turn
+  games' positions under both Q4 readings and the constructed mates, depth 5, both classes,
+  20,000 nodes, a 1-entry TT over external stores against the default: the default TT hits
+  at 74 of 248 roots and the 1-entry TT's expansions differ at 63 (at least 40 asserted),
+  statuses never (174 decided both ways); every export as above; store entries 466, 438
+  confirmed, 28 beyond the game tree (at most 9% asserted, a 1.5x margin).
+- `prover_threads_survive_tt_churn` - M13's 5 threads sharing a 1-entry TT, by nodes and by
+  the clock (20 ms), both classes, depth 3, fresh stores per search: no proof or disproof
+  the references deny (73-74 confirmed, clock-budgeted), the stores as above, and every
+  proof's certificate confirmed by E4 alone (35-36, all of them).
+- `hunt_finds_its_mates_under_tt_churn` - Hunt with `prover.tt_entries = 1`, at 1 and 5
+  threads: the constructed mates found at their distances, lines complete and replaying to
+  E4's checkmate, certificates confirmed; Hunt exposes no store, so its prover is driven
+  through `hunt_prover_options` over test stores (build-log issue 403): the proof in the
+  solved store, the disproof store untouched (prove-only, H43); random play at depth 3
+  (Hunt and its prover agree, deterministic at one thread; no disproof; every mate verified
+  and its certificate confirmed or undecided); the export switch still refused (H23). 34
+  hunts, 15 mates, 15 certificates confirmed. `hunt_churn_takes_effect_where_the_tt_carries_
+  weight` (since the review): Hunt at depth 5 on three-turn games' positions, a 1-entry TT
+  against the default - its expansions differ at 13 of 54 (at least 8 asserted), every mate
+  certified or undecided by E4.
+- `long_` twins of the first, third and fourth (5 turns at 60,000 nodes; 4 turns at
+  100,000; 6 turns at 400,000). The first, re-run on 2026-11-23 after issue 411 and the review
+  of 2026-11-09's L3 (18 minutes): 9,088 roots compared, no difference; 8,932 of 10,464 stored
+  entries confirmed, 1,532 beyond the game tree - its overflow alone: the wider positions leave
+  its budget more often (at most 18% asserted, a 1.2x margin; the twin is deterministic and run
+  by hand); 19 disproven roots stood for by a confirmed fact, each Loss checked after every
+  successor (the brute-force reference; one tree over a whole Q6 or Q17 root of 4-5 boards
+  could not decide two of them, every successor Win(1)); 590 proofs re-asked shallower, 590
+  continuations and 2,286 sequence roots answered from the stores (before issue 411: 9,228
+  roots, 8,952 of 10,478 entries, 1,526 beyond, 610 and 2,296). The third and fourth, as last
+  run (2026-11-08): 68 certificates at 5 threads, all confirmed; 22 Hunt mates, all certified.
+Not yet: the same through E10's settling wrapper (the brief's part 5) - E10 is merged
+(2026-11-01), the test not yet written (issue 402).
+
 ## Stage E10: verification v3 wired into the search (6b″'s adoption table)
 
 The reduced ladder (H10, H14) runs beside the search (`t5d/ladder.hpp`; SearchParams'

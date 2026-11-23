@@ -316,6 +316,8 @@ class EstimateTT {
       slots_[i].data.store(0, std::memory_order_relaxed);
     }
   }
+  // An open node's estimate, or false: a miss - and never a proven (pn 0) or
+  // disproven (dn 0) entry, which save() refuses to keep (H19).
   bool probe(std::uint64_t key, std::uint64_t& pn, std::uint64_t& dn) const {
     const Slot& s = slots_[static_cast<std::size_t>(key) & mask_];
     const std::uint64_t data = s.data.load(std::memory_order_relaxed);
@@ -323,9 +325,10 @@ class EstimateTT {
     if (data == 0 || (check ^ data) != key) return false;
     pn = data & 0x7FFFFFFFu;
     dn = (data >> 31) & 0x7FFFFFFFu;
-    return true;
+    return pn > 0 && dn > 0;
   }
   void save(std::uint64_t key, std::uint64_t pn, std::uint64_t dn) {
+    if (pn == 0 || dn == 0) return;  // a solved node: a fact, which lives in the stores (H19)
     const std::uint64_t cap = 0x7FFFFFFFu;
     const std::uint64_t data =
         std::min(pn, cap) | (std::min(dn, cap) << 31) | (std::uint64_t{1} << 62);
@@ -1239,12 +1242,21 @@ struct Worker {
   };
 
   // E4's listing as a node's children (a turn that does not decompose).
+  // Complete only where it is exhaustive, uncapped - and play does not
+  // activate: under Q3's play activation two orders of one set of moves can
+  // reach two states under one action key, of which the listing keeps one
+  // (t5d/search.hpp's COUNTING), so a successor state may be missing, and
+  // neither a proof (an AND node's) nor a disproof (an OR node's) may be
+  // drawn from it - the route the search takes (mcts.cpp's fallback listing).
+  // Without it a literal-class prover under Q3 proved a false Win(3) that
+  // check_certificate confirmed, and disproved a true mate in one (the review
+  // of 2026-11-09, H2; build-log issue 411, after A-H1's issue 169).
   void list_children(std::uint32_t n, const GameState& s, bool attacker_turn) {
     ++st.listings;
     SearchBudget b = detector_budget();
     const ActionList l = list_legal_actions(s, opt.listing_cap + 1, Detector::Hypercuboid, b);
     if (!account(l.stats)) return;
-    const bool complete = l.stats.exhaustive && !l.reached_cap;
+    const bool complete = l.stats.exhaustive && !l.reached_cap && !s.rules().play_activates;
     const int remaining = tree[n].remaining;
     Seen seen;
     for (const LegalAction& a : l.actions) {
@@ -2246,5 +2258,20 @@ std::optional<BuiltAction> Prover::canonical_completion(const GameState& turn_st
   next.submit(CheckRuling::none());
   return BuiltAction{f->moves, next};
 }
+
+namespace detail {
+
+std::optional<std::pair<std::uint64_t, std::uint64_t>> estimate_tt_read_back(std::uint64_t key, std::uint64_t pn,
+                                                                             std::uint64_t dn) {
+  EstimateTT tt;
+  tt.resize(1);
+  tt.save(key, pn, dn);
+  std::uint64_t p = 0;
+  std::uint64_t d = 0;
+  if (!tt.probe(key, p, d)) return std::nullopt;
+  return std::make_pair(p, d);
+}
+
+}  // namespace detail
 
 }  // namespace t5d

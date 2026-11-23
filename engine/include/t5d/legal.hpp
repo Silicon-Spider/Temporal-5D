@@ -60,8 +60,9 @@
 //     at all, nothing is legal), then a search per move, within the budget.
 //     A legal finish found also proves every move that can lead it.
 //
-// Exact unless a budget stops a search (or the memory ceiling, SearchBudget):
-// then the move is UNKNOWN - never called illegal without proof.
+// Exact unless a budget stops a search (or the memory ceiling, SearchBudget,
+// or a deadline - LegalityOptions::deadline): then the move is UNKNOWN - never
+// called illegal without proof.
 
 #ifndef T5D_LEGAL_HPP
 #define T5D_LEGAL_HPP
@@ -98,10 +99,16 @@ struct LegalityOptions {
   std::size_t max_bytes = kDefaultSearchBytes;
   /// The detector tier 3 searches with.
   Detector detector = Detector::Hypercuboid;
-  /// Stage E11: a wall-clock deadline (the search's hard bound inside a batch,
-  /// t5d/timeman.hpp). Past it no further check is taken and no search
-  /// started, and a search running stops (SearchBudget::max_time): the moves
-  /// not yet settled are Unknown. nullopt (the default): none.
+  /// A wall-clock deadline (none by default; build-log issue 406, stage E11).
+  /// Past it no further check is taken - tier 2's checks, destination scans
+  /// and greedy tries included (E11's gating, kept at the merge of the two
+  /// lanes: a tighter bound, H37-sound) - and no search of tier 3 starts; a
+  /// search running is given the time left (SearchBudget::max_time). The
+  /// moves not yet settled are Unknown. How a caller's own deadline - a
+  /// search's Limits::seconds, a game's PlayParams::max_seconds, the time
+  /// manager's hard bound (Search::set_deadline) - reaches the detector inside
+  /// a classification. Never set by the search's own budgets: a node budget is
+  /// deterministic, a deadline is not.
   std::optional<std::chrono::steady_clock::time_point> deadline;
 
   static LegalityOptions exact() noexcept { return LegalityOptions{}; }

@@ -637,7 +637,8 @@ double WallClock::now() {
   return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-TimedRun run_timed(Search& search, Evaluator& evaluator, TimeManager& tm, const TimeContext& ctx, Clock* clock) {
+TimedRun run_timed(Search& search, Evaluator& evaluator, TimeManager& tm, const TimeContext& ctx, Clock* clock,
+                   double max_seconds) {
   TimedRun out;
   const SearchStats& st = search.stats();
   const std::uint64_t e0 = st.evaluations;
@@ -645,15 +646,28 @@ TimedRun run_timed(Search& search, Evaluator& evaluator, TimeManager& tm, const 
   const std::uint64_t b0 = st.batches;
   out.plan = tm.begin(search, ctx);
   const double t0 = clock != nullptr ? clock->now() : 0.0;
-  // The hard bound inside a batch: the rules engine's calls stop at it.
+  const auto start = std::chrono::steady_clock::now();
+  // The caller's own deadline (max_seconds: a game's safety stop - THE
+  // DEADLINE in t5d/mcts.hpp), given to each slice as its Limits::seconds:
+  // it stops the run between batches and reaches the calls inside them.
+  const std::optional<std::chrono::steady_clock::time_point> cap = deadline_after(start, max_seconds, "max_seconds");
+  // The hard bound inside a batch, on the steady clock: the search's
+  // persistent deadline (the earlier of it and one the caller set), the
+  // caller's restored when the run returns, however it returns (M3). A 0 s
+  // bound is a deadline already passed; one of kNoDeadlineSeconds or more is
+  // none (L2).
+  const std::optional<std::chrono::steady_clock::time_point> held = search.deadline();
   struct DeadlineReset {
     Search& s;
-    ~DeadlineReset() { s.set_deadline(std::nullopt); }
-  } reset{search};
+    std::optional<std::chrono::steady_clock::time_point> held;
+    ~DeadlineReset() { s.set_deadline(held); }
+  } reset{search, held};
+  std::optional<std::chrono::steady_clock::time_point> hard;
   if (clock != nullptr && clock->steady()) {
-    search.set_deadline(std::chrono::steady_clock::now() +
-                        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                            std::chrono::duration<double>(out.plan.hard_seconds)));
+    hard = out.plan.hard_seconds > 0 ? deadline_after(start, out.plan.hard_seconds, "TimePlan::hard_seconds")
+                                     : std::optional(start);
+    if (held && (!hard || *held < *hard)) hard = held;
+    search.set_deadline(hard);
   }
   // One slice: one batch's simulations (Search::run's loop, as a step-API
   // driver runs it for batch_size playouts - the same tree, H15); the
@@ -664,6 +678,14 @@ TimedRun run_timed(Search& search, Evaluator& evaluator, TimeManager& tm, const 
     const double elapsed = clock != nullptr ? clock->now() - t0 : std::numeric_limits<double>::quiet_NaN();
     out.verdict = tm.check(search, elapsed);
     if (out.verdict.stop != TimeStop::None) break;
+    if (cap) slice.seconds = std::max(std::chrono::duration<double>(time_left(*cap)).count(), 1e-6);
+    // The exception (a move needs a visit): until a root child has one, the
+    // slice runs without the hard bound inside it, so that the root's listing
+    // and classification complete (the E11 review's M1: a cut listing would
+    // leave a root with nothing to choose) - the caller's cap still holds.
+    const std::vector<RootChild> children = search.root_children();
+    const bool forced = std::none_of(children.begin(), children.end(), [](const RootChild& c) { return c.visits > 0; });
+    if (hard) search.set_deadline(forced ? held : hard);
     const StopReason r = search.run(evaluator, slice);
     if (r != StopReason::Playouts && r != StopReason::Evaluations) {
       out.search_stop = r;
