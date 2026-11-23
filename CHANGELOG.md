@@ -10,6 +10,262 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-09 - Issue 535's review round: c61ed3a's findings fixed (M1-M3, L1-L13), two issues found beside them
+
+The review of c61ed3a (no HIGH; three MEDIUM, fourteen LOW) and the main loop's decisions
+on it: each finding fixed as decided, one commit per group, each adding its paragraph here
+(L14 was done at the merge of main 05afde5). Most tests are the review's own probes,
+adopted, in the new `engine/tests/test_mcts_faults.cpp`. `docs/BUILD_LOG.md`: issue 600's
+review round, issues 603 and 604, the session log.
+
+- **L8 - a swallowed fault seen.** Every fault loop - the new tests', `test_mcts_memory.cpp`'s
+  and the C API tests' - checks that a fault that fired came out of the call, and
+  `test_alloc.cpp`'s nothrow `operator new` (`std::stable_sort`'s buffer, a failure there
+  absorbed by design) takes no part in the countdown. The review's P7 as a test: every
+  allocation of a gather, a delivery, `advance` and `advance_to` (about 1,500 points at a
+  stride where there are more than 3,000), each on a fresh search, under the ply split (graph
+  and tree), the tree form and the flat form (graph and tree) - 613, 598, 1,135, 5,535 and
+  5,527 faults, each thrown.
+- **L12 - the asset map's allocation failures** (pre-existing; `engine/src/assets.cpp`, its
+  own commit). `assess_board` caught every `std::exception`, `std::bad_alloc` included: the
+  map kept a material-only assessment for the ladder's life and the failure never reached
+  the caller. It rethrows `std::bad_alloc` now, and `lookup` enters the assessment, indexes
+  it (taking the entry back if the index throws) and only then counts it, so
+  `assessments()` stays `boards()`. Tests: every allocation of a refresh of 11 positions'
+  superseded boards, each on a fresh map (`test_assets.cpp`; 1,146 faults, each thrown):
+  `assessments() == boards()` after each, and refreshed again, all 4,826 boards' assets the
+  fault-free map's; P7 with the ladder on as well - Hunt, the settling scans and the asset
+  map, under the ply split and the flat form (614 and 5,535 faults); and every allocation of
+  a delivery after 0 to 8 playouts with the asset map steering the flat form (5,801 faults),
+  each thrown. (H2: the asset map is a prior; no verdict logic changes.)
+- **M1 - a batch whose request list or buffers fail is abandoned.** `gather` filled its
+  request list after its `try`, and `run` sized its evaluation buffers before its own: a
+  failure there (the list grows whenever a gather asks for more leaves than any before it)
+  left the batch waiting - its leaves pending, virtual loss on their paths - and every later
+  `gather` and `run` refused ("a batch is waiting") until `abandon`. Both are inside now.
+  Tests: every allocation of a fresh search's first gather, of its second and of `run(16)`,
+  each on a fresh search - in C++ under the ply split (tree and graph), the tree form and the
+  flat form (tree and graph), 66 to 12,321 allocations a sweep, the search keeping every
+  invariant and the next gather or run going through with no abandon; and through the C API
+  beside a C++ twin given the same fault: `T5D_ERR_MEMORY` exactly where the twin throws, the
+  two bit-identical, then `T5D_OK`. (§15.4: virtual loss released.)
+- **M2, L6, L9, L10 - the review's probes as tests** (no code changes). The review's
+  mutation pass left 24 of its 50 mutants of c61ed3a's code alive under the lane's tests.
+  Now tested: a failed pull leaves its node as it found it - every node's priors and logits
+  bit for bit against an untouched twin (P3; 2,738 faults, 84,521 node comparisons), the
+  root's side tables too (P3b), the pull that runs out of turns while adding some (P3c: tree
+  and graph, the default widening, 3-9 playouts, every complete node against a full
+  listing; 6,185 faults) - and an undone expansion leaves a fresh leaf (P6); the counts the
+  rollbacks restore (P1: classify's counts recounted from the nodes held; P2:
+  `generated_turns` the sum of the nodes' turns, a dropped generator always a pull that
+  threw; P9: key collisions; P13: `asset_boosted_edges`, and `suggestion_edges` with
+  `hunt_suggest` on, raised by no more than the turns a failed pull kept); a root hook that
+  throws after the re-root (P4); a failed re-root with the synchronous ladder on, against a
+  search that never re-rooted (P5). `check_flat_nodes` checks what its comment says - each
+  node's priors the softmax of its turn scores (a sum alone let new turns keep a prior of 0).
+  Found writing P13: issues 603 and 604 (below). (§15.4; H37 for P3c.)
+- **M3 - the graph's table after a re-root.** P8 and P10 as tests: the graph after two
+  re-roots finds its nodes again (no node duplicated), and under 3-bit keys a re-root keeps
+  the first node of an identity in the table. `check_invariants` checks the table - every
+  entry in range, its node's identity, the lowest id of that identity, every node's identity
+  entered, none in a tree - and the re-root test ends its sweep on the re-root that goes
+  through, checking the search that re-rooted. (Register C11, C12.)
+- **L1 - D2's tree form: inherited expansions and a carried root's re-evaluation.**
+  `inherit` set a node's edges and inherited flag before `set_priors`, which allocates; it
+  now puts the node back on a throw, and `expand_node` clears `inherited`. `reevaluate`
+  keeps the node aside (its edges, evaluation, flags and counts, and a root's side tables)
+  and puts it back if setting the priors throws - still inherited, so its next visit
+  evaluates it again; before, it was left evaluated on the inherited priors, never
+  re-evaluated. Tests: every allocation of a carried root's re-evaluation (59 faults: 56
+  leave it inherited, and the next batch makes the search the fault-free twin's; the rest
+  come after a whole re-evaluation, the twin's already); and with the asset map on, every
+  allocation of a gather after one to three playouts, then a re-root onto the child that
+  gather made (2,575 faults, 1,691 re-roots; no node left inherited and not expanded).
+  (Register D2.)
+- **L2 - the principal line's change under a failure.** `backup` counted a simulation's
+  path, then recorded the root's change of most visited child (`note_root_visit`, which
+  allocates) before counting the playout: a failure left `root_visits` ahead of `playouts`
+  for good, the change unrecorded. The playout - and `complete_residual`'s steered count - is
+  counted first now, and `note_root_visit` enters its record (`push_back`, strongly
+  exception-safe) before it sets anything. Test, through the C API: every allocation of a
+  delivery that sets the root's most visited child (Hashed's varied answers on a fresh
+  search; the ply split's 93, the flat form's 2,851): `root_visits` and `playouts` never
+  apart, before and after the next run. (§15.4: visit counts consistent through
+  backup; register D4.)
+- **L3 - a decision's verdicts at a re-root.** `VerificationLadder::take` moved the verdicts
+  out one at a time: an allocation failure destroyed some and left moved-from husks in the
+  ladder, which the search later recorded as proven Hunt verdicts with no first action
+  (pre-existing). It makes room first now (the verdict's move is `noexcept`, asserted).
+  `take_verdicts` records each verdict before its counts and copies; the steps after the take
+  still allocate, and making them non-throwing is not local (it needs the ladder's
+  interface), so the claim is narrowed instead: a failure there loses the verdicts taken and
+  not yet recorded - never a proof, since nothing is offered at a decision's end and the
+  proof channel is off (H41). `t5d/mcts.hpp`, `engine/README.md` and the comments in
+  `reroot` and `advance_to` say so. Test: the synchronous ladder with two verdicts waiting,
+  every allocation of the re-root (16 faults): no husk, every verdict recorded counted, the
+  tree as it was, no proof entered, and the retry goes through (3 of the 16 lose a verdict,
+  as documented). (H23, H41.)
+- **L4, L5 - `advance_action`'s documents, and the counters after an undone expansion.**
+  `advance_action` was documented atomic; under the board-move split and the tree form its
+  re-roots go one decision at a time, so `t5d/capi_search.h`, the Python docstring and
+  `engine/README.md` now give the per-decision caveat and the recovery (read the root back
+  with `t5d_search_root_game` or `root_game()`, and play the rest). `stopped_generators` is
+  put back where the expansion is undone (a first pull); a later pull's stop stays counted
+  (its node keeps the generator's turns), so `fallback_listings <= stopped_generators`, the
+  difference the later pulls' stops - asserted after every fault of the flat form's counting
+  test - and with every generator stopped before its first turn (P2b) both equal the nodes
+  expanded after every fault in the root's first expansion (3,760 allocations; 2,302 faults,
+  dense at both ends). `t5d/mcts.hpp` says `submit_edges`, `illegal_submits`,
+  `unknown_edges` and `uncertainty_missing` count events (a redone expansion counts them
+  again), and the rollback's comment says what it puts back.
+- **L7 - memory accounting and leftover flat state.** `check_invariants` checks each node's
+  memory count, their sum against the search's, and that no unexpanded node holds a flat
+  generator. The ply split's stale count (the edges' room made before the node was counted,
+  so a failure between left it stale) is fixed by counting right after the room is made, and
+  the per-node check holds under every split.
+- **L11 - the flat root's steering tables.** `test_ladder.cpp`'s asset-map checks ported to
+  the flat form (P12): each root child's unsteered prior the plain search's noise-free one,
+  its boost what steering added, only a turn travelling into a board's past boosted, the
+  steered visits the search counts, every visit of a boosted child steered under
+  `SteeredRule::BoostedChild`, none without steering (5 of 10 root children boosted, 169
+  steered visits). (Register I2, I15.)
+- **L13** - the root-noise test sweeps every allocation of the root's first expansion: the
+  flat form's 517, not 528 at a stride past 400 (the 11 the count lost are the nothrow
+  allocations L8 took out of the countdown).
+- **L6, again - the boosted turns recounted.** The survivors' re-run (below) found P13's
+  bound too weak: the review's mutant M28 - the rollback forgetting `asset_boosted_edges` -
+  survived it (the review's own P13 had needed a white-box recount to kill it). A new test
+  recounts through the public interface: with the asset map steering the root alone and
+  every turn generated at once (widening off), the count is exactly the number of root
+  children a boost raised. Every allocation of the delivery that expands a fresh search's
+  root, tree and graph (501 each): count and recount agree after each fault and after
+  searching on (604 disagreements in each under M28).
+- **Found in the round** (`docs/BUILD_LOG.md`): **issue 603** - this machine's compiler,
+  MSYS2's g++ 16.2, assumes by default that `operator new` has no side effects
+  (`-fassume-sane-operators-new-delete`) and merges `std::deque::emplace_back`'s two updates
+  of its end across the chunk allocation that follows a map reallocation: if that allocation
+  throws, the deque's end is left in the freed map (a 40-line reproducer; correct with
+  `-fno-assume-sane-operators-new-delete`; CI's g++ 13 and 14 are unaffected). Found as a heap
+  corruption in the Hunt prover's tree (`~Prover`) when P13's fault fell inside Hunt; the
+  test leaves Hunt's own allocations out, and the build flag is the main loop's to decide.
+  **Issue 604** - a `std::bad_alloc` inside a synchronous ladder job is counted and reported
+  as "a contradiction in the rules code" (`ladder.cpp`); recorded, not changed, since a test
+  of it needs faults inside a job's prover, which risk issue 603's corruption on this machine.
+- **The review's 24 surviving mutants, re-run** on a fresh copy of the fixed tree with the
+  review's runner (its first tier now the round's tests, the expected killer first, stopping
+  at the first kill): all 24 killed, none equivalent. M03 and M04 by P1
+  (`mcts_fault_counts_describe_the_nodes_made`); M05 and M08 by P9
+  (`mcts_fault_key_collisions_count_the_nodes_made` - M05 through `check_invariants`' memory
+  sum, L7); M09 by P7 (`mcts_fault_every_injected_fault_surfaces`); M11, M14, M15 and M16 by P6
+  (`mcts_fault_an_undone_expansion_leaves_a_fresh_leaf` - M11 and M14 through the flat-state and
+  per-node memory checks, L7); M25 by P3c (`..._a_failed_exhausting_pull_leaves_the_node_incomplete`);
+  M26 by P2 (`mcts_fault_flat_turns_counted_and_drops_reported`); M27 by P2b
+  (`mcts_fault_fallback_listings_and_stops_count_the_expansions_kept`); M30 and M31 by P3
+  (`mcts_fault_a_failed_pull_leaves_its_node_as_it_found_it`, through the per-node memory
+  check); M36 and M38 by P12 (`mcts_the_flat_roots_steering_tables`); M41 by P5
+  (`mcts_fault_a_failed_reroot_with_the_ladder_on`); M43, M44 and M47 by P8
+  (`mcts_the_graph_after_a_reroot_finds_its_nodes`, through the table check, M3); M45 by P10
+  (`mcts_a_reroot_under_key_collisions_keeps_the_first_node_in_the_table`); M46 and M50 by P4
+  (`mcts_fault_a_root_hook_that_throws_after_the_reroot`). M28 survived every test of the round
+  as first committed, the groups included (160 of 160), and is killed by the recount test
+  added for it (`mcts_fault_boosted_turns_recounted_at_the_root`). The round's own fixes, each
+  against the lane's pre-round code (`mcts.cpp`, `ladder.cpp` and `assets.cpp` at 334660d): the
+  M1 tests (C++ and C API: "checked while a batch is waiting"), both L1 tests (6 searches
+  unlike the twin; "an inherited node evaluated"), the L2 test (4 deliveries with visits and
+  playouts apart), the L3 test (a husk), P2b (2,223 stops off) and the L12 tests (an asset
+  900 where 20,000 is right; faults swallowed) fail there; P8 and P10, regression tests of
+  c61ed3a's re-root, pass there as they should.
+- **The normal path** is bit-identical to c8a9c49's on the review's three twins, run on the
+  fixed tree: the spec pass's probe (1,850 lines), the correctness pass's trace (9,048 lines,
+  `check_invariants` with its new checks included) and the mutation pass's twin (2,137 lines).
+- *Correction to the entry below:* "each part of the fix, taken out alone, fails one" did not
+  hold - 24 of the review's 50 mutants of c61ed3a survived the lane's tests (all are killed
+  now, above). Also corrected: the re-root's "whole or not at all" did not cover the ladder's
+  verdicts taken and not recorded (L3), `advance_action` was not atomic past its first re-root
+  (L4), and the tree form was not exception-safe (L1).
+- `engine/README.md`: a line of L3's new text reflowed (it began with "- ", which Markdown
+  reads as a list item).
+- Checks: the engine at `--werror` (MinGW g++ 16.2, no warning), `t5d-tests` 718 of 718; each commit
+  of the round built at `--werror` on a copy and its tests run there before it was committed
+  (M3's and L7's with every round test present); ruff clean (CI's invocation, in `python/`);
+  verify ok; gate --tier commit: oracle layer ok, SMOKE TEST - PASSED (41 records compared, 0
+  declined; ftxi 8256 of 8256 and notation 3012 of 3012 reproduced; calibration 1.23x), proof
+  channel DISABLED. `prover.cpp` and `scanner.cpp` are unchanged: no Lazy SMP run is owed.
+
+Spec: none edited or proposed. No part of the spec describes exception safety, these tests,
+or the ladder's and the asset map's bookkeeping. The round brings the build further in line
+with §15.4's invariants under an allocation failure - visit counts consistent through
+backup (L2), virtual loss released (M1), re-rooting (M3, L3) - for D2's flat and tree forms
+(register D2) and the graph (C11, C12); with H37 for the pull that runs out of turns (P3c);
+and with H23/H41: no proof enters the tree or a record while the proof channel is off (L3).
+The asset map stays a prior (H2): no verdict logic changes.
+
+### 2026-11-08 - Issue 535 fixed: D2's flat form, a node's creation and a re-root exception-safe under an allocation failure
+
+The done-means audit found (build-log issue 535, on `lane/audit`) and the verification
+workflow diagnosed it: after a `std::bad_alloc` inside `gather`, a flat-form search used on
+crashed in its turn generator - an out-of-bounds read: `SearchRun::record` grows four tables
+in separate steps, a throw from `Hyper::judge` left the run's results shorter than its
+actions, and the node kept the generator, whose next `collect()` read past the end. Beside
+the crash: the generator had lost the box it was judging, ran on and reported `exhausted()`,
+so its node was marked complete with successors missing (a bound no proof backs, H37); a
+turn was taken in by six separate steps; the flat expansion was marked done before its
+first pull; and `ensure_child` made a node before it linked it, so a fault in the graph's
+table left a node the root does not reach, in every split's graph.
+
+The fix is `engine/src/mcts.cpp`'s alone - the generator (`src/hypercuboid.cpp`), shared
+with the gated mate detectors, is untouched, and `t5d/turngen.hpp` now says what it promises
+after a throw: only its destruction. Made from the workflow's validated diff, re-read and
+re-made. `pull_turns`, on any exception, truncates every per-node array to its size at entry,
+drops the generator (never asked again: the node keeps the turns it had, its children
+incomplete, as after a budget stop), puts back the counts of what it made and counts the
+drop (new `SearchStats::dropped_generators`); `flat_priors` computes everything before it
+sets anything, so it sits inside that rollback. `expand_flat` builds what can fail before
+it touches the node, and undoes the expansion if the first pull throws - the node's flags,
+`k0`, submit logit and turn arrays, the root's side tables and effort label, and the noise
+flag, now set only with the expansion (the validated diff restored it around the first pull
+only, so a throw while the generator was built still lost the root's noise). `ensure_child`
+takes back a node whose table entry threw, with its memory and the counts `make_node` made
+for it (classify's included); `make_node` uncounts a node it failed to make. Found beside
+it and fixed with it (build-log issue 600): a re-root was not exception-safe - a fault
+re-registering the graph's nodes left the table part-filled and the old root's side tables
+and effort label in place (the effort label then indexing the new root's edges out of
+bounds), and one before the swap left `advance_to`'s fresh node unreachable - so `reroot` now
+builds everything, the graph's new table included, before it changes anything, and
+`advance_to` takes its node back if the re-root did not happen; and the ply split's
+`set_priors` marked the root's noise drawn before the expansion was done, so a throw after
+the draw left the root noise-free for the rest of the search - now marked with the
+expansion.
+
+Tests (`test_mcts_memory.cpp`, `test_capi_search.cpp`; each fails or crashes on 2cb107d's
+search, and each part of the fix, taken out alone, fails one): the audit's flat-form test
+with the widened range (443 gather and 619 deliver faults, 804 generators dropped), after
+every fault no node stuck and every node's priors summing to 1; no node marked complete
+with a turn missing, every complete node checked against a full listing of its turns
+(widening off and on, 20,972 nodes checked); every allocation of a gather swept for a node
+the root does not reach, the counts against the nodes held (the ply split and the flat
+form in a tree and a graph, the tree form in a tree); every allocation of a re-root
+(`advance`, and `advance_to` onto a fresh node), against a search that never re-rooted and
+one whose re-root went through; root noise surviving every fault in the root's first
+expansion (both splits); and through the C API, a search reused after `T5D_ERR_MEMORY`
+(gather, advance) staying bit-identical to a C++ twin that keeps every invariant, and
+searching on after faults in delivery. `t5d/mcts.hpp`, `t5d/capi_search.h` and
+`engine/README.md` say the guarantees. `docs/BUILD_LOG.md`: issue 600, and issue 601 (a
+Python test's aggregate split by main's test-shard hook, found running the suite in two
+shards); the Lazy SMP timing rows; the session log. *(Review correction, 2026-11-09: at the
+merge of main 05afde5 the lane's issue 601 gave way to main's own issue 601, which records it
+and its fix, e15f173; issue 535, now on main, is marked resolved by issue 600.)* *(Review
+round, 2026-11-09, the entry above: "each part of the fix, taken out alone, fails one" did
+not hold - 24 of the review's 50 mutants survived; and the re-root's "whole or not at all",
+`advance_action`'s atomicity and "under every split" were narrowed or made true there.)*
+
+Spec: none edited or proposed. The change brings the build in line with §15.4's invariants
+(visit counts consistent through backup, virtual loss released, re-rooting keeping only
+reachable nodes) under an allocation failure - for D2's flat form (register D2), every
+split's graph (C11) and the re-root (C12) - and with H37 (a node's children complete only
+on an exhausted search), which a generator that threw broke; E1's root noise is drawn again
+after a failed expansion. No part of the spec describes exception safety.
+
 ### 2026-11-09 - The network job's three Linux-only failures: t5d-audit built, two tolerances fitted to what they measure
 
 Once sharded (issue 601), the network job ran its whole suite on Linux. It failed the same three
