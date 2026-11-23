@@ -3167,6 +3167,107 @@ the noise-free prior the tempered softmax of known logits, `Game.expand(legal_mo
 a board-move leaf's moves at budget (0, 0) with moves left unknown (a flat-form leaf's
 the same), the error head read by its pinned `NetOutput` field name.
 
+## Gumbel root search (register E12, a prototype, off; `t5d/gumbel.hpp`)
+
+Register E12 (Gumbel root search; spec §8.4 as the 2026-11-15 review edited it, 6g),
+built as an arm of the main search behind `SearchParams::gumbel_root` - **off by
+default**, and off it changes no code path, allocation or digest. It is self-play's, and
+its experiment waits on I21's ranking (the code does not: build-log issue 415). Written
+from Danihelka, Guez, Schrittwieser and Silver, "Policy improvement by planning with
+Gumbel" (ICLR 2022), Karnin, Koren and Somekh, "Almost optimal exploration in
+multi-armed bandits" (ICML 2013: sequential halving) and the Gumbel-top-k trick as those
+papers describe them; no code comes from any engine or library (H29).
+
+**What it does.** At the root's expansion the search draws a Gumbel variate `g` for
+each of the root's open edges (an unpruned edge with a prior - the moves the expansion
+keeps, legal or unknown, and a legal submit) and orders them by `g + ln prior`: the
+order's first `m_eff = min(gumbel_m, gumbel_simulations, open edges)` are a sample of
+`m_eff` moves without replacement from the root's prior. The root's edges are kept in
+that order and its children are the sample (not `k(N)`: widening is the interior's);
+`gumbel_simulations` (n) visits go to them by sequential halving - `ceil(log2 m)` phases,
+each visiting its survivors equally, `max(1, floor(n / (phases x survivors)))` more
+visits each, then keeping the better `ceil(half)` by
+`g + ln prior + sigma(completed q)`; the last two take the visits the rounding leaves
+over, and any playouts past n keep visiting them equally. `sigma(q) = (c_visit +
+max_b N(b)) x c_scale x (q + 1) / 2` (q, the backed-up W - L in the root player's view,
+mapped onto [0, 1] as I21's target maps it); the completed q is the backed-up value of a
+visited candidate and `v_mix` - the root's own evaluation blended with the visited
+candidates' prior-weighted values (Danihelka et al.'s form) - for an unvisited one.
+`Search::choose_gumbel()` is the move to play: the open survivor with the largest score.
+Interior nodes keep PUCT (E1) and widening. The root's logit is `ln` of the search's
+root prior (after the policy temperature, the unknown-move scale and the submit share)
+- with the defaults the network's raw softmax, which is what `train.completed_q` reads.
+
+**The pinned forms** (`gumbel.hpp` documents each): the variate `g = -ln(-ln u)`,
+`u = (floor(x / 2^12) + 0.5) x 2^-52` (52 bits: 53 would round to 1 and give +inf);
+`x = mix64(stream + 0x9E3779B97F4A7C15 x (index + 1))`, counter-based, so an edge's `g`
+depends on the stream and its index in the expansion's order only (moves, then submit)
+and pruning one changes no other's; the stream `mix64(seed ^ mix64(root key) ^
+0x47554D42454C3132)` ("GUMBEL12"), so a record's `search_seed`, `root_key` and candidate
+index give `g` again; `mix64` SplitMix64's finaliser.
+
+**Parameters** (`SearchParams`): `gumbel_root`
+(false), `gumbel_m` (16, the paper's placeholder), `gumbel_simulations` (0: the driver
+gives it - its playout cap less one, the root's own evaluation being a playout),
+`gumbel_c_visit` (50) and `gumbel_c_scale` (1), placeholders as I21's are. `gumbel_m`
+must be 1 or more and the two constants finite and non-negative whether or not the arm
+is on. On, the search refuses (`std::invalid_argument`, naming the parameter):
+`gumbel_simulations` 0; the flat form (its candidates are whole turns, sampled from the
+turn generator - open until 6x, register part K); `root_noise` and a
+`root_policy_temperature` other than 1 (the draw replaces both, I19); `asset_map` and
+`hunt_suggest` (root steering - `asset_map` is on by default, so a Gumbel caller turns
+it off); the proof channel (E9's rules are final selection's). Under the arm,
+`choose()` (match play keeps PUCT and LCB, §8.6), `choose_by_visits` with a temperature
+above 0 (the draw replaces the move temperature; at 0 it is a read of the most visited
+child) and every re-root (`advance`, `advance_to`, `advance_moves`, `advance_action`: a
+Gumbel search is one decision's, C14) are refused with the search unchanged, and so are
+a timed decision (`TimeManager::begin`, which `run_timed` and `t5d_timeman_begin` both
+start with: timed decisions are match play's, and a clock would cut the schedule at an
+arbitrary phase) and the C++ game loop (`play_game`: it chooses by visits or E5/E9 and
+carries its tree; the generator's arm is not built).
+
+**Selection and batches.** A candidate of unknown legality is verified at its first
+visit, as under PUCT; one found illegal (or a dead end) in the first phase gives its
+place to the next open edge of the order - still an exact sample without replacement -
+and in a later phase is only dropped; with every survivor lost, the open edges already
+sampled are searched. A phase's scores need its visits' values, so when every survivor's
+visits for the phase are out but some are not back, selection waits: the batch ends
+short there (`Selected::Wait`, no collision counted) - at most once a phase, and the
+allocation is exactly the schedule's whether batched or synchronous. The halving's own
+buffers are reserved at the draw: selection allocates nothing. The draw is made before
+`set_priors`' commit point and adopted with it by a nothrow move (issue 535's
+discipline): an expansion that throws leaves the root a leaf and the next one draws the
+same sample. MCGS and the tree form are allowed (the root's statistics are its edges').
+`gumbel_view()` gives the tests and tools each root child's `g`, logit, completed q,
+score and whether it is still considered, with `v_mix`, the phase and the schedule.
+
+**Not built: the generator's arm** (part 2): its policy target must be I21's
+completed-Q target, not the visit distribution, and what "the root search value" means
+under halving - which the value targets, resignation, deblundering and the effort label
+read - needs a ruling (build-log issue 415, with its design).
+
+**Tests** (`tests/test_gumbel.cpp`): the
+variate finite at both ends and Gumbel-distributed (mean 0.5772, variance 1.6449 over
+200,000 draws), a pure function of (stream, index); the sample a permutation with the
+closed edges last, and its first two drawn from the softmax without replacement (40,000
+seeds); the schedule's hand counts (16 moves and 200 visits: 3, 6, 12 and 25 more a
+phase, 6 left over) and its laws for m 1 to 64 and n 1 to 2,000; sigma and `v_mix` on
+the numbers the target side pins (0, 31.8, 15.9, 26.5); the halving driven as a bandit - every survivor at the phase's
+target at each halving, the kept half the test's own top half, the final counts eight
+3s, four 9s, two 21s and two 49s; the wait, the first phase's refill and the later
+phases' drop; the choice better than the prior in expectation and, at c_scale 0, a
+sample from it. In the search: off by default and inert (the digest under all three
+splits); each refusal by name, the refused calls changing nothing; the root's children
+the sample in its order with the schedule's visits (and edges outside it unvisited); the
+choice the argmax of the scores recomputed from `root_children()`, `v_mix` recomputed
+from them on a search cut mid-phase; a planted move found for 20 seeds; one simulation a
+sample of the prior (400 seeds, within 5 standard errors); unknown candidates verified
+at their first visit and an illegal one replaced; batched and synchronous alike; the
+tree form and MCGS, interior nodes still widening; a one-move root and a mated one;
+every allocation of the root's first delivery failing in turn, each surfaced, the
+invariants held and the same sample and visits after; a timed decision and the game loop
+refused.
+
 ## Stage E8: the verification layer's redesign (M14, a prototype until 6b′)
 
 6b failed from 50 boards up even after E5c (CHECKPOINT 3, spec §11.1 "The redesign

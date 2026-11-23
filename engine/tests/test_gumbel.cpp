@@ -8,14 +8,30 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <initializer_list>
 #include <limits>
 #include <map>
+#include <memory>
+#include <new>
 #include <numeric>
+#include <span>
 #include <stdexcept>
+#include <string>
+#include <utility>
 #include <vector>
 
+#include "t5d/capi.h"
+#include "t5d/capi_search.h"
 #include "t5d/gumbel.hpp"
+#include "t5d/legal.hpp"
+#include "t5d/mcts.hpp"
+#include "t5d/movegen.hpp"
+#include "t5d/selfplay.hpp"
+#include "t5d/timeman.hpp"
+#include "t5d/variants.hpp"
+#include "test_alloc.hpp"
 #include "test_framework.hpp"
+#include "test_positions.hpp"
 
 using namespace t5d;
 
@@ -402,4 +418,479 @@ TEST(gumbel_choice_improves_on_the_prior_in_expectation) {
       CHECK(std::abs(mean - prior_mean) < 3 * se);
     }
   }
+}
+
+// ---- the search's arm (SearchParams::gumbel_root) -----------------------------------------------------
+
+namespace {
+
+GameState standard() { return variant_start(*find_variant("Standard")); }
+
+// A Gumbel search's parameters: the arm on, what it refuses off, the ladder off.
+mcts::SearchParams gumbel_params(std::uint64_t simulations, std::uint32_t m = 16, std::uint64_t seed = 1) {
+  mcts::SearchParams p;
+  p.expand.square_features = SquareFeatures::None;
+  p.gumbel_root = true;
+  p.gumbel_m = m;
+  p.gumbel_simulations = simulations;
+  p.asset_map = false;
+  p.hunt = false;
+  p.settling = false;
+  p.seed = seed;
+  return p;
+}
+
+std::vector<std::uint32_t> root_visits(const mcts::Search& s) {
+  std::vector<std::uint32_t> v;
+  for (const mcts::RootChild& c : s.root_children()) v.push_back(c.visits);
+  std::sort(v.begin(), v.end());
+  return v;
+}
+
+std::vector<std::uint32_t> multiset(std::initializer_list<std::pair<int, int>> counts) {
+  std::vector<std::uint32_t> v;
+  for (const auto& [visits, n] : counts) v.insert(v.end(), static_cast<std::size_t>(n), static_cast<std::uint32_t>(visits));
+  std::sort(v.begin(), v.end());
+  return v;
+}
+
+// Uniform logits; value +0.8 for White where timeline 0's head board has a White pawn on e4, -0.2
+// otherwise - from the leaf's acting player's view.
+class Planted final : public mcts::Evaluator {
+ public:
+  void evaluate(std::span<const mcts::EvalRequest> batch, std::span<mcts::Evaluation> out) override {
+    for (std::size_t i = 0; i < batch.size(); ++i) {
+      out[i].logits.assign(batch[i].expansion->moves().size(), 0.0f);
+      const Board* head = batch[i].state->multiverse().head(0);
+      const Piece e4 = head != nullptr ? head->at(4, 3) : Piece{};
+      const bool planted = !e4.empty() && e4.kind() == PieceKind::Pawn && e4.colour() == Colour::White;
+      const double white = planted ? 0.8 : -0.2;
+      const double v = batch[i].expansion->acting_player() == Colour::White ? white : -white;
+      out[i].wdl = mcts::wdl_of(v);
+      out[i].value = mcts::two_hot(v);
+    }
+  }
+};
+
+// Fixed unequal logits (by candidate index) and equal values.
+class Tilted final : public mcts::Evaluator {
+ public:
+  void evaluate(std::span<const mcts::EvalRequest> batch, std::span<mcts::Evaluation> out) override {
+    for (std::size_t i = 0; i < batch.size(); ++i) {
+      const std::size_t n = batch[i].expansion->moves().size();
+      out[i].logits.resize(n);
+      for (std::size_t m = 0; m < n; ++m) out[i].logits[m] = -0.15f * static_cast<float>(m % 11);
+      out[i].wdl = mcts::wdl_of(0.0);
+      out[i].value = mcts::two_hot(0.0);
+    }
+  }
+};
+
+}  // namespace
+
+TEST(mcts_gumbel_is_off_by_default_and_inert) {
+  const mcts::SearchParams d{};
+  CHECK(!d.gumbel_root);
+  CHECK_EQ(d.gumbel_m, std::uint32_t{16});
+  CHECK_EQ(d.gumbel_simulations, std::uint64_t{0});
+  CHECK_EQ(d.gumbel_c_visit, 50.0);
+  CHECK_EQ(d.gumbel_c_scale, 1.0);
+  // Off, the other four change nothing: the same tree (digest) under every split.
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Random, 3);
+  for (const mcts::TurnSplit split : {mcts::TurnSplit::BoardMove, mcts::TurnSplit::Tree, mcts::TurnSplit::Flat}) {
+    mcts::SearchParams a;
+    a.expand.square_features = SquareFeatures::None;
+    a.split = split;
+    a.hunt = a.settling = false;
+    mcts::SearchParams b = a;
+    b.gumbel_m = 3;
+    b.gumbel_simulations = 77;
+    b.gumbel_c_visit = 10;
+    b.gumbel_c_scale = 2;
+    mcts::Search x(standard(), a);
+    mcts::Search y(standard(), b);
+    x.run(*ev, mcts::Limits{64});
+    y.run(*ev, mcts::Limits{64});
+    CHECK_EQ(x.digest(), y.digest());
+    CHECK(!y.gumbel_view().drawn);
+    CHECK_THROWS_AS(y.choose_gumbel(), std::invalid_argument);
+  }
+}
+
+TEST(mcts_gumbel_refusals_name_their_parameter) {
+  const auto refused = [](const mcts::SearchParams& p, const char* name) {
+    try {
+      mcts::Search s(standard(), p);
+    } catch (const std::invalid_argument& e) {
+      if (std::string(e.what()).find(name) != std::string::npos) return true;
+      std::fprintf(stderr, "  refused for another reason: %s\n", e.what());
+      return false;
+    }
+    return false;
+  };
+  mcts::SearchParams p = gumbel_params(64);
+  p.split = mcts::TurnSplit::Flat;
+  CHECK(refused(p, "flat form"));
+  p = gumbel_params(64);
+  p.root_noise = true;
+  CHECK(refused(p, "root_noise"));
+  p = gumbel_params(64);
+  p.root_policy_temperature = 1.25;
+  CHECK(refused(p, "root_policy_temperature"));
+  p = gumbel_params(64);
+  p.asset_map = true;  // the default
+  CHECK(refused(p, "asset_map"));
+  p = gumbel_params(64);
+  p.hunt_suggest = true;
+  CHECK(refused(p, "hunt_suggest"));
+  p = gumbel_params(64);
+  p.proof_channel = true;
+  CHECK(refused(p, "proof_channel"));
+  p = gumbel_params(0);
+  CHECK(refused(p, "gumbel_simulations"));
+  p = gumbel_params(64, 0);
+  CHECK(refused(p, "gumbel_m"));
+  for (const double bad : {-1.0, std::nan("")}) {
+    p = gumbel_params(64);
+    p.gumbel_c_visit = bad;
+    CHECK(refused(p, "gumbel_c_visit"));
+    p = gumbel_params(64);
+    p.gumbel_c_scale = bad;
+    CHECK(refused(p, "gumbel_c_scale"));
+  }
+  // On a Gumbel search: match play's choice and the re-roots are refused, nothing changed.
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
+  mcts::Search s(standard(), gumbel_params(63));
+  s.run(*ev, mcts::Limits{64});
+  const std::uint64_t digest = s.digest();
+  CHECK_THROWS_AS(s.choose(), std::invalid_argument);
+  CHECK_THROWS_AS(s.choose_by_visits(0.9, 0.5), std::invalid_argument);
+  CHECK_NOTHROW(s.choose_by_visits(0.0, 0.5));
+  CHECK_THROWS_AS(s.advance(0), std::invalid_argument);
+  const mcts::RootChild c = s.root_children().at(0);
+  GameState next = standard();
+  next.apply(c.moves.at(0));
+  CHECK_THROWS_AS(s.advance_to(next, 1), std::invalid_argument);
+  CHECK_THROWS_AS(s.advance_moves(c.moves), std::invalid_argument);
+  CHECK_THROWS_AS(s.advance_action(c.moves), std::invalid_argument);
+  CHECK_EQ(s.digest(), digest);
+}
+
+TEST(mcts_gumbel_root_children_are_the_sample_and_the_visits_the_schedules) {
+  // The Standard start (20 moves), m 16, n 200 (Limits 201: the root's own evaluation is a
+  // playout): the root's children are the sample - 16 of them, in the order of g + logit - and
+  // their visits the schedule's: 3 for the eight dropped first, 9 for four, 21 for two, and 46 for
+  // the last two plus the 6 the rounding leaves over (49).
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Random, 5);
+  mcts::Search s(standard(), gumbel_params(200));
+  s.run(*ev, mcts::Limits{201});
+  const std::vector<mcts::RootChild> children = s.root_children();
+  CHECK_EQ(children.size(), std::size_t{16});
+  CHECK_EQ(s.node(s.root()).instantiated, std::size_t{16});
+  CHECK_EQ(s.node(s.root()).visits, std::uint32_t{201});
+  const gumbel::RootView view = s.gumbel_view();
+  REQUIRE(view.drawn);
+  REQUIRE_EQ(view.rows.size(), children.size());
+  for (std::size_t i = 0; i + 1 < view.rows.size(); ++i) {
+    CHECK(view.rows[i].g + view.rows[i].logit >= view.rows[i + 1].g + view.rows[i + 1].logit);
+  }
+  CHECK(root_visits(s) == multiset({{3, 8}, {9, 4}, {21, 2}, {49, 2}}));
+  for (std::size_t i = children.size(); i < s.node(s.root()).edge_count; ++i) {  // outside the sample
+    const mcts::EdgeView e = s.edge(s.root(), i);
+    CHECK_EQ(e.visits, std::uint32_t{0});
+    CHECK(e.child == mcts::kNoNode);
+  }
+  CHECK_NOTHROW(s.check_invariants());
+  // The same seed: the same sample and tree; another seed: another sample.
+  mcts::Search again(standard(), gumbel_params(200));
+  again.run(*ev, mcts::Limits{201});
+  CHECK_EQ(again.digest(), s.digest());
+  mcts::Search other(standard(), gumbel_params(200, 16, 2));
+  other.run(*ev, mcts::Limits{201});
+  bool differs = false;
+  const std::vector<mcts::RootChild> b = other.root_children();
+  for (std::size_t i = 0; i < b.size(); ++i) differs = differs || !(b[i].moves == children[i].moves);
+  CHECK(differs);
+  // m 4: two phases, 25 visits for four, then 50 more for two.
+  mcts::Search four(standard(), gumbel_params(200, 4));
+  four.run(*ev, mcts::Limits{201});
+  CHECK(root_visits(four) == multiset({{25, 2}, {75, 2}}));
+}
+
+TEST(mcts_gumbel_choice_is_the_argmax_over_the_survivors) {
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Random, 5);
+  mcts::Search s(standard(), gumbel_params(200));
+  s.run(*ev, mcts::Limits{201});
+  const std::size_t chosen = s.choose_gumbel();
+  const gumbel::RootView view = s.gumbel_view();
+  const std::vector<mcts::RootChild> children = s.root_children();
+  REQUIRE(chosen < view.rows.size());
+  CHECK(view.rows[chosen].considered);
+  std::uint32_t most = 0;
+  for (const mcts::RootChild& c : children) most = std::max(most, c.visits);
+  for (std::size_t i = 0; i < children.size(); ++i) {
+    // The score from root_children() alone (every survivor visited here).
+    if (children[i].visits == 0) continue;
+    const double own = view.rows[i].g + std::log(children[i].prior) + (50.0 + most) * (children[i].q + 1.0) / 2.0;
+    CHECK(std::abs(own - view.rows[i].score) < 1e-9);
+    if (view.rows[i].considered) CHECK(view.rows[chosen].score >= view.rows[i].score);
+  }
+  // Cut at 4 simulations: unvisited survivors take v_mix - mixed_value over root_children() and
+  // the root's own evaluation.
+  mcts::Search cut(standard(), gumbel_params(200));
+  cut.run(*ev, mcts::Limits{5});
+  const gumbel::RootView v = cut.gumbel_view();
+  std::vector<gumbel::Action> actions;
+  for (const mcts::RootChild& c : cut.root_children()) actions.push_back({c.prior, c.visits, 0, c.q, true});
+  const mcts::NodeView root = cut.node(cut.root());
+  CHECK(std::abs(v.v_mix - gumbel::mixed_value(actions, root.eval_mean)) < 1e-12);
+  for (std::size_t i = 0; i < v.rows.size(); ++i) {
+    if (actions[i].visits == 0) CHECK_EQ(v.rows[i].completed_q, v.v_mix);
+  }
+  CHECK_NOTHROW(cut.choose_gumbel());
+}
+
+TEST(mcts_gumbel_finds_a_planted_move) {
+  // e2-e4 is worth +0.8 to White, every other move -0.2; m 32 puts all 20 moves in the sample.
+  Planted ev;
+  const GameState s = standard();
+  for (std::uint64_t seed = 1; seed <= 20; ++seed) {
+    mcts::Search search(s, gumbel_params(200, 32, seed));
+    search.run(ev, mcts::Limits{201});
+    const std::vector<mcts::RootChild> children = search.root_children();
+    const std::size_t chosen = search.choose_gumbel();
+    const Move& m = children.at(chosen).moves.at(0);
+    CHECK_EQ(int{m.from_square}, make_square(4, 1));
+    CHECK_EQ(int{m.to_square}, make_square(4, 3));
+    std::uint32_t most = 0;
+    for (const mcts::RootChild& c : children) most = std::max(most, c.visits);
+    CHECK(children[chosen].visits + 1 >= most);  // a finalist: the last two split 41 visits
+  }
+}
+
+TEST(mcts_gumbel_with_one_simulation_plays_a_sample_of_the_prior) {
+  // n 1: one candidate, the first of the Gumbel order - a sample from the root's prior. Over 400
+  // seeds the three likeliest moves are chosen at their prior's rate, within 5 standard errors.
+  Tilted ev;
+  const GameState s = standard();
+  mcts::SearchParams plain = gumbel_params(1);
+  plain.gumbel_root = false;
+  plain.widening = false;
+  mcts::Search reference(s, plain);
+  reference.run(ev, mcts::Limits{1});
+  std::vector<mcts::RootChild> prior = reference.root_children();  // in prior order
+  REQUIRE(prior.size() >= 3);
+  std::vector<int> chosen(3, 0);
+  constexpr std::uint64_t kSeeds = 400;
+  const double seeds = static_cast<double>(kSeeds);
+  for (std::uint64_t seed = 1; seed <= kSeeds; ++seed) {
+    mcts::Search search(s, gumbel_params(1, 16, seed));
+    search.run(ev, mcts::Limits{2});
+    const std::vector<mcts::RootChild> children = search.root_children();
+    CHECK_EQ(children.size(), std::size_t{1});
+    const Move& m = children.at(search.choose_gumbel()).moves.at(0);
+    for (std::size_t k = 0; k < 3; ++k) chosen[k] += m == prior[k].moves.at(0) ? 1 : 0;
+  }
+  for (std::size_t k = 0; k < 3; ++k) {
+    const double p = prior[k].prior;
+    const double rate = static_cast<double>(chosen[k]) / seeds;
+    const double se = std::sqrt(p * (1 - p) / seeds);
+    std::fprintf(stderr, "  move %zu: prior %.4f, chosen %.4f\n", k, p, rate);
+    CHECK(std::abs(rate - p) < 5 * se);
+  }
+}
+
+TEST(mcts_gumbel_verifies_unknown_candidates_at_their_first_visit) {
+  // The White king in check from a rook on a1 (d1 and f1 illegal, d2, e2, f2 legal), no
+  // legality budget in the expansion: candidates are verified at their first visit, an illegal
+  // one removed and - in the first phase - its place given to the next of the sample. m 2: every
+  // seed visits two legal moves; some seed's sample held an illegal one.
+  const GameState s = t5d_test::game({"[k7/8/8/8/8/8/8/r3K3:0:1:w]"}, BoardSize{8, 8});
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
+  {
+    // The precondition: the fast classification leaves an illegal move Unknown.
+    MoveList listed;
+    generate_moves(s, listed);
+    const std::vector<Move> moves(listed.begin(), listed.end());
+    std::vector<MoveLegality> fast;
+    std::vector<MoveLegality> exact;
+    classify_moves(s, moves, fast, LegalityOptions::budgeted(0, 0));
+    classify_moves(s, moves, exact, LegalityOptions::exact());
+    int hidden = 0;
+    for (std::size_t i = 0; i < moves.size(); ++i) {
+      if (fast[i] == MoveLegality::Unknown && exact[i] == MoveLegality::Illegal) ++hidden;
+    }
+    std::fprintf(stderr, "  %zu moves, %d illegal ones Unknown to the fast classification\n", moves.size(), hidden);
+    REQUIRE(hidden > 0);
+  }
+  int replaced = 0;
+  for (std::uint64_t seed = 1; seed <= 12; ++seed) {
+    mcts::SearchParams p = gumbel_params(20, 2, seed);
+    p.legality = LegalityOptions::budgeted(0, 0);
+    mcts::Search search(s, p);
+    search.run(*ev, mcts::Limits{21});
+    int visited = 0;
+    for (const mcts::RootChild& c : search.root_children()) {
+      if (c.visits == 0) continue;
+      ++visited;
+      std::vector<MoveLegality> out;
+      classify_moves(s, c.moves, out, LegalityOptions::exact());
+      CHECK(out.at(0) == MoveLegality::Legal);
+    }
+    CHECK_EQ(visited, 2);
+    replaced += search.stats().verified_illegal > 0 ? 1 : 0;
+    CHECK_NOTHROW(search.check_invariants());
+  }
+  std::fprintf(stderr, "  %d of 12 samples held an illegal move, replaced\n", replaced);
+  CHECK(replaced >= 1);
+}
+
+TEST(mcts_gumbel_batched_and_synchronous_allocate_alike) {
+  // The schedule is exact either way: the halving waits for its phase's pending visits, ending
+  // the batch short (at most once a phase) - the uniform evaluator, so the choice is the same too.
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
+  mcts::SearchParams batched = gumbel_params(200);
+  batched.batch_size = 8;
+  mcts::SearchParams sync = gumbel_params(200);
+  sync.synchronous = true;
+  mcts::Search a(standard(), batched);
+  mcts::Search b(standard(), sync);
+  a.run(*ev, mcts::Limits{201});
+  b.run(*ev, mcts::Limits{201});
+  CHECK(root_visits(a) == root_visits(b));
+  CHECK(root_visits(a) == multiset({{3, 8}, {9, 4}, {21, 2}, {49, 2}}));
+  CHECK_EQ(a.choose_gumbel(), b.choose_gumbel());
+  CHECK_NOTHROW(a.check_invariants());
+  const mcts::SearchStats& st = a.stats();
+  const std::uint64_t full = (st.evaluations + 7) / 8;
+  std::fprintf(stderr, "  batched: %llu batches for %llu evaluations, %llu collisions\n",
+               static_cast<unsigned long long>(st.batches), static_cast<unsigned long long>(st.evaluations),
+               static_cast<unsigned long long>(st.collisions));
+  CHECK(st.batches >= full);
+  CHECK(st.batches <= full + 4 + st.collisions + 1);  // four phases' waits
+}
+
+TEST(mcts_gumbel_under_the_tree_form_and_the_graph) {
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Random, 9);
+  for (const bool graph : {false, true}) {
+    for (const mcts::TurnSplit split : {mcts::TurnSplit::Tree, mcts::TurnSplit::BoardMove}) {
+      if (!graph && split == mcts::TurnSplit::BoardMove) continue;
+      mcts::SearchParams p = gumbel_params(200);
+      p.split = split;
+      p.graph = graph;
+      mcts::Search s(standard(), p);
+      s.run(*ev, mcts::Limits{201});
+      CHECK(root_visits(s) == multiset({{3, 8}, {9, 4}, {21, 2}, {49, 2}}));
+      CHECK_NOTHROW(s.check_invariants());
+      CHECK(s.choose_gumbel() < s.root_children().size());
+      bool widening = false;  // interior nodes keep PUCT and widening
+      for (mcts::NodeId id = 0; id < s.node_count(); ++id) {
+        const mcts::NodeView n = s.node(id);
+        if (id != s.root() && n.expanded && n.instantiated < n.edge_count) widening = true;
+      }
+      CHECK(widening);
+    }
+  }
+}
+
+TEST(mcts_gumbel_one_move_roots_and_finished_roots) {
+  // One legal move (Kxc2 the only one): m_eff 1, every visit to it, the choice it.
+  const GameState one = t5d_test::game({"[3k/4/B1qK/4:0:1:w]"}, BoardSize{4, 4});
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
+  mcts::Search s(one, gumbel_params(20));
+  s.run(*ev, mcts::Limits{21});
+  REQUIRE_EQ(s.root_children().size(), std::size_t{1});
+  CHECK_EQ(s.root_children()[0].visits, std::uint32_t{20});
+  CHECK_EQ(s.choose_gumbel(), std::size_t{0});
+  // A mated root: no draw, no choice.
+  const GameState mated = t5d_test::game({"[8/8/8/8/8/5k2/6q1/7K:0:1:w]"}, BoardSize{8, 8});
+  mcts::Search done(mated, gumbel_params(20));
+  done.run(*ev, mcts::Limits{21});
+  CHECK(!done.gumbel_view().drawn);
+  CHECK_THROWS_AS(done.choose_gumbel(), std::invalid_argument);
+}
+
+TEST(mcts_gumbel_survives_every_allocation_failure) {
+  // Issue 535's discipline at the draw: every allocation of the root's expansion (the first
+  // delivery, where the sample is drawn) failing in turn - each fault thrown, the invariants
+  // held, and the search run on to its cap draws the same sample and allocates the same visits.
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Random, 4);
+  for (const mcts::TurnSplit split : {mcts::TurnSplit::BoardMove, mcts::TurnSplit::Tree}) {
+    mcts::SearchParams p = gumbel_params(40);
+    p.split = split;
+    const auto first_batch = [&](mcts::Search& s) {
+      const std::size_t n = s.gather(8);
+      REQUIRE_EQ(n, std::size_t{1});
+      std::vector<mcts::Evaluation> out(n);
+      ev->evaluate(s.requests(), out);
+      return out;
+    };
+    mcts::Search twin(standard(), p);
+    twin.run(*ev, mcts::Limits{41});
+    const gumbel::RootView want = twin.gumbel_view();
+    long long total = 0;
+    {
+      mcts::Search s(standard(), p);
+      const std::vector<mcts::Evaluation> out = first_batch(s);
+      constexpr long long kFar = std::numeric_limits<long long>::max();
+      const t5d_test::alloc::FailAfter far(kFar);
+      s.deliver(out);
+      total = kFar - t5d_test::alloc::fail_countdown;
+    }
+    std::size_t faults = 0, differ = 0, late = 0;
+    for (long long k = 0; k < total; ++k) {
+      mcts::Search s(standard(), p);
+      const std::vector<mcts::Evaluation> out = first_batch(s);
+      bool threw = false;
+      bool fired = false;
+      {
+        const t5d_test::alloc::FailAfter fault(k);
+        try {
+          s.deliver(out);
+        } catch (const std::bad_alloc&) {
+          threw = true;
+        }
+        fired = t5d_test::alloc::fail_countdown < 0;
+      }
+      CHECK(threw || !fired);
+      faults += threw ? 1u : 0u;
+      CHECK_NOTHROW(s.check_invariants());
+      // A fault after the expansion leaves the root's visit counted (the delivered leaf stays
+      // delivered): the search is run on to the twin's 41 playouts in all.
+      late += s.node(s.root()).expanded ? 1u : 0u;
+      s.run(*ev, mcts::Limits{41 - s.stats().playouts});
+      const gumbel::RootView got = s.gumbel_view();
+      bool same = got.rows.size() == want.rows.size() && root_visits(s) == root_visits(twin);
+      for (std::size_t i = 0; same && i < got.rows.size(); ++i) same = got.rows[i].g == want.rows[i].g;
+      differ += same ? 0u : 1u;
+    }
+    std::fprintf(stderr, "  %s: %lld allocations in the root's delivery, %zu faults (%zu after the expansion), %zu "
+                 "differ\n",
+                 split == mcts::TurnSplit::Tree ? "tree form" : "board-move", total, faults, late, differ);
+    CHECK(faults > 0);
+    CHECK_EQ(differ, std::size_t{0});
+  }
+}
+
+TEST(mcts_gumbel_is_refused_by_the_timed_decision_and_the_game_loop) {
+  // Register E12: a timed decision is match play's, and the schedule is n simulations - refused at
+  // TimeManager::begin (every timed decision's start: run_timed and t5d_timeman_begin), the
+  // manager left as it was; and the C++ game loop does not drive the arm.
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
+  mcts::Search s(standard(), gumbel_params(63));
+  mcts::TimeManager tm;
+  mcts::TimeContext ctx;
+  ctx.remaining_seconds = 60;
+  CHECK_THROWS_AS(tm.begin(s, ctx), std::invalid_argument);
+  CHECK_THROWS_AS(mcts::run_timed(s, *ev, tm, ctx), std::invalid_argument);
+  CHECK_EQ(s.stats().playouts, std::uint64_t{0});
+  mcts::Search plain(standard(), [] {
+    mcts::SearchParams p = gumbel_params(63);
+    p.gumbel_root = false;
+    return p;
+  }());
+  CHECK_NOTHROW(tm.begin(plain, ctx));  // the same manager, untouched by the refusal
+  mcts::PlayParams pp;
+  pp.search = gumbel_params(63);
+  CHECK_THROWS_AS(mcts::play_game(standard(), *ev, pp), std::invalid_argument);
 }

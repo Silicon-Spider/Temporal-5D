@@ -10,6 +10,31 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - Register E12 (Gumbel root search), part 1: the search's arm, off
+
+`SearchParams::gumbel_root` (off) with `gumbel_m` 16, `gumbel_simulations` (the driver's: its
+playout cap less one), `gumbel_c_visit` 50 and `gumbel_c_scale` 1 (build-log issue 415). On, a
+self-play root takes a Gumbel sample of its open edges at its expansion - drawn before
+`set_priors`' commit point, adopted with it by a nothrow move (issue 535's discipline) - its
+children the sample in its order, and selection at the root is the halving's; a phase waits for
+its pending visits by ending the batch short (`Selected::Wait`); a candidate found illegal in the
+first phase gives its place to the next of the sample; `Search::choose_gumbel()` is the move,
+`gumbel_view()` the tests' table. Refused, each by name: the flat form (part K), root noise and
+a root policy temperature (the draw replaces them), the asset map and Hunt's suggestions (root
+steering; `asset_map` is on by default), the proof channel, n 0; under the arm `choose()`, a
+`choose_by_visits` temperature and every re-root; a timed decision at `TimeManager::begin`
+(`src/timeman.cpp`: where `run_timed` and Python's timed loop both begin) and the C++ game loop
+(`src/selfplay.cpp`). Off, no code path, allocation or digest changes. `engine/tests/
+test_gumbel.cpp` gains twelve search tests (inert off; the refusals; the sample and the
+schedule's visits at the root; the argmax choice and v_mix; a planted move for 20 seeds; one
+simulation a sample of the prior; unknown candidates verified and replaced; batched and
+synchronous alike; the tree form and MCGS; one-move and mated roots; every allocation of the
+root's first delivery failing in turn; the timed decision and the game loop). `engine/README.md`: the
+section "Gumbel root search". Not a truth source.
+
+Spec: §8.4, §8.6, §16, register E12, I19, C14, part K - proposed edits 312-314 (issue 415's
+readings (b)-(l)).
+
 ### 2026-11-24 - Register E12 (Gumbel root search), part 1: the pure parts
 
 Register E12's sample and halving as pure functions, before any search uses them (build-log

@@ -430,6 +430,17 @@ double TimeManager::reference_bin() const noexcept {
 }
 
 TimePlan TimeManager::begin(const Search& search, const TimeContext& ctx) {
+  // Register E12 (Gumbel root search): no timed decision under it - the
+  // halving's schedule is n simulations, which a clock would cut at an
+  // arbitrary phase, and timed decisions are match play's (PUCT and LCB, E5).
+  // Here, not in run_timed alone: every timed decision begins here (run_timed,
+  // and Python's timed loop through t5d_timeman_begin); not in validate: the
+  // parameters do not know the clock. Refused before anything changes.
+  if (search.params().gumbel_root) {
+    throw std::invalid_argument(
+        "TimeManager::begin: no timed decision under a Gumbel root (SearchParams::gumbel_root, register E12) - its "
+        "schedule is n simulations, and timed decisions are match play's");
+  }
   if (!(std::isfinite(ctx.remaining_seconds) && ctx.remaining_seconds > 0)) {
     throw std::invalid_argument("TimeContext::remaining_seconds: positive and finite");
   }

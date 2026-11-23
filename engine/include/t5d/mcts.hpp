@@ -189,6 +189,20 @@
 // uncertainty-weighted backups. E3 (prototype, flag):
 // a per-child variance bonus, multiplicative on U, capped, never below 1.
 //
+// GUMBEL ROOT (register E12, a prototype, OFF: SearchParams::gumbel_root;
+// t5d/gumbel.hpp pins every form; Danihelka et al., ICLR 2022): a self-play
+// search's root takes a Gumbel sample of m of its open edges - its children
+// are the sample, in its order, not k(N) - and spends gumbel_simulations
+// visits on them by sequential halving on g + ln prior + sigma(q); the move
+// to play is choose_gumbel(). It replaces the root's Dirichlet noise and
+// policy temperature (refused with it) and the move temperature (choose_by_
+// visits with one is refused); interior nodes keep PUCT and widening; match
+// play keeps PUCT and LCB (choose() and the re-roots are refused under it).
+// A candidate of unknown legality is verified at its first visit, as under
+// PUCT; one found illegal in the first phase gives its place to the next of
+// the sample. A phase's scores wait for its pending visits: the batch ends
+// short there. Not under the flat form (register part K: open until 6x).
+//
 // VIRTUAL LOSS (§15.4): leaves are gathered in batches; each path carries one
 // virtual visit, counted as a loss, on every node and edge it crosses, and the
 // virtual loss is ALWAYS released - by the backup, by abandon(), or when an
@@ -321,6 +335,7 @@
 
 #include "t5d/assets.hpp"
 #include "t5d/expand.hpp"
+#include "t5d/gumbel.hpp"
 #include "t5d/legal.hpp"
 #include "t5d/move.hpp"
 #include "t5d/prover.hpp"
@@ -660,6 +675,28 @@ struct SearchParams {
   /// self-play value and schedule (KataGo 1.25 -> 1.1; Lc0 1.2-1.45) are the
   /// training generator's, which sets this per search (build-log spec issue 152).
   double root_policy_temperature = 1.0;
+
+  // ---- Register E12: Gumbel root search (Danihelka et al., ICLR 2022) - a prototype, OFF ----
+  /// The root's Gumbel sample and sequential halving (header comment's GUMBEL
+  /// ROOT; t5d/gumbel.hpp). Self-play's, after I21's ranking (§8.4, 6g); off,
+  /// no code path, allocation or digest changes. On, the search refuses: the
+  /// flat form (part K), root_noise and root_policy_temperature != 1 (the draw
+  /// replaces them), asset_map and hunt_suggest (root steering - asset_map is
+  /// on by default: a Gumbel caller turns it off), the proof channel (E9's
+  /// rules are final selection's), gumbel_simulations 0.
+  bool gumbel_root = false;
+  /// m: the sample's size, m_eff = min(m, n, open edges) - the paper's
+  /// min(n, 16): a PLACEHOLDER.
+  std::uint32_t gumbel_m = 16;
+  /// n: the schedule's visits to the root's children - the driver gives it,
+  /// its playout cap less one (the root's own evaluation is a playout); more
+  /// playouts keep visiting the last survivors equally, fewer end mid-schedule
+  /// (the choice among the current survivors).
+  std::uint64_t gumbel_simulations = 0;
+  /// sigma(q) = (c_visit + max_b N(b)) * c_scale * (q + 1) / 2 - the paper's
+  /// 50 and 1, PLACEHOLDERS (spec §16, I21's form).
+  double gumbel_c_visit = 50.0;
+  double gumbel_c_scale = 1.0;
 
   // ---- E2 (provisional): variance-scaled cPUCT, uncertainty-weighted backups ---
   bool variance_scaled_cpuct = false;
@@ -1534,7 +1571,8 @@ class Search {
   /// The root is terminal (its game is over) or solved.
   bool root_terminal() const noexcept;
   bool root_solved() const noexcept;
-  /// The root's instantiated children (in prior order).
+  /// The root's instantiated children (in prior order; under a Gumbel root,
+  /// register E12, the sample's order).
   std::vector<RootChild> root_children() const;
   /// I2's pruning replica: the root's effective cPUCT now - cpuct times E2's
   /// scale at the root (1 with E2 off).
@@ -1603,6 +1641,15 @@ class Search {
   /// uniform number in [0, 1). Throws std::invalid_argument for a temperature
   /// that is not finite or a `random` outside [0, 1].
   std::size_t choose_by_visits(double temperature, double random) const;
+  /// Register E12 (Gumbel root search): the move to play - the open candidate
+  /// with the largest g + ln prior + sigma(completed q), as its index in
+  /// root_children(). Throws std::invalid_argument without gumbel_root, with no
+  /// draw (the root unexpanded, terminal, or with no open edge), while a batch
+  /// waits, or with no candidate left (search again).
+  std::size_t choose_gumbel() const;
+  /// The Gumbel root as tests and tools read it: rows aligned with
+  /// root_children(); drawn false without a draw.
+  gumbel::RootView gumbel_view() const;
   /// Classifies root child `index`'s move under `options` (a move must be known
   /// legal before it is played): Illegal removes the child (its siblings'
   /// priors renormalised; indices of root_children() change), Legal clears its
