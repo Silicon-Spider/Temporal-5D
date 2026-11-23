@@ -10,6 +10,42 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - 6f under TT churn through the wired settling path (MT-03's part 5)
+
+Section 13.1's 6f ("verify the proof-export invariant under TT churn for Hunt and the settling
+scans") for the settling scans as the ladder runs them - build-log spec issue 402's part 5, which
+waited on E10's merge. MT-03 drove the bare prover as a settling scan would; this drives the scan
+itself.
+- **The test** (`ladder_settling_scans_keep_their_facts_in_the_stores_under_tt_churn_6f`, and a
+  `long_` twin): `VerificationLadder`'s settling job - full df-pn (prove_only off), the settling
+  class, one thread by nodes (the synchronous mode), the game's one prover kept across its scans -
+  with its transposition table cut to 1 or 2 entries. On the root: the verdict against the default
+  table's and the references (Tally), H19 at the root (proofs in the solved store, disproofs or a
+  confirmed game fact in the disproof store), certificates confirmed by E4, the root asked again in
+  the next decision answered from the stores with nothing expanded. On the proof's continuation: the
+  attacker's next turn start after its first action and a defence, asked as a PV change's scan,
+  proven from the stores. On sequences of related roots sharing the stores (consecutive turn starts
+  of random games under every ruleset and both Q4 readings, alternately a root's and a PV change's
+  scan), each decided root asked again after the sequence and answered from the stores. A sample of
+  each solved store's facts held to the brute-force game tree (a Draw to E4's stalemate). Measured:
+  2,040 roots under churn - 924 proven, 1,920 disproven, 210 unknown (2,838 confirmed by the references); 1,900 compared with the default table and asked again, all answered from the stores; 404 continuations and 944 sequence roots answered from them; 3,564 store entries held to the game tree, 3,542 confirmed and 22 beyond its budget (33 s); the long twin (5.5 minutes): 4,894 roots - 2,622 proven, 4,284 disproven, 429 unknown; 4,608 compared and answered again; 556 continuations, 2,298 sequence roots; 7,852 store entries, 6,820 confirmed, 1,032 beyond the game tree's budget (13.1%).
+- **An engine change, tests only** (`t5d/ladder.hpp`, `ladder.cpp`):
+  `VerificationLadder::use_settling_stores_for_tests(proofs, disproofs)` builds the game's settling
+  prover over stores the test owns. The prover's own stores list nothing (a
+  `ConcurrentSolvedStore`; the disproof store has no listing at all), so without it no test could
+  hold the scans' stored facts to the game tree. Synchronous mode only (the scans then run on the
+  caller's thread), before the first scan; refused otherwise (tested). Nothing outside the tests
+  calls it, and it is no permanent store (H19, H23).
+- **MT-03's store checks** (`check_store`, `exports_hold`, `loss_confirmed`, `root_class`,
+  `stalemate_now`) moved unchanged from `test_prover.cpp` into `tests/test_store_checks.hpp`, shared
+  by both tests.
+- The build log's done-means audit: the "Proof export under TT churn (6f)" row is green on this
+  lane (the prover's, Hunt's and the wired settling scans' tests); issue 402 records part 5.
+
+Spec: §13.1 6f and §11.3 (H19), register H17 and H1 v3's settling scans - tested as built, nothing
+to propose. A ladder source changed (a tests-only seam): the Lazy SMP test runs at the round's end.
+No proposed edit; no measured figure for MEASUREMENTS (test counts only).
+
 ### 2026-11-24 - Build log: the current state at the search lane's merge
 
 `docs/BUILD_LOG.md`:
