@@ -712,10 +712,10 @@ def test_run_timed_search_gives_up_on_slices_that_make_no_progress(monkeypatch):
     monkeypatch.setattr(evaluator_module, "CStepDriver", StubDriver)
     monkeypatch.setattr(evaluator_module, "start_epoch", lambda *a, **k: None)
     for children, slices in (([], 1), ([types.SimpleNamespace(visits=0)], NO_PROGRESS_SLICES)):
-        with Game.variant("Standard") as g, Search(g, params=search_params(hunt=0, settling=0)) as s, TimeManager() as tm:
-            with monkeypatch.context() as m:
-                m.setattr(Search, "children", lambda self, children=children: list(children))
-                run = run_timed_search(s, UniformEvaluator(), tm, remaining=600.0, model_clock=True)
+        quiet = search_params(hunt=0, settling=0)
+        with Game.variant("Standard") as g, Search(g, params=quiet) as s, TimeManager() as tm, monkeypatch.context() as m:
+            m.setattr(Search, "children", lambda self, children=children: list(children))
+            run = run_timed_search(s, UniformEvaluator(), tm, remaining=600.0, model_clock=True)
         assert run.verdict.stop == T5D_TIME_STOP_SEARCH and run.search_stop == "exhausted" and run.slices == slices
     assert NO_PROGRESS_SLICES == 16  # the placeholder (issue 482), the engine's kNoProgressSlices
 

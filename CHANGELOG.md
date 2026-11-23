@@ -26,7 +26,8 @@ correctness pass's probe: some 200M playouts in 20 s, wall and model clock).
 - Tests: the probe's setup (a flat root, `generator_nodes` 1, a caller's deadline already passed)
   returning on the wall clock and the model clock with no slice run, its deadline restored and the
   decision ended (C++, under a watchdog; Python); Python's guard with stubbed slices, at once for an
-  edgeless root and after 16 slices otherwise.
+  edgeless root and after 16 slices otherwise. (Ruff's two simplifications of this change - an
+  `if` and a `with` merged - were committed after it: the change went in without its ruff run.)
 
 Spec: §8.6's guards (the hard bound and its exceptions as built - issue 482 records the guard; no
 edit: the exceptions' text is S6's). No proposed edit; no measured figure.

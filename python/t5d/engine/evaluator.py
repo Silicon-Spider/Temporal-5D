@@ -903,14 +903,13 @@ def run_timed_search(
             found = search.children()
             edgeless = not found
             forced = not any(c.visits > 0 for c in found)  # the engine's condition (S2)
-            if steady:
-                # The exception (a move needs a visit): until a root child has one, the slice runs
-                # without the hard bound inside it, so that the root's listing and classification
-                # complete (the review's M1) - the engine's run_timed's condition, no root child
-                # visited, and its deadline, the caller's (S2).
-                if forced != lifted:
-                    search.set_deadline_at(held if forced else bound)
-                    lifted = forced
+            # The exception (a move needs a visit): until a root child has one, the slice runs
+            # without the hard bound inside it, so that the root's listing and classification
+            # complete (the review's M1) - the engine's run_timed's condition, no root child
+            # visited, and its deadline, the caller's (S2).
+            if steady and forced != lifted:
+                search.set_deadline_at(held if forced else bound)
+                lifted = forced
             driver = CStepDriver(search, playouts=batch, regs_per_board=regs_per_board, global_regs=global_regs, value_kind=value_kind)
             st = serve(driver, evaluator, batch_size=batch)
             slices += 1
