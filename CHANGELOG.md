@@ -10,6 +10,21 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-23 - Decision 12 ruled: this lane's notes no longer call it awaiting confirmation
+
+The user ruled on 2026-11-23 (reported by the main loop) that the 2026-11-15 spec review's 23
+decisions are rulings the build builds on. The notes this lane wrote for decision 12 (issue 180:
+before the sign-off a proof may raise a prior or extend the search, never stop, prune, select or
+enter a store) said "awaiting the user's confirmation"; they now say "ruled by the user
+2026-11-23 (the review's decision 12, reported by the main loop)" - `engine/include/t5d/timeman.hpp`
+(the header comment and `TimeParams::proof_volatility`), the engine README's disagreement row, and
+issue 180's E11 note and issue 470 in `docs/BUILD_LOG.md`. What the ruling changes in the code is
+the next entry's. No other review decision is cited in this lane's text; the entries below keep
+their wording of the time.
+
+Spec: register H41 and E7, spec §11.4 and §8.6 as the review left them (decision 12); issue 180.
+Nothing proposed; no measured figure.
+
 ### 2026-11-23 - E11/E8 review fixes 5: placeholders placed, the Spec: line completed, the ladder's time and E8's readings stated
 
 Review of the E11/E8 change, phase 1, findings L9-L13 - documents and comments only:

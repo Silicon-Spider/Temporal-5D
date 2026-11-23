@@ -56,9 +56,10 @@
 //           6m); the second source, a proof from Hunt or the settling scans
 //           that contradicts the net, is a HOOK, OFF (proof_volatility) and
 //           refused without the proof channel: whether those proofs may drive
-//           time before the sign-off is open (build-log spec issue 180; the
-//           spec review of 2026-11-15's decision 12 awaits the user's
-//           confirmation - a proof may then extend the search, never stop it).
+//           time before the sign-off was open (build-log spec issue 180),
+//           now ruled by the user 2026-11-23 (the review's decision 12,
+//           reported by the main loop): a proof may extend the search, never
+//           stop it.
 //           Time management reads no proof directly; with hunt_suggest on, a
 //           proven mate reaches the signals through the root's visits (issue
 //           186(a)). With
@@ -304,9 +305,9 @@ struct TimeParams {
   /// THE SECOND VOLATILITY SOURCE - a HOOK, OFF: Hunt's and the settling scans'
   /// proofs read as an alarm where the proven value lies disagreement_margin or
   /// more from the network's. Refused unless the search's proof channel is on
-  /// (issue 180: whether those proofs may drive time before the sign-off is
-  /// open; until it is ruled - decision 12 of the spec review of 2026-11-15
-  /// awaits the user's confirmation - they may not). disagreement_margin: a
+  /// (issue 180: whether those proofs may drive time before the sign-off -
+  /// ruled by the user 2026-11-23, the review's decision 12, reported by the
+  /// main loop: they may extend it, never stop it). disagreement_margin: a
   /// placeholder (issue 470).
   bool proof_volatility = false;
   double disagreement_margin = 0.5;

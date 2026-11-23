@@ -5718,9 +5718,9 @@ superseded or made moot says so; nothing is deleted.
     *E11 (2026-10-24) takes the safe reading until the ruling: the proof source is a hook,
     `TimeParams::proof_volatility`, off, refused by `TimeManager::begin` unless the search's
     proof channel is on, and refused by the Python binding - so time management reads no proof
-    directly (issue 470; through `hunt_suggest`'s priors, issue 186(a)).* *(The spec review of
-    2026-11-15 ruled it - decision 12, awaiting the user's confirmation: before the sign-off a
-    proof may raise a prior or extend the search, never stop, prune, select or enter a store.)*
+    directly (issue 470; through `hunt_suggest`'s priors, issue 186(a)).* *(Issue 180 is
+    ruled by the user 2026-11-23 (the review's decision 12, reported by the main loop): before the sign-off a proof may raise a prior or extend the search, never stop,
+    prune, select or enter a store.)*
 181. **"Full settling scans: df-pn at the root and on PV changes"** (§11.4; register H1; §8.4:
     "the settling scans cover the root and PV changes"). Unstated: what a PV change is, which
     position is scanned, who attacks, and how often. Built (placeholders): at a turn-start
@@ -7137,9 +7137,9 @@ superseded or made moot says so; nothing is deleted.
     `hunt_suggest` on, a proven mate leaves no suggestions and so reaches the signals through the
     root's visits (issue 186(a), off with the flag). `disagreement_margin` 0.5 (a placeholder): a
     proof's value at least this far from the network's is the alarm. (Added at E11's review, L9
-    and L12. Issue 180 was ruled in the spec review of 2026-11-15 - decision 12, awaiting the
-    user's confirmation: before the sign-off a proof may raise a prior or extend the search,
-    never stop, prune, select or enter a store; nothing here changes until it is confirmed.)
+    and L12. Issue 180 is ruled by the user 2026-11-23 (the review's decision 12, reported by the main loop): before the
+    sign-off a proof may raise a prior or extend the search, never stop, prune, select or enter
+    a store.)
 471. **E8's numbers** (§8.6: "an upper quantile (tunable, 6v)"; register E8, a prototype).
     Built (placeholders): `effort_quantile` 0.8; the bin's visits its lower edge 2^k (heads'
     `effort_bin_lower_edges`), so the factor is `2^(k - r)`; `r` this game's running mean of
@@ -9249,3 +9249,11 @@ struck through, where nothing of it is left to apply); the others stand as writt
     spec review's decision 12 on issue 180 noted where this lane's text cites it; E8's readings
     (the extension base, a non-neutral spend, reading A's size) in issues 464, 471, 472 and the
     header. Phase 1 is then done; phase 2 waits for the main loop's word.
+- **2026-11-23 - E11/E8 review fixes, phase 1B** (`lane/search`; the main loop's message after
+  phase 1: three items, each its own commit; issues 477-499 and edits 344-359 remain the block).
+  - (a) The user's ruling of 2026-11-23, reported by the main loop: the 2026-11-15 spec review's
+    23 decisions are rulings the build builds on (reversing one means editing the spec, the
+    register and the code together). This lane's notes that called decision 12 (issue 180)
+    "awaiting the user's confirmation" now say it was ruled by the user 2026-11-23 - in
+    `timeman.hpp`, the engine README, issue 180's E11 note and issue 470. No other review
+    decision is cited in this lane's text.
