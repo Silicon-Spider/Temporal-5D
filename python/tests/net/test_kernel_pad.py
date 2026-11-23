@@ -122,8 +122,9 @@ def _gap(a, b) -> dict[str, float]:
 
 
 def test_the_default_pads_nothing():
-    """Off equals what was there before: 1 is the default (THE PLACEHOLDER OF THIS BUILD - the
-    ruling's 8 is the arm), it reaches the context, and at 1 every width is left as it is."""
+    """Off equals what was there before: 1 is the default (the user's ruling of 2026-11-23 - 8 is
+    for the compiled GPU kernel path), it reaches the context, and at 1 every width is left as it
+    is."""
     cfg = NetConfig()
     assert cfg.attn_pad_multiple == 1
     model = build_model(replace(cfg, n_layers=1), seed=0)

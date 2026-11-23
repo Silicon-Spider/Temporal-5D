@@ -10,6 +10,35 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-23 - Four answers from the user on the code round's questions: the padding's default, the human games, the two token budgets, register E12
+
+The user answered four of the questions the code round put to them (`docs/BUILD_LOG.md`, "Where
+things stand", "The user's answers"). No behaviour changes: comments and docstrings in the code,
+and the record.
+
+- **The padding's default stays 1, and the compiled GPU kernel path sets 8** (spec issue 732). The
+  note for the GPU session is at the field, `NetConfig.attn_pad_multiple`
+  (`python/t5d/net/config.py` and its module docstring), in the field's refusal message, and in
+  `tests/net/test_kernel_pad.py`'s docstring. The user wrote "pad to 89"; it is read as 8, review
+  decision 15's value.
+- **The human games are not training data** (spec issue 734): the user's rule, applied to seeded
+  starts as well as to targets, since a seeded game's start position becomes a training input.
+  `python/t5d/train/seeded.py` says so; nothing read `data/t0database`, so nothing else changes.
+- **Section 7.8's two examples are two budgets** (spec issue 724; the choice left to this
+  session): inference's and training's, both in padded tokens - as built. The constants' comments
+  in `python/t5d/engine/pool.py` and `python/t5d/train/recipe.py` say which example each honours.
+- **Register E10 becomes E12** (spec issue 730; the choice left to this session): the build log's
+  status row is renamed; the register and the spec follow when edit 412 is applied.
+
+**Checks**: `ruff check` and `ruff format --check` clean on the five Python files;
+`tests/net/test_kernel_pad.py`, `tests/train/test_recipe.py` and `tests/engine/test_pool.py`: 67
+passed; `python oracles/harness.py verify` ok. The only executable change is one error message's
+wording, which no test pins.
+
+Spec: sections 7.8, 10.2, 12, 12.8, 14.4, 15.7 and 16; register E10, G11, G12, I22, I23, I24. Not
+edited here: proposed edits 412 (ruled: E12), 414 (the padding's default), 415 (the human games)
+and 416 (the two budgets) in `docs/BUILD_LOG.md`, with spec issues 724, 730, 732 and 734.
+
 ### 2026-11-17 - Cited commit ids follow the history rewrite of 2026-11-16
 
 On 2026-11-16 the user had the history of `main` and of every lane rewritten and pushed again, so

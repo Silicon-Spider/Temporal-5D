@@ -18,9 +18,10 @@ Register G11 (a committed requirement; section 10.2, the 2026-11-15 review) bind
 path to its kernels. Its fourth clause - "query and key widths zero-padded to a multiple of 8"
 (review decision 15, settling BUILD_LOG issue 521) - is ``attn_pad_multiple``: the multiple the
 fused kernel's feature widths are padded to. THE DEFAULT IN THIS BUILD IS 1, the widths as built
-(45 and 33 at the v1's dimensions), not the ruling's 8 (48 and 40): a placeholder until the
-spec's owner rules on it - the padding buys nothing a CPU can measure and moves every counted
-cost (``cost.kernel_widths``; ``docs/MEASUREMENTS.md``, "G11").
+(45 and 33 at the v1's dimensions) - the user's ruling of 2026-11-23 (BUILD_LOG spec issue 732):
+the padding buys nothing a CPU can measure and moves every counted cost (``cost.kernel_widths``;
+``docs/MEASUREMENTS.md``, "G11"). NOTE FOR THE GPU SESSION: on the compiled GPU kernel path set
+``attn_pad_multiple=8`` (48 and 40) - the same ruling.
 
 The build rules (spec section 15.1) decide what else appears here:
 
@@ -354,12 +355,13 @@ class NetConfig:
     #:       an output may differ in its last bits (measured: ``tests/net/test_kernel_pad.py``,
     #:       ``docs/MEASUREMENTS.md``), and the kernel does - and ``cost.count_flops`` counts - the
     #:       padded width's work.
-    #: PLACEHOLDER DEFAULT, not the ruling's value: 1. The ruling says the v1 pads; the gain is the
-    #: compiled GPU kernel's, which nothing in the untrained build can measure (G9, M19), and 8
-    #: would move every counted cost figure of section 15.3. Which of the two the v1's default is
-    #: until GPU time is put to the spec's owner (a spec issue); the arm is built and tested either
-    #: way. The cached path's frozen-board passes build a context of their own (``cache.py``) and
-    #: stay at 1 until that module passes the field on.
+    #: THE DEFAULT IS 1 - ruled by the user on 2026-11-23 (BUILD_LOG spec issue 732): the gain is
+    #: the compiled GPU kernel's, which nothing in the untrained build can measure (G9, M19), and 8
+    #: would move every counted cost figure of section 15.3.
+    #: NOTE FOR THE GPU SESSION (the same ruling): on the compiled GPU kernel path set this to 8 -
+    #: ``NetConfig(attn_pad_multiple=8)``; ``bench.CONFIGS`` has "g11-pad8" and "g11-pad8-sdpa" -
+    #: and re-take the counted costs with it. The cached path's frozen-board passes build a context
+    #: of their own (``cache.py``) and stay at 1 until that module passes the field on.
     attn_pad_multiple: int = 1
 
     # --- F5: normalisation and biases (committed; section 9.3, CHECKPOINT 6; trunk.py) ---
@@ -1039,7 +1041,7 @@ class NetConfig:
         if isinstance(pad, bool) or not isinstance(pad, int) or pad < 1:
             raise ValueError(
                 "attn_pad_multiple must be a positive integer: the multiple the attention kernel's feature widths are "
-                "zero-padded to (1: as built; section 10.2 rules 8 - register G11)"
+                "zero-padded to (1: as built, the default; 8 on the compiled GPU kernel path - register G11)"
             )
         if self.dt_hidden < 1 or self.turn_state_hidden < 1 or not self.dt_scale > 0 or not self.turn_state_scale > 0:
             raise ValueError("dt_hidden, turn_state_hidden, dt_scale and turn_state_scale must be positive")

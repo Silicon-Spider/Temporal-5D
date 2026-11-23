@@ -92,9 +92,12 @@ from .evaluator import Evaluation, Evaluator, PositionLike, policy_source, state
 #: of one forward, ``len(batch) x the longest member``. 65,536 is 22 positions at 44 boards (2,920
 #: tokens each) and 4 at 240 (15,856). Section 7.8's two examples cannot both hold under one linear
 #: budget - "tens of positions in every batch" at 44 boards needs at least 58,400 (twenty), "a
-#: 240-board position alone" less than 31,712 - and this placeholder takes the first: four 240-board
-#: positions share a forward under it. The trainer's own placeholder takes the second
-#: (``train.recipe.PILOT_TOKEN_BUDGET``, 16,000); neither is measured.
+#: 240-board position alone" less than 31,712. Ruled 2026-11-23 (BUILD_LOG spec issue 724; the
+#: user left the choice to the session that built this): the inference budget and the training
+#: budget are two settings, both in padded tokens. This one, inference's, takes the first example
+#: - a forward keeps no activations for a backward pass, so four 240-board positions share one -
+#: and the trainer's takes the second (``train.recipe.PILOT_TOKEN_BUDGET``, 16,000). Neither
+#: figure is measured.
 TOKEN_BUDGET = 65_536
 #: PLACEHOLDER (G12): the most positions in one forward, whatever their size.
 MAX_POSITIONS = 64

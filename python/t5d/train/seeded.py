@@ -26,7 +26,11 @@ and the cap read the position's own turn number, not zero" (section 12).
   ``positions_from_record`` - an earlier self-play game's own I15 record (its ``pgn`` and each
   turn start's action index; no engine call). ``write_positions`` / ``read_positions`` keep a pool
   as JSON Lines. What goes in a pool is the caller's: no default pool, minimum board count or
-  source is built, and nothing here reads a data set. **Re-seeding from a seeded game's own record
+  source is built, and nothing here reads a data set. **The human games are not a source** (the
+  user's ruling of 2026-11-23, BUILD_LOG spec issue 734: they are not to be used as training
+  data, and a seeded game's start position becomes a training input - so the passage quoted above
+  no longer holds for them; ``data/t0database`` stays measurement data, as its README says). A
+  pool is built from the engine's own games. **Re-seeding from a seeded game's own record
   is refused**: its exact start plus its own actions is not one 5dpgn (its ``pgn`` is the
   continuation from the start's 5DFEN boards), and Python cannot cut or re-emit a record's move
   text.
