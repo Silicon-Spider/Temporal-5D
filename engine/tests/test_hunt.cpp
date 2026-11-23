@@ -285,6 +285,7 @@ TEST(hunt_churn_takes_effect_where_the_tt_carries_weight) {
   int positions = 0;
   int differ = 0;
   int mates = 0;
+  int confirmed = 0;
   for (const GameState& s : playable(t5d_test::sparse_positions(RuleOptions{}, 2, 3, 7650))) {
     HuntOptions dflt;
     dflt.prover.depth = 5;
@@ -303,10 +304,13 @@ TEST(hunt_churn_takes_effect_where_the_tt_carries_weight) {
       REQUIRE(r->certificate != nullptr);
       const CertificateCheck c = check_certificate(*r->certificate, s, r->proof.distance);
       CHECK(c.verdict == CertificateVerdict::Confirmed || c.verdict == CertificateVerdict::Undecided);
+      if (c.verdict == CertificateVerdict::Confirmed) ++confirmed;
     }
   }
-  std::fprintf(stderr, "  %d positions: Hunt's expansions differ under a 1-entry TT at %d; %d mates certified\n",
-               positions, differ, mates);
+  // Certified (confirmed by E4) counted apart from undecided (the review of 2026-11-09, L3: the
+  // message called every mate certified).
+  std::fprintf(stderr, "  %d positions: Hunt's expansions differ under a 1-entry TT at %d; %d mates, %d certified\n",
+               positions, differ, mates, confirmed);
   CHECK(differ >= 8);  // 13 of 54 measured (2026-11-01)
 }
 

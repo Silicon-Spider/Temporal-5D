@@ -10,6 +10,56 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-23 - The review of 0e7d2ed..d86f363, the rest: the truth sources recorded, C01 and C14 killed, "beyond" an overflow only, the long MT-01 twin floored, the solver check's per-rule counts shown (M5, L1, L3, L4, L8)
+
+The review's remaining findings (build-log issue 410), fixed as the main loop decided - resumed
+after the account's weekly limit stopped the round on 2026-11-09 (the history rewrite of
+2026-11-16 renumbered every commit; the review's range is 65c14a4..e8cbfa3 in the new ids):
+
+- **M5 - the record.** The build log said issue 406 touched no truth source. legal.hpp,
+  legal.cpp, prover.hpp, prover.cpp - and with issue 411 certificate.cpp - are truth sources
+  (`T5D_TRUTH_SOURCES`): the code signature moved with issue 406, the MT review fixes and issue
+  411, and the nightly gate is owed before the lane merges into main (run on its final tree).
+  `engine/README.md`'s count of the truth's changes since M17 brought up to six.
+- **L1 - C01 and C14 are not equivalent.** `Search::verify` clears an edge's unknown flag
+  without re-deriving its parent, and MCGS with an unknown edge can solve a shared child through
+  another parent: a solved Win node can hold winners at two distances.
+  `mcts_solver_derives_the_least_win_after_verify` (the review's position, its four unknown mates
+  in one verified) holds the derivation's least (win 1, where C01 said win 3) and the winning
+  edge's line as long as its claim (C14's led to a Win(3)); `win_spread` held at 0 in the two
+  default MT-01 tests (their workloads meet neither route); the equivalence claims relabelled
+  (the MT review-fixes entry below, `engine/README.md`, issue 409, the session log).
+- **L3 - "beyond" is the game tree's overflow alone.** `check_store` counted every Unknown as
+  beyond its budget, so a false Win or Loss distance whose refutation the tree saw whole could
+  never fail; now an Unknown without overflow fails. The bounds from the measured counts with a
+  stated margin: the default churn 1% (28 of 4,290), the churn-effect workload 9% (28 of 466),
+  the long twin 18% (1,532 of 10,464, re-run). Hunt's message counts the confirmed certificates apart (42 of 42); issue 402
+  scoped to what the test holds (a sample of each store).
+- **L4 - the long MT-01 twin floored.** M5's floors per rule, on distinct df-pn searches and
+  on inner claims, and an unknown ceiling, at about 70% of its baseline; the default tests'
+  inner claims capped at 1.3x (terminal turn starts are not inner claims - the review's K05).
+  Run once (52.8 minutes, 2026-11-23): 29,128 decided, 839 unknown, 7,980 searched, 24,460
+  inner claims; per rule 24,123 / 1,457 / 3,540 / 4 / 4 - every floor held (the baseline's
+  29,219 decided and 748 unknown predate issue 411).
+- **L8 - t5d-solver-check's per-rule counts shown.** Its RANGE lines print the merged tally's
+  per-rule counts and inner claims (`rules_summary`), and
+  `solver_check_exe_finds_no_contradiction_on_records_of_random_play` holds them to sum to the
+  decided and unknown totals (the merge was dead code - the review's K02).
+- `engine/tests/test_mcts.cpp`, `test_prover.cpp`, `test_hunt.cpp`, `test_proof_tools.cpp`,
+  `engine/tools/t5d_solver_check.cpp`; `engine/README.md`; `docs/BUILD_LOG.md` (issues 402, 409,
+  410; the issue-406 session entry corrected; the session log).
+- Checks: engine 735 of 735 (`--werror`); the long twins once -
+  `long_mcts_solver_agrees_with_df_pn` (L4's floors, 52.8 minutes) and
+  `long_prover_proofs_survive_tt_churn_h19` (L3's bound, 18 minutes), each passed; verify ok
+  (exit 0); gate commit ok (engine differential smoke test passed, baseline 41 compared, 0
+  declined; proof channel DISABLED). Tests and a tool only: the Lazy SMP test and the nightly
+  gate run on the round's final tree.
+
+Spec: §15.4 and register H41 (the solver's cross-check) and §13.1 6f, register H19 (the export
+invariant's checks) - nothing proposed: the tests now hold what edits 300 and 301 say. M5 bears
+on the build's own rule (the nightly when a truth source changes), no spec text. The proof
+channel stays off (H41).
+
 ### 2026-11-09 - The review of 0e7d2ed..d86f363, the deadline's tests: each place the deadline reaches held where the call would run long (M3, M4, L6)
 
 The review (build-log issue 410) found the deadline's places barely tested: the search test's
@@ -204,7 +254,9 @@ issue 409):
   (1% here; 20% in the long twin, 1,526 of 10,478 measured; 10% in the new workload). (Review
   correction, 2026-11-09: under Q3's play activation E4's listing keeps one state per action
   key, so "after each of E4's listed actions" could miss the escape - a false Loss(2) passed;
-  the helper now takes every successor from the brute-force reference, H2, issue 411.)
+  the helper now takes every successor from the brute-force reference, H2, issue 411. And
+  "beyond" counted every Unknown, so it could not fail a false Win or Loss distance whose
+  refutation the game tree saw whole - now the tree's overflow alone, L3.)
 - **M3** - the TT's structural half stated and tested: `EstimateTT` refuses a proven or
   disproven entry (behaviour-preserving: the prover never offered one) and
   `t5d::detail::estimate_tt_read_back` (`t5d/prover.hpp`, tests only) lets
@@ -233,7 +285,10 @@ issue 409):
   C14 and P09 built without `-Werror`): KILLED - C02, C03, C04, C05, C06, C13, P05, P07, P09,
   H02; EQUIVALENT - C01 and C14 (no solved Win node holds more than one winning child: none in
   5,819 searches - the default tests' 1,769 and the long twin's 4,050 - MCGS arms included)
-  and C07 (the memo's slot key already hashes the depth).
+  and C07 (the memo's slot key already hashes the depth). (Review correction, 2026-11-09, L1:
+  C01 and C14 are survivors of the suite's workloads, not equivalents - Search::verify and
+  MCGS with an unknown edge can leave a solved Win node with winners at two distances; a
+  verify-route test kills both since. C07 stands.)
 - Docs corrected - edit 301, the H19 and H17 rows, `engine/README.md` (step 2), and the
   MT entries below ("Review correction" notes where their claims change).
 - Linux: `DfpnChecker::ask`'s memo key multiplied by an unsigned long long literal beside a

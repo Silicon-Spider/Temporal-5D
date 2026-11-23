@@ -5808,11 +5808,13 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     compare calls gained a rule argument): KILLED - C02 (Loss(k) the least: the constructed
     test's claims), C03, C04, C05, C06 (the checker's seeded faults), C13 (the line against the
     claim), P05 (the store checks, four tests), P07 (the shallow re-ask; the old store test
-    also kills it), P09 (both churn-effect tests), H02 (Hunt's churn-effect test). EQUIVALENT -
-    C01 and C14: no solved Win node holds more than one winning child (the solver solves a node
-    at its first, and selection never enters a solved node; none in 5,819 searches - the
-    default tests' 1,769 and the long twin's 4,050 - MCGS arms included), so "the least over
-    the winning children" and "the first winning edge" are that one child; C07: the memo's slot
+    also kills it), P09 (both churn-effect tests), H02 (Hunt's churn-effect test). SURVIVED -
+    C01 and C14, not killed by the suite's workloads (exact legality, batch 8, no verify: no
+    solved Win node held more than one winning child in 5,819 searches). First called
+    EQUIVALENT; the review of 2026-11-09 (L1, issue 410) showed it is not so by construction -
+    Search::verify clearing an unknown edge, and MCGS with an unknown edge or batches of 64 or
+    more, leave a solved Win node with winners at two distances - and the test it wrote kills
+    both (mcts_solver_derives_the_least_win_after_verify); C07: the memo's slot
     key already hashes the depth (zobrist x 1315423911 + depth), so the in-slot depth
     comparison guards only a collision between two (position, depth) keys - the memo test pins
     the depth-keyed answer. Docs corrected: edit 301, the H19 and H17 rows, engine/README.md
@@ -5858,6 +5860,18 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
       wall-clock bound at least 5x the time measured unmutated and below the mutant's; the flat
       play test renamed and its bound 10 s; t5d-legality-cost's search line saying what it
       applied, its outputs behind MEASUREMENTS' rows asserted, every fixture run.
+    - **The rest (M5, L1, L3, L4, L8)**, one commit. (M5) The record corrected: legal.hpp,
+      legal.cpp, prover.hpp, prover.cpp and certificate.cpp are truth sources - the code
+      signature moved with issue 406, the MT review fixes and issue 411, and the nightly gate
+      is owed; README's count of changes since M17 brought up to six. (L1) C01 and C14
+      relabelled - survivors of the suite's workloads, not equivalents - and killed by a
+      verify-route test; win_spread held at 0 in the two default MT-01 tests. (L3) check_store
+      counts "beyond" only where the game tree overflowed - an Unknown without overflow is a
+      refutation, a failure; the three bounds set from the measured counts with a stated
+      margin; Hunt's message counts the confirmed certificates apart; issue 402 scoped. (L4)
+      The long MT-01 twin floored per rule and on searches and inner claims, its unknown
+      ceiled; the default tests' inner claims capped. (L8) t5d-solver-check's RANGE lines print
+      the merged per-rule counts and inner claims, which the test holds to sum to the tally.
 411. **Under Q3's play activation E4's listing keeps one successor state per action key, and the
     verification layer took it for every successor - a false proof that check_certificate
     confirmed** (§11.1, §11.3, §13.1 6f; register H19, H37, H41; issues 169 - the search's half,
@@ -5907,7 +5921,9 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     disproof as a stronger game fact in the solved store - the side to move proven lost or
     stalemated outright (the prover's `make_turn` reads "the other side wins" as no mate
     for the attacker) - rather than in the disproof store; the test accepts either, never a
-    Win, and holds every stored fact (Draw - a stalemate now - included) to the game tree.
+    Win, and holds a sample of each store's facts (its first entries; a Draw as E4's stalemate)
+    to the game tree, "beyond" its budget meaning the tree's overflow alone (scoped after the
+    review of 2026-11-09, L3: it said "every stored fact", and every Unknown counted beyond).
     **E10 merged into `lane/engine` (2026-11-01, main 7483103):** part 5 is no longer
     blocked; not written in the merge. The merge turned E10's ladder off in the step-2
     solver searches (MT-01's df-pn check, `t5d-solver-check`, `t5d-proof-records`): with the
@@ -9228,8 +9244,13 @@ struck through, where nothing of it is left to apply); the others stand as writt
   machine) 1,690 passed, 1 skipped, 1 failed and 12 errors - all 13 in `test_decision_log.py` and
   `test_netplay.py`, which look for the engine's executables beside the library and found a copy of
   the library alone; the two files re-run with them there: 24 passed, verify ok (exit 0), gate commit
-  ok (oracle layer ok; engine differential smoke test passed; proof channel DISABLED); no truth
-  source touched (check.cpp, hypercuboid.cpp, movegen.cpp unchanged), so no nightly gate.
+  ok (oracle layer ok; engine differential smoke test passed; proof channel DISABLED). (Corrected
+  after the review of 2026-11-09, M5 - it said "no truth source touched (check.cpp,
+  hypercuboid.cpp, movegen.cpp unchanged), so no nightly gate": legal.hpp and legal.cpp are truth
+  sources (engine/CMakeLists.txt's T5D_TRUTH_SOURCES), so the code signature moved here, again
+  with the MT-01/02/03 review fixes (prover.hpp, prover.cpp) and with issue 411 (prover.cpp,
+  certificate.cpp); the nightly gate is owed before the lane merges into main, and the lane
+  runs it on its final tree.)
 - **2026-11-02 - main 2cb107d merged; the flat-form docs** (`lane/engine`). Main's two Linux build
   fixes (a std::uint64_t constant in mcts.cpp, two in the tests) merged first (M23; one conflict,
   CHANGELOG; engine 695 of 695, verify ok, gate commit ok). Then issue 241(g): `capi_search.h`,
@@ -9363,7 +9384,8 @@ struck through, where nothing of it is left to apply); the others stand as writt
 - **2026-11-02/08 - MT-01/02/03 review fixes** (`lane/engine`; issue 409, edit 301 corrected; the
   block 400-449 / 300-329). Every HIGH, MEDIUM and LOW of the mutation review fixed (CHANGELOG has
   the list); the survivors re-run against the fixed tree with the reviewer's runner: KILLED C02,
-  C03-C06, C13, P05, P07, P09, H02; EQUIVALENT C01, C14 (no Win node holds two winning children) and
+  C03-C06, C13, P05, P07, P09, H02; EQUIVALENT C01, C14 (no Win node holds two winning children -
+  corrected by the review of 2026-11-09, L1: survivors of the suite's workloads, killed since) and
   C07 (the memo key hashes the depth). DfpnChecker::ask's memo-key literal made a std::uint64_t
   (Linux g++'s -Wsign-conversion). The long churn twin found what the default one could not: two
   stored Loss(2) facts behind disproven roots (Q6 and Q17, 4 and 5 boards) that one game tree over
@@ -9426,3 +9448,13 @@ struck through, where nothing of it is left to apply); the others stand as writt
   full on 2026-11-23, the 2026-11-09 run cut off by the account's limit); verify ok (exit 0); gate
   commit ok (engine differential smoke test passed, baseline 41 compared, 0 declined; proof channel
   DISABLED). No Lazy SMP run: no search or prover code changed.
+- **2026-11-23 - The review's remaining findings (M5, L1, L3, L4, L8)** (`lane/engine`; issue 410).
+  Resumed after the account's weekly limit (stopped 2026-11-09; the history rewrite of 2026-11-16
+  gave every commit a new id - this entry cites the new ones). The record of issue 406's truth
+  sources corrected; C01/C14 relabelled and killed; check_store's "beyond" an overflow only; the
+  long MT-01 twin floored; t5d-solver-check's per-rule counts printed and asserted. Checks: engine
+  735 of 735 (`--werror`); the long twins once - `long_mcts_solver_agrees_with_df_pn` (L4's floors,
+  52.8 minutes) and `long_prover_proofs_survive_tt_churn_h19` (L3's bound, 18 minutes), each passed;
+  verify ok (exit 0); gate commit ok (engine differential smoke test passed, baseline 41 compared, 0
+  declined; proof channel DISABLED). Tests and a tool only: the Lazy SMP test and the nightly gate
+  run on the round's final tree.

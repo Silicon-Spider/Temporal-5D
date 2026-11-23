@@ -312,8 +312,10 @@ int main(int argc, char** argv) {
     const Range& r = ranges[i];
     contradictions += r.tally.contradictions.size();
     failures += r.tally.certificate_failures.size();
-    std::printf("RANGE %s: %zu roots, %zu searches, %zu roots solved, %.1f s; %s\n", kRanges[i], r.roots, r.searches,
-                r.roots_solved, r.seconds, r.tally.summary().c_str());
+    // The merged tally's per-rule counts and inner claims too (the review of 2026-11-09, L8: merged,
+    // never shown).
+    std::printf("RANGE %s: %zu roots, %zu searches, %zu roots solved, %.1f s; %s; %s\n", kRanges[i], r.roots,
+                r.searches, r.roots_solved, r.seconds, r.tally.summary().c_str(), r.tally.rules_summary().c_str());
   }
   std::printf("t5d-solver-check: %zu roots searched, %zu skipped; %zu contradictions, %zu certificate failures - %s\n",
               roots.roots.size() - skipped, skipped, contradictions, failures,

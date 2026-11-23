@@ -123,7 +123,33 @@ TEST(solver_check_exe_finds_no_contradiction_on_records_of_random_play) {
   const std::size_t d = line.find(" decided");
   REQUIRE(d != std::string::npos);
   const std::size_t from = line.rfind(' ', d - 1) + 1;
-  CHECK(std::stoul(line.substr(from, d - from)) >= 20);
+  const unsigned long decided = std::stoul(line.substr(from, d - from));
+  CHECK(decided >= 20);
+  // The merged per-rule counts (the review of 2026-11-09, L8): they sum to the decided and unknown
+  // totals, and inner claims are counted.
+  const std::size_t u = line.find(" unknown, ");
+  REQUIRE(u != std::string::npos);
+  const std::size_t ufrom = line.rfind(' ', u - 1) + 1;
+  const unsigned long unknown = std::stoul(line.substr(ufrom, u - ufrom));
+  const std::size_t per = line.find("decided/unknown per rule: ");
+  REQUIRE(per != std::string::npos);
+  unsigned long rule_decided = 0;
+  unsigned long rule_unknown = 0;
+  for (const char* rule : {"win ", "loss here ", "loss successors ", "draw here ", "draw successors "}) {
+    const std::size_t where = line.find(rule, per);
+    REQUIRE(where != std::string::npos);
+    const std::size_t a = where + std::string(rule).size();
+    const std::size_t slash = line.find('/', a);
+    REQUIRE(slash != std::string::npos);
+    rule_decided += std::stoul(line.substr(a, slash - a));
+    rule_unknown += std::stoul(line.substr(slash + 1));
+  }
+  CHECK_EQ(rule_decided, decided);
+  CHECK_EQ(rule_unknown, unknown);
+  const std::size_t ic = line.find(" inner claims");
+  REQUIRE(ic != std::string::npos);
+  const std::size_t icfrom = line.rfind(' ', ic - 1) + 1;
+  CHECK(std::stoul(line.substr(icfrom, ic - icfrom)) > 0);
   // A bad command line: status 2.
   CHECK_EQ(run(T5D_SOLVER_CHECK_EXE, {"--split", "sideways", "x.5dpgn"}, {}, out, err), 2);
   CHECK_EQ(run(T5D_SOLVER_CHECK_EXE, {}, {}, out, err), 2);

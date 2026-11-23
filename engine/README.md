@@ -3898,14 +3898,24 @@ proofs whether E4 confirmed them or not (Guard's 48 refutations were, 1 was
 incomplete). They gave the same verdicts.
 
 **The truth's sources since M17.** M17 was measured at `d96d6d9`. The truth's sources
-(`T5D_TRUTH_SOURCES`) have changed three times since, so a build of today's tree has
+(`T5D_TRUTH_SOURCES`) have changed six times since, so a build of today's tree has
 another code signature than M17's:
 - `9be6f04` typed the prover's hash constants (for g++ 13/14);
 - A6's first commit (`e554da0`) changed which thread's line the prover reports;
 - on 2026-10-22 the shared stores' lock became a `std::mutex` per shard (`ShardLock`:
-  "The stores' lock", under Lazy SMP).
+  "The stores' lock", under Lazy SMP);
+- issue 406's deadlines (2026-11-02) gave the classification `LegalityOptions::deadline`
+  (`legal.hpp`, `legal.cpp`);
+- MT-03's review fixes (2026-11-08) made the prover's TT refuse solved entries (`prover.hpp`,
+  `prover.cpp`; behaviour-preserving);
+- the review of 2026-11-09's H2 (build-log issue 411) stopped the prover drawing a verdict
+  from E4's listing of actions under Q3's play activation and made `check_certificate` hold a
+  Q3 defender listing to `count_legal_successors` (`prover.cpp`, `certificate.cpp`).
 
-None of them changes verdict logic. No proof, disproof, distance or verdict is decided
+None of the first five changes verdict logic; the sixth changes it under Q3 alone (verdicts
+it drew from a listing that can miss a successor are no longer drawn - at the default rulesets
+nothing changes). The nightly gate runs on each such tree before it merges into main (M5 of
+the review of 2026-11-09: the record had said no truth source changed). No proof, disproof, distance or verdict is decided
 differently, and the committed truth's provenance records no signature ("unrecorded").
 M17's verdicts stand on what they were read from: every refutation and mate counted was
 confirmed against E4 alone. What the lock does change is speed. 6b″ ran Guard and Hunt at
@@ -4091,9 +4101,13 @@ Tests (`tests/test_mcts.cpp`, `tests/test_solver_refs.hpp` for the positions and
   draw; 684 claims inside the proofs (beyond the roots); 214 df-pn searches (the rest from
   its memo), 159 proofs, all certified by E4; 50 solved losses whose children are at more
   than one distance - Loss(k) the longest defence's, which the derivation's greatest decides.
-  No Win node ever holds two winning children (the solver solves a node at its first, and
-  selection never enters a solved node), so its least is never a choice (build-log issue
-  409). About 8 s.
+  Under these workloads (exact legality, batch 8, no verify) no solved Win node holds
+  winning children at two distances - `win_spread` 0, held as a regression guard - but not by
+  construction: `Search::verify` clearing an unknown edge, and MCGS with an unknown edge or
+  batches of 64 or more, can leave one; `mcts_solver_derives_the_least_win_after_verify`
+  holds the derivation's least and its winning edge there (the review of 2026-11-09, L1:
+  build-log issue 409 had called the least never a choice). Inner claims capped at 1.3x the
+  measured (terminal turn starts are not inner claims). About 8 s.
 - `mcts_solver_agrees_with_df_pn_under_every_ruleset` - `two_board_positions` (6 per Q4
   reading) and `sparse_positions` under all 27 rulesets (1 game, 2 turns), three arms (ply,
   tree, flat), 250 playouts, df-pn 50,000 nodes: 1,629 searches (640 roots solved), 5,704
@@ -4106,14 +4120,19 @@ Tests (`tests/test_mcts.cpp`, `tests/test_solver_refs.hpp` for the positions and
   3 turns under every ruleset, five arms, 800 playouts, df-pn 200,000 nodes (certificate
   checks at most 20,000 defender positions), the search's legality exact within 2,000,000
   nodes per classification (a move left unknown proves nothing; build-log issue 406): 4,050
-  searches (1,943 roots solved), 59,249 claims (32,846 game ends), 29,967 comparisons, 29,219
-  decided and agreeing, 748 unknown; 7,980 df-pn searches, 7,234 proofs, every one certified
-  by E4, 377 disproofs. 48 minutes on a loaded machine (it prints a line per ruleset; Q3's
-  play activation took 7 minutes, Q20's alternative 20).
-Each asserts zero contradictions and zero certificate failures; since the review the two
-default tests also floor the decided comparisons of each rule, the distinct df-pn searches
-and the claims inside the proofs, and ceil the undecided (from the baseline, with margin:
-`DfpnTally`'s per-rule counts, `rules_summary`).
+  searches (1,943 roots solved), 59,249 claims (32,846 game ends), 29,967 comparisons,
+  29,219 decided and agreeing, 748 unknown; 7,980 df-pn searches, 7,234 proofs, every one
+  certified by E4, 377 disproofs. 48 minutes on a loaded machine (it prints a line per
+  ruleset; Q3's play activation took 7 minutes, Q20's alternative 20). Re-run on 2026-11-23
+  after build-log issue 411, with the review's L4 floors (52.8 minutes): 29,128 decided and
+  agreeing, 839 unknown, 7,980 df-pn searches, 7,229 proofs, every one certified, 366
+  disproofs - the 91 fewer decided are Q3's, where df-pn no longer draws a verdict from E4's
+  listing.
+Each asserts zero contradictions and zero certificate failures; since the review the three
+of them also floor the decided comparisons of each rule, the distinct df-pn searches and the
+claims inside the proofs, and ceil the undecided and the inner claims (from each one's
+baseline, with margin: `DfpnTally`'s per-rule counts, `rules_summary`; the long twin's since
+the review of 2026-11-09, L4 - it alone combines budgeted legality with MCGS arms).
 
 ### t5d-solver-check (the offline mode)
 
@@ -4130,7 +4149,9 @@ them) over the records given; at each root not terminal and not breaking C4, a s
 arm (default all three) with the proof channel on - offline, no store - exact legality (or
 exact within `--legality-nodes`, issue 406), the uniform evaluator and E10's ladder off;
 every solved turn start compared as above. One `RANGE` line per
-board-count range (< 50, 50-99, 100-199, 200+), never pooled; `CONTRADICTION` and
+board-count range (< 50, 50-99, 100-199, 200+), never pooled - its tally and, since the review
+of 2026-11-09 (L8), its per-rule counts and inner claims (`rules_summary`; the test holds
+them to sum to the tally); `CONTRADICTION` and
 `CERTIFICATE` lines for findings; exit status 0 clean, 3 findings, 1 unreadable records,
 2 a bad command line. `tests/test_proof_tools.cpp` runs it on records of random play it
 writes itself (four sparse starts, custom set-ups through `play_record`).
@@ -4222,7 +4243,9 @@ where it carries weight, below.)
   unchecked); stored entries checked - a Win or Loss against the game tree, a Draw as E4's
   stalemate (since the review: the game tree at depth 0 answered Unknown wherever a legal
   action exists, so a false Draw counted "beyond") - 4,262 of 4,290 confirmed, 28 beyond the
-  game tree's budget, at most 1% asserted; a fresh prover over the same stores answers each
+  game tree's budget, at most 1% asserted (a sample of each store, its first entries;
+  "beyond" is the tree's overflow alone - an Unknown without it, every line within the
+  distance seen and no such result, fails: the review of 2026-11-09, L3); a fresh prover over the same stores answers each
   decided root with `store_hits >= 1` and `expansions == 0` (3,884); every proof re-asked two
   half-turns shallower gives no proof beyond that depth (408); a proof's continuation - the
   attacker to move again after its action and the longest defence - answered from the stores
@@ -4236,7 +4259,7 @@ where it carries weight, below.)
   20,000 nodes, a 1-entry TT over external stores against the default: the default TT hits
   at 74 of 248 roots and the 1-entry TT's expansions differ at 63 (at least 40 asserted),
   statuses never (174 decided both ways); every export as above; store entries 466, 438
-  confirmed, 28 beyond the game tree (at most 10% asserted).
+  confirmed, 28 beyond the game tree (at most 9% asserted, a 1.5x margin).
 - `prover_threads_survive_tt_churn` - M13's 5 threads sharing a 1-entry TT, by nodes and by
   the clock (20 ms), both classes, depth 3, fresh stores per search: no proof or disproof
   the references deny (73-74 confirmed, clock-budgeted), the stores as above, and every
@@ -4253,16 +4276,16 @@ where it carries weight, below.)
   against the default - its expansions differ at 13 of 54 (at least 8 asserted), every mate
   certified or undecided by E4.
 - `long_` twins of the first, third and fourth (5 turns at 60,000 nodes; 4 turns at
-  100,000; 6 turns at 400,000): 9,228 roots compared, no difference; 8,952 of 10,478 stored
-  entries confirmed, 1,526 beyond the game tree (at most 20% asserted: the wider positions
-  leave its budget more often); 19 disproven roots stood for by a confirmed fact, each Loss
-  checked after every one of E4's listed actions (a whole-root tree could not decide two of
-  them, 4-5 boards under Q6 and Q17: every successor Win(1); measured before issue 411, which
-  takes the successors from the brute-force reference and stops the prover drawing verdicts
-  from E4's listing under Q3); 610 proofs re-asked
-  shallower, 610 continuations and 2,296 sequence roots answered from the stores; 68
-  certificates at 5 threads, all confirmed; 22 Hunt mates, all certified (the Hunt twin
-  unchanged by the review, not re-run).
+  100,000; 6 turns at 400,000). The first, re-run on 2026-11-23 after issue 411 and the review
+  of 2026-11-09's L3 (18 minutes): 9,088 roots compared, no difference; 8,932 of 10,464 stored
+  entries confirmed, 1,532 beyond the game tree - its overflow alone: the wider positions leave
+  its budget more often (at most 18% asserted, a 1.2x margin; the twin is deterministic and run
+  by hand); 19 disproven roots stood for by a confirmed fact, each Loss checked after every
+  successor (the brute-force reference; one tree over a whole Q6 or Q17 root of 4-5 boards
+  could not decide two of them, every successor Win(1)); 590 proofs re-asked shallower, 590
+  continuations and 2,286 sequence roots answered from the stores (before issue 411: 9,228
+  roots, 8,952 of 10,478 entries, 1,526 beyond, 610 and 2,296). The third and fourth, as last
+  run (2026-11-08): 68 certificates at 5 threads, all confirmed; 22 Hunt mates, all certified.
 Not yet: the same through E10's settling wrapper (the brief's part 5) - E10 is merged
 (2026-11-01), the test not yet written (issue 402).
 

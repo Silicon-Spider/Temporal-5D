@@ -872,13 +872,19 @@ TEST(mcts_solver_agrees_with_df_pn_on_constructed_mates) {
   // than one distance - and a ceiling on what df-pn leaves undecided. From the
   // baseline (2026-11-01: 1,214 decided, 10 unknown, 214 searches, 684 inner
   // claims; per rule 599 / 140 / 315 / 80 / 80; 50 such losses), with margin.
-  // (Every Win node holds one winning child - the solver solves a node at its
-  // first, and selection never enters a solved node - so no Win node's k is a
-  // least over several: win_spread is 0, reported.)
+  // (Under this workload - exact legality, batch 8, no verify - no solved Win
+  // node holds winning children at two distances: win_spread is 0, held as a
+  // regression guard. It is not so by construction: Search::verify clearing an
+  // unknown edge, and MCGS with an unknown edge or batches of 64 or more, can
+  // leave one there - mcts_solver_derives_the_least_win_after_verify holds the
+  // derivation's least where it does; the review of 2026-11-09, L1.) Inner
+  // claims capped too (L4: terminal turn starts are not inner claims).
   CHECK(tally.decided >= 900u);
   CHECK(tally.unknown <= 40u);
   CHECK(tally.searched >= 160u);
   CHECK(tally.inner_claims >= 500u);
+  CHECK(tally.inner_claims <= 890u);  // 1.3x the 684 measured
+  CHECK_EQ(runs.win_spread, std::size_t{0});
   CHECK(tally.win.decided >= 450u);
   CHECK(tally.loss_here.decided >= 100u);
   CHECK(tally.loss_successors.decided >= 230u);
@@ -900,10 +906,15 @@ TEST(mcts_solver_agrees_with_df_pn_under_every_ruleset) {
   // Coverage (M5 of MT-01's review): from the baseline (2026-11-01: 3,662
   // decided, 21 unknown, 1,707 searches, 2,245 inner claims; per rule 2,411 /
   // 453 / 798; no non-terminal draw among these roots), with margin.
+  // (Since build-log issue 411 df-pn draws no verdict from E4's listing under
+  // Q3: 3,638 decided, 45 unknown.) Win nodes' spread and inner claims as in
+  // the constructed test (L1, L4).
   CHECK(tally.decided >= 2700u);
   CHECK(tally.unknown <= 60u);
   CHECK(tally.searched >= 1250u);
   CHECK(tally.inner_claims >= 1650u);
+  CHECK(tally.inner_claims <= 2920u);  // 1.3x the 2,245 measured
+  CHECK_EQ(runs.win_spread, std::size_t{0});
   CHECK(tally.win.decided >= 1800u);
   CHECK(tally.loss_here.decided >= 330u);
   CHECK(tally.loss_successors.decided >= 580u);
@@ -989,6 +1000,21 @@ TEST(long_mcts_solver_agrees_with_df_pn) {
   CHECK(tally.certificate_failures.empty());
   CHECK(tally.decided >= 1000);
   CHECK(tally.certified > 100);
+  // M5's floors and an unknown ceiling for the one MT-01 run that combines
+  // budgeted legality with MCGS arms (the review of 2026-11-09, L4), from its
+  // baseline (2026-11-08: 29,219 decided, 748 unknown, 7,980 df-pn searches,
+  // 24,460 inner claims; per rule 24,152 / 1,507 / 3,552 / 4 / 4), at about
+  // 70% (deterministic: one thread, node budgets).
+  CHECK(tally.decided >= 20000u);
+  CHECK(tally.unknown <= 1500u);
+  CHECK(tally.searched >= 5500u);
+  CHECK(tally.inner_claims >= 17000u);
+  CHECK(tally.inner_claims <= 32000u);
+  CHECK(tally.win.decided >= 17000u);
+  CHECK(tally.loss_here.decided >= 1000u);
+  CHECK(tally.loss_successors.decided >= 2500u);
+  CHECK(tally.draw_here.decided >= 2u);
+  CHECK(tally.draw_successors.decided >= 2u);
 }
 
 // ---- H37: an unknown verdict is never a terminal ------------------------------------------
@@ -5237,4 +5263,60 @@ TEST(search_deadline_does_not_outlive_its_run) {
                static_cast<unsigned long long>(search.stats().mate_checks));
   CHECK(search.stats().checkmates >= 1);
   CHECK_EQ(search.stats().unknown_verdicts, std::uint64_t{0});
+}
+
+// ---- The review of 2026-11-09, L1: a solved Win node with winning children at two distances --
+
+TEST(mcts_solver_derives_the_least_win_after_verify) {
+  // Search::verify clears an edge's unknown flag without re-deriving its parent, so a solved Win
+  // node can hold winning children at two distances: the derivation's least and its first edge at
+  // that distance decide (C01 - the greatest - and C14 - the first winning edge, whatever its
+  // distance - each pass every other test). The ply split as a tree, the proof channel on
+  // (offline, H41), no legality budget (every move unknown), no lazy verification, no widening: the
+  // root is solved win 3 through a known edge; verifying its four unknown children, each a mate
+  // in one, leaves winners at 1 and 3. The claim must be win 1, and the winning edge's line one
+  // action long (C01 said win 3; C14 gave an edge whose line is three moves deep).
+  const GameState s = t5d_test::game({"[1K3/B4/1N3/5/1k3:0:1:w]"}, t5d_test::solver::k5x5, RuleOptions{});
+  SearchParams p = fast();
+  p.proof_channel = true;
+  p.hunt = p.settling = false;
+  p.asset_map = false;
+  p.legality = LegalityOptions::budgeted(0, 0);
+  p.verify_unknown = false;
+  p.widening = false;
+  p.split = TurnSplit::BoardMove;
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  Search search(s, p);
+  search.run(*uniform, Limits{20000});
+  REQUIRE(search.root_solved());
+  const std::vector<RootChild> rc = search.root_children();
+  std::size_t verified = 0;
+  for (std::size_t i = rc.size(); i-- > 0;) {
+    if (rc[i].legality != MoveLegality::Unknown) continue;
+    if (search.verify(i) == MoveLegality::Legal) ++verified;
+  }
+  CHECK(verified >= 1);
+  CHECK_NOTHROW(search.check_invariants());
+  REQUIRE(search.root_solved());
+  const NodeId root = search.root();
+  const SolverClaim claim = t5d::tools::solver_claim(search, root);
+  std::fprintf(stderr, "  %zu unknown root children verified legal; the solver says %s\n", verified,
+               t5d::tools::to_string(claim).c_str());
+  CHECK(claim.kind == SolverClaim::Kind::Win);
+  CHECK_EQ(claim.distance, 1);
+  // The winning edge's line as long as its claim: under the ply split its child is the same
+  // mover's node, a move into the action - a Win at the root's distance (C14's edge led to a Win(3))
+  // - or, across a submit, the opponent's turn start, a Loss one half-turn shorter.
+  const std::size_t we = t5d::tools::winning_edge(search, root);
+  const NodeId child = search.edge(root, we).child;
+  REQUIRE(child != kNoNode);
+  const SolverClaim after = t5d::tools::solver_claim(search, child);
+  std::fprintf(stderr, "  the winning edge's child: %s\n", t5d::tools::to_string(after).c_str());
+  if (search.node(child).mover == search.node(root).mover) {
+    CHECK(after.kind == SolverClaim::Kind::Win);
+    CHECK_EQ(after.distance, claim.distance);
+  } else {
+    CHECK(after.kind == SolverClaim::Kind::Loss);
+    CHECK_EQ(after.distance, claim.distance - 1);
+  }
 }

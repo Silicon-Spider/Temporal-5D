@@ -670,10 +670,14 @@ bool stalemate_now(const GameState& s) {
 // Every entry of a solved store: a Win(k) mates within k and a Loss(k) is
 // mated within k by the brute-force game tree, a Draw is a stalemate now by
 // E4's verdict (at most `most` entries; the game tree's budgets are small, so
-// a Win or Loss it cannot reach is counted, not failed - and the tests bound
-// that count). (MT-03's review, 2026-11-01: a Draw was judged by the game
-// tree at depth 0, which answers Unknown wherever a legal action exists, so a
-// false Draw counted "beyond", never failed.)
+// a Win or Loss it cannot reach - the tree overflowed - is counted "beyond",
+// not failed, and the tests bound that count). An Unknown WITHOUT overflow is
+// a refutation: the tree saw every line within the distance and found no such
+// result - a failure (the review of 2026-11-09, L3: every Unknown counted
+// "beyond", so a false Win or Loss distance whose refutation the tree explored
+// completely never failed). (MT-03's review, 2026-11-01: a Draw was judged by
+// the game tree at depth 0, which answers Unknown wherever a legal action
+// exists, so a false Draw counted "beyond", never failed.)
 struct StoreCheck {
   int entries = 0;
   int confirmed = 0;
@@ -704,7 +708,13 @@ void check_store(const MemorySolvedStore& proofs, std::size_t most, StoreCheck& 
     GameTree tree(5000, 20000, 40000);
     const GameValue v = tree.solve(e.position, e.proof.distance);
     if (v.kind == GameValue::Kind::Unknown) {
-      ++c.beyond;
+      if (tree.overflowed()) {
+        ++c.beyond;
+      } else {
+        std::fprintf(stderr, "  the solved store holds %s, which the game tree refutes within its distance at %s\n",
+                     to_string(e.proof).c_str(), describe_position(e.position).c_str());
+        CHECK(false);
+      }
       continue;
     }
     const GameValue::Kind want = e.proof.kind == Proof::Kind::Win ? GameValue::Kind::Win : GameValue::Kind::Loss;
@@ -953,7 +963,9 @@ TEST(prover_proofs_survive_tt_churn_h19) {
   CHECK(c.sequences > 20);
   CHECK(c.store.confirmed > 50);
   CHECK(c.shallow > 100);
-  CHECK(c.store.beyond * 100 <= c.store.entries);  // at most 1% beyond the game tree (12 of 4,290 measured)
+  // At most 1% beyond the game tree's budget - its overflow alone (28 of 4,290 measured since
+  // build-log issue 411, 12 before it; a 1.5x margin).
+  CHECK(c.store.beyond * 100 <= c.store.entries);
 }
 
 TEST(long_prover_proofs_survive_tt_churn_h19) {
@@ -967,7 +979,9 @@ TEST(long_prover_proofs_survive_tt_churn_h19) {
   CHECK(c.sequences > 60);
   CHECK(c.store.confirmed > 200);
   CHECK(c.shallow > 200);
-  CHECK(c.store.beyond * 5 <= c.store.entries);  // at most 20% beyond the game tree (1,526 of 10,478 measured)
+  // At most 18% beyond the game tree's budget - its overflow alone (1,532 of 10,464 measured on
+  // 2026-11-23, 14.6%; a 1.2x margin: deterministic, run by hand).
+  CHECK(c.store.beyond * 100 <= c.store.entries * 18);
 }
 
 TEST(prover_tt_keeps_estimates_never_facts) {
@@ -1043,7 +1057,9 @@ TEST(prover_churn_takes_effect_where_the_tt_carries_weight) {
                roots, hits, differ, decided, facts, store.entries, store.confirmed, store.beyond);
   CHECK(differ >= 40);
   CHECK(decided >= 120);
-  CHECK(store.beyond * 10 <= store.entries);  // at most 10% beyond the game tree's reach (6% measured)
+  // At most 9% beyond the game tree's budget - its overflow alone (28 of 466 measured, 6%; a 1.5x
+  // margin).
+  CHECK(store.beyond * 100 <= store.entries * 9);
 }
 
 namespace {
