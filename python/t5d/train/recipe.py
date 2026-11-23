@@ -59,6 +59,9 @@ from ..net.cost import token_counts
 #: The budget: the smallest round figure under which section 7.8's own example holds - a 240-board
 #: position (240 x 66 + 16 = 15,856 tokens) goes alone, five 44-board positions (2,920 each) go
 #: together. The figure that fits is set by the rented card's memory and Gate 1's batching curve.
+#: It is the training budget, a setting of its own beside inference's (``engine.pool.TOKEN_BUDGET``,
+#: 65,536): a training step keeps every layer's activations for the backward pass, a forward does
+#: not (ruled 2026-11-23, BUILD_LOG spec issue 724).
 PILOT_TOKEN_BUDGET = 16_000
 #: Rows drawn from the window per pool - PLACEHOLDER (no documentary basis).
 PILOT_POOL_ROWS = 1_024

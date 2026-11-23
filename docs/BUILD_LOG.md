@@ -82,7 +82,8 @@ where the spec is silent; each has its spec issue below.
 | 9 | Decision 13 masks an unscored game's outcome-derived targets with no exception, retiring issue 235(g)'s whole-blend reading to an arm | 731 |
 | 10 | The values are padded with the queries and keys (the CPU fast kernels need one width); the layer-shared bias is kept FP32 (bitwise) under a 2 GiB cap | 733 |
 
-**For the user** (beside the review's own list, next section):
+**For the user** (beside the review's own list, next section; four of these were answered the same
+day - "The user's answers", below):
 
 - **May the human games seed self-play?** `data/t0database/README.md` and `PROVENANCE.md` call
   them measurement data only; registers I22 and I24 name them as a source of stored positions. The
@@ -105,6 +106,40 @@ where the spec is silent; each has its spec issue below.
   free everywhere.
 - **Section 8.5's "complete turns"** (spec issue 729(b)): the turn start a submit reaches, as
   built, or the mid-turn node where a turn's obligations are met?
+
+**The user's answers (2026-11-23)**, given to this session after the round's report, to four of
+the questions above. The spec and the register are still not edited here: each answer has its
+proposed edit.
+
+- **The padding's default stays 1; on the compiled GPU kernel it is 8** (spec issue 732; edit
+  414). The user: "pad to 1 make a note to pad to 89 on the compiled GPU kernel" - read as 8,
+  decision 15's value (a multiple of 89 would take the widths from 45 and 33 to 89), and said back
+  to the user as that reading. The note is at the field itself (`NetConfig.attn_pad_multiple`,
+  `python/t5d/net/config.py`, with the module docstring): the first GPU session sets
+  `attn_pad_multiple=8` on the compiled path and re-takes the counted costs with it.
+- **The human games are not training data** (spec issue 734; edit 415). The user asked for the
+  explanation and ruled "if you are using them as training data no". A seeded game's targets are
+  all the engine's own - no human move or result is ever a target (I24) - but its start position
+  becomes a training input, so the answer is applied as: the human games are not a source of
+  seeded starts. They stay measurement data and I24's diagnostic. Nothing read them, so no
+  behaviour changes; `train/seeded.py` says so where a pool would be built. A pool comes from the
+  engine's own games (`seeded.positions_from_record`). The user may lift this for start positions
+  alone.
+- **Section 7.8's two examples are two budgets** (spec issue 724; edit 416; the user left the
+  choice to this session). Inference and training each have their own budget, both in padded
+  tokens: the pool's takes "tens of positions in every batch" (`engine.pool.TOKEN_BUDGET`, 65,536,
+  a placeholder - four 240-board positions share a forward), the trainer's takes "a 240-board
+  position alone" (`train.recipe.PILOT_TOKEN_BUDGET`, 16,000, a placeholder), because a training
+  step keeps every layer's activations for the backward pass and a forward does not. This is what
+  was built; both figures are still Gate 1's to set.
+- **Register E10 becomes E12** (spec issue 730; edit 412; the user left the choice to this
+  session). The Gumbel root search row is E12 from here on - in this log's status table now, in
+  the register and the spec once edit 412 is applied. "E10" in this log again means only the build
+  component that wired the verification ladder.
+
+Still open from the list above: the ladder's threads per pooled game (issue 451), which path and
+quantity the eager operator figure means (issue 719), and section 8.5's "complete turns" (issue
+729(b)).
 
 **Checks** (2026-11-23, `dev-r`, the machine loaded throughout by the agents' own runs): on the
 finished tree, the whole Python suite in four shards with the engine required
@@ -733,7 +768,7 @@ pushed after every commit, taking main by merge, never rebase (re-check with `gi
   reserve while Guard is offline - issue 306) and E8 behind its flag, then MT-03's
   settling-scan part.
 - `lane/audit` (from main 01ebbe5, 2026-11-01) - the done-means audit merged (2026-11-08): section 15.2 row by row, section 15.4 invariant by invariant, the committed-class rows and section 15.5 clause by clause, checked adversarially by a five-agent workflow and corrected (section "Done-means audit"; issues 535-538, edits 364-366). The branch holds nothing main lacks (2026-11-23: its tip 7f79f9b is on main); its deletion from GitHub was asked for and is the user's to do.
-- `lane/fix535` (from main 2cb107d, 2026-11-02) - issue 535 resolved by issue 600 and merged (2026-11-09, with its review round: no HIGH; 3 MEDIUM and 14 LOW fixed, all 24 surviving mutants killed, the normal path bit-identical to c8a9c49 on the review's three twins): the flat form, a node's creation and a re-root exception-safe under an allocation failure, gather's request list and run's buffer inside their rollbacks, the tree form's inheritance and re-evaluation rolled back, the ladder's verdict take and the asset map's lookup safe under `std::bad_alloc`. Issues 603 (this machine's g++ 16.2 breaks `std::deque`'s exception safety under its default `-fassume-sane-operators-new-delete`) and 604 (a `std::bad_alloc` in a synchronous ladder job reported as a contradiction) are the main loop's, in the quiet-machine block. The lane is idle.
+- `lane/fix535` (from main d8a54d3, 2026-11-02) - issue 535 resolved by issue 600 and merged (2026-11-09, with its review round: no HIGH; 3 MEDIUM and 14 LOW fixed, all 24 surviving mutants killed, the normal path bit-identical to 03eca7a on the review's three twins): the flat form, a node's creation and a re-root exception-safe under an allocation failure, gather's request list and run's buffer inside their rollbacks, the tree form's inheritance and re-evaluation rolled back, the ladder's verdict take and the asset map's lookup safe under `std::bad_alloc`. Issues 603 (this machine's g++ 16.2 breaks `std::deque`'s exception safety under its default `-fassume-sane-operators-new-delete`) and 604 (a `std::bad_alloc` in a synchronous ladder job reported as a contradiction) are the main loop's, in the quiet-machine block. The lane is idle.
 - `lane/net` - A5 (piece-centric tokens, dense scope only, behind its flag, off) merged with
   its review fixes (2026-11-02; issues 244-258, edits 190-199): no 2x flag stands under
   CHECKPOINT 9's phase form. C26/C27 behind their flags (issues 259-275, edits 380-384) reviewed
@@ -2171,7 +2206,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | E2, E3 | built behind flags, tested | Off; awaiting 6m and 6t. They read a node's uncertainty signal: the categorical's variance by default, the error head's output under 6m's switch (`uncertainty_source`, engine ABI round 2a; issue 149); their constants placeholders twice over (issues 81, 149) |
 | E8 | not started | Behind its flag (6v), with E11 in step 2 |
 | E6 | not built (rule) | Refused |
-| E10 | not started; handed to the main loop's lanes (2026-11-23) | Gumbel root search (section 8.4; 2026-11-15 review) - the engine arm after `lane/engine` and `lane/search` merge (a planner's design: the logic in new files `gumbel.hpp`/`gumbel.cpp`, about ten hooks in `mcts.cpp`, an appended params field, off; refused under the flat form, with root noise or steering, and on re-roots); its experiment after I21's ranking. The generator's arm waits for a ruling on what the root search value means under sequential halving. Issue 730: the name collides with the build's component E10 |
+| E12 | not started; handed to the main loop's lanes (2026-11-23) | *Register E10 until edit 412 is applied - renamed by ruling, 2026-11-23 (issue 730).* Gumbel root search (section 8.4; 2026-11-15 review) - the engine arm after `lane/engine` and `lane/search` merge (a planner's design: the logic in new files `gumbel.hpp`/`gumbel.cpp`, about ten hooks in `mcts.cpp`, an appended params field, off; refused under the flat form, with root noise or steering, and on re-roots); its experiment after I21's ranking. The generator's arm waits for a ruling on what the root search value means under sequential halving. Issue 730: the name collides with the build's component E10 |
 | F1, F2 | built, tested | 22,965,426 parameters (F1 after F5, B15, M20, A6, D3 and D4: 21,338,634 after F5 - 20,736 fewer than N5's 21,359,370, gain-only norms, no Q/K/V biases, spec issue 203 - plus B15's 1,623,168, spec issue 210, plus M20's 3,337: the policy's promotion offset, 3,341, less the learned register coordinates, 4 - plus A6's 8,768: the turn-state counts' MLP, spec issue 230 - less D3's 12,079: three short-term outputs, 771, and the error head, 257, on the value MLP's shared layer, and N1's 51-bin short value head, 13,107, gone, issue 231 - plus D4's 3,598: the soft policy, 69,390, and N1's always-built reply head, 65,792, now a prototype off - 69,133 with its offset when on, issue 232); the L24-ff12 preset, 46,894,834 (F2: 44,460,082 and B15's 2,434,752 over 24 layers). Unchanged by F6's Mish in the heads, by B11's fold (its flag is off; with it on, 40 scalars where there were 48) and by B16 (its 304 are in a network of the cached configuration only: 22,965,730 with `attn_scope = "block_causal"`) and B17 (off; with it on, 6,115,328 more - 29,080,754, or 23,729,842 with the vectors shared by the heads; spec issue 218) |
 | F5 | built, tested | Network: RMSNorm-style norms (a learned gain, no centring, no bias; FP32) everywhere in the trunk, no Q/K/V biases, the attention-output and FFN biases kept (spec issue 200), pre-norm. 6y's arm - post-norm with DeepNet's initialisation, `norm_placement="post"` - through the dense trunk and the cached path, its unstated details placeholders (issue 201); smolgen has no norm to keep (issue 202) |
 | F6 | built, tested | Network: Mish in the trunk FFN (`ffn_activation="mish"`) and in every head's hidden layers - the value head's MLP, the only head with one (CHECKPOINT 8's ruling on issue 204, `lane/net` N-F6heads: no switch - `head_activation` and its GELU removed); 6y's arm, squared ReLU (`"squared_relu"`), in the trunk only, through the dense trunk and the cached path - tested: no head follows it. Outside F6's words, kept as built: the embedding's Δt MLP (GELU) and B12's smolgen (SiLU) - spec issue 221 |
@@ -2184,7 +2219,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | G10 | not built (rule) | Mixture-of-depths, held open (CHECKPOINT 9), its trigger A5's verdict (ablation 1); a rule floor (head boards, legal travel destinations and the registers every layer); dense only |
 | G8 | built behind its flag (off), smoke-tested (`lane/net`, the precision component, 2026-10-23) | QAT prepared, not adopted. `TrainerConfig.qat` (off) and `qat_format = "fp8_e4m3"` (provisional until the inference path pins the format): `train.trainer.apply_qat` switches the trainer's network in place to G2's FP8 trunk (`net/quant.py`, issue 238) - fake quantisation of the six projections per block and attention's operands, straight-through gradients, the heads, RoPE, embeddings and norms untouched, the frozen-K/V format (C15) and the network's quantisation settings kept (tested): QAT's forward is the served format's full pass bit for bit, the frozen K/V rounded as the full pass rounds them (tested). The cache serves the projections-only format with FP8 frozen K/V (tested); with QAT's default, attention quantised, the cache refuses the network (issue 239(a), (i)). The records follow the format (review fixes): the trainer's `net_cfg` is switched with the network, a record's network condition takes the format from the evaluated network and refuses a caller's configuration that contradicts it, and `network_id` folds an 8-bit format in (ids of unquantised networks unchanged) - tested through generate -> steps -> publish -> generate. Smoke-tested: three optimiser steps on synthetic rows, BF16 and FP32, FFN ratios 2 and 12 - losses finite, every quantised weight's gradient dense and within relative L2 distance 0.5 of the unquantised network's (measured at most 0.117, MEASUREMENTS). Written from papers; Monroe's `quantize` option (Lc0's training code) is an idea only (AGENTS.md, H29). When it runs - a fine-tuning stage, if 6w says so - is the pilot run's (issue 239; edit 182) |
 | G9 | built in part; the AMD attempt done (partly) | PyTorch drives the C++ search through the C API (N5, eager, on CPU). FlexAttention runs eagerly through B14's score function (`attn_impl="flex"`, `lane/net`: forward only on CPU). Not built: torch.compile and compiled FlexAttention kernels (GPU time, M19); ONNX/TensorRT export - refused for now (M5). **The bounded AMD attempt** (`lane/gate`, 2026-10-23; MEASUREMENTS "G9's bounded AMD attempt"): AMD's PyTorch for Windows from ROCm 10.1.0 (torch 2.14.0+rocm10.1.0, Python 3.14.7, a separate venv under `build/`; Adrenalin 26.10.1 as found; no system change) runs the F1 network eagerly on the RX 9070 XT (gfx1201) - FP32 within 3.3e-6 of the CPU, BF16 inside G1's bounds, `attn_impl="flex"` eagerly, FP8 E4M3 and `_scaled_mm` - and one search through the C API (`run_search`, `NetworkEvaluator(device="cuda")`: 11-17 playouts/s from Standard's start). torch.compile and compiled FlexAttention do not run: no Triton on Windows from AMD (`TritonMissing`; issue 520). Eager rates are overhead-bound (0.5-7 evals/s at 44 boards, 0.06-0.23 at 240; issue 522); the kernel's 45/33-wide heads miss AMD's fused attention (issue 521). Figures AMD-labelled, eager, indicative; edits 360, 361; the probe `python/tools/g9_amd_probe.py` |
-| G11 | built in part (2026-11-22) | The inference path, kernel-bound (section 10.2). Built: the count - `python/t5d/net/opcount.py` (`python -m t5d.net.opcount`) counts the operators and attention-kernel calls one eager forward dispatches on the CPU graph, tested on invariants (`tests/net/test_opcount.py`), recorded in MEASUREMENTS "G11". As built the default (block-sparse) path does not meet requirement 3: at 44 boards 46 kernel calls and 4,689 operators a layer, growing with the board count; the one-block path is constant (2 calls, 458 operators a layer). Built (2026-11-23): **the widths padded** (decision 15; `NetConfig.attn_pad_multiple`, default 1 - the ruling's 8 is an arm until the GPU session; issue 732): queries, keys and values zero-padded at the one place the kernel's features are assembled - fast paths 45/33 -> 48/40, flex 76/64 -> 80/64; the forward bit for bit at 8 (FP32, BF16, every padded path), gradients within 7.2e-7; counted +4.3% at 44 boards, +6.2% at 240; `cost.kernel_widths`. **What no layer changes, built once per forward** (per-forward memos on the context and the structure; no flag - every output bit for bit against the tree before, 105 small and 8 sixteen-layer forwards, gradients single-threaded): at 44 boards 76,443 operators a forward -> 50,071 on the default path (a layer 4,689 -> 3,003, host syncs 1,517 -> 325), 7,812 -> 6,055 on the one-block path; and B15's layer-shared bias assembled once per forward at inference (FP32, under `structure.DISP_ONCE_BYTES`, 2 GiB). The count gained call paths (`--sites`, `--depth`) and the attribution (MEASUREMENTS): of a default layer's 3,003 operators, 743 are quadratic work outside the kernel that holding across layers would make (T, T) - only an in-kernel score function removes them (issue 733). Not built: cache.py's passes padded (lane/net's file). Not built: the compiled path's launch count (a GPU figure). Issues 719, 720 |
+| G11 | built in part (2026-11-22) | The inference path, kernel-bound (section 10.2). Built: the count - `python/t5d/net/opcount.py` (`python -m t5d.net.opcount`) counts the operators and attention-kernel calls one eager forward dispatches on the CPU graph, tested on invariants (`tests/net/test_opcount.py`), recorded in MEASUREMENTS "G11". As built the default (block-sparse) path does not meet requirement 3: at 44 boards 46 kernel calls and 4,689 operators a layer, growing with the board count; the one-block path is constant (2 calls, 458 operators a layer). Built (2026-11-23): **the widths padded** (decision 15; `NetConfig.attn_pad_multiple`, default 1 by the user's ruling of 2026-11-23, and 8 on the compiled GPU kernel path - the note is at the field; issue 732): queries, keys and values zero-padded at the one place the kernel's features are assembled - fast paths 45/33 -> 48/40, flex 76/64 -> 80/64; the forward bit for bit at 8 (FP32, BF16, every padded path), gradients within 7.2e-7; counted +4.3% at 44 boards, +6.2% at 240; `cost.kernel_widths`. **What no layer changes, built once per forward** (per-forward memos on the context and the structure; no flag - every output bit for bit against the tree before, 105 small and 8 sixteen-layer forwards, gradients single-threaded): at 44 boards 76,443 operators a forward -> 50,071 on the default path (a layer 4,689 -> 3,003, host syncs 1,517 -> 325), 7,812 -> 6,055 on the one-block path; and B15's layer-shared bias assembled once per forward at inference (FP32, under `structure.DISP_ONCE_BYTES`, 2 GiB). The count gained call paths (`--sites`, `--depth`) and the attribution (MEASUREMENTS): of a default layer's 3,003 operators, 743 are quadratic work outside the kernel that holding across layers would make (T, T) - only an in-kernel score function removes them (issue 733). Not built: cache.py's passes padded (lane/net's file). Not built: the compiled path's launch count (a GPU figure). Issues 719, 720 |
 | G12 | built, tested (2026-11-22); the gain GPU-deferred | Self-play as a pool of concurrent games behind one evaluator (section 7.8): `python/t5d/engine/pool.py` (the padded-token planner, `SharedEvaluator` with one service thread, `GamePool` with game threads; shutdown and failures reach every caller) and `python/t5d/train/selfplay_pool.py` (`python -m t5d.train.selfplay_pool`; records plus a `pool.json` of the batching conditions). Placeholders: 65,536 padded tokens, 64 positions, 25% padding, 32 games (command line: 8 games, 2 leaves). Records unchanged (version 2): a pooled game writes the alone game's record byte for byte with an exact evaluator or merging off (tested); under merged forwards of a network, to tolerance (issue 723). Refused: the cached and phase-form evaluators. Not built: match play's batch cap and prefetch; worker processes; the gain (Gate 1 step 2, M19). Issues 723, 724, 728 |
 | I1 | not started (rule) | Self-play training: no training runs in the untrained build (the brief); the pilot run (M18) comes after §15.5 |
 | I2 | built, tested (engine round 2c, E10; targets M21 commit 2) | Targets from the pruned visits - the search-value targets too (CHECKPOINT 7). The engine side (engine ABI round 2c, issue 153): per root child its visits, priors with and without the noise, q, value variance, E3's factor, `boost`, `steered_visits`, `forced_visits`, and the root's effective cPUCT; search-side forced playouts not built. **The steering counts are real since E10 (2026-10-23)**: `boost` = the noise-free prior less the unsteered one (`prior_unsteered`, appended), `steered_visits` the root visits PUCT would have given another child with the unsteered priors (`steered_rule`, issue 179); a self-play game through Python's generator records non-zero steered visits and the targets exclude them (`python/tests/train/test_steering.py`). **The E10 review measured the counterfactual definition failing** - with exclusion the boosted moves' share of the target fell to 0.032 where the unsteered search gave 0.499 (issue 179(a)): the definition is unvalidated, **self-play runs without the asset map** until one is (issue 450, put to the user), and the targets' replica now unsteers the noised prior by (1 - ε) x the boost (179(c)). The targets (`python/t5d/train/targets.py`): KataGo's forced-playout pruning at target construction against a replica of the root's PUCT, a one-visit remainder dropped; steered visits excluded (`policy_mode="exclusion"`, the placeholder) or kept at a weight (`"provenance"`) - open, 6e; the replica's prior without the boost; the policy, soft-policy, categorical, short-term and deblundering values and the q_ratio blend's root WDL all from the pruned visits. Placeholders: issue 235 |
@@ -2206,7 +2241,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | I19 | built, tested (engine round 2b; the schedules M21 commit 3, `lane/net`) | Exploration placeholders. Built (engine ABI round 2b): the root noise scaled to the open-edge count (E1), the shaping a prototype behind its flag, the root policy temperature as a parameter (`root_policy_temperature`, 1 by default) - issues 150-152, edit 123. The training generator's (M21, Python): the move-temperature schedule (placeholders: Lc0's T60, 0.9 -> 0.45, cut at move 60; a "move" is issue 305's turn) and the root temperature's self-play value and decay (KataGo 1.25 -> 1.1), set per search; today netplay's and selfplay's step schedule (1.0 for 16 decisions, then 0) and a root temperature of 1 (netplay and t5d-play keep it). Since M21 commit 3 the generator's `TemperatureSchedule`; since the M21 review fixes with Lc0's semantics (the main loop's ruling): the move temperature 0.9 before turn 60 (`temp-cutoff-move`) and a constant endgame temperature 0.45 from it (`temp-endgame`, which "doesn't decay"), a decay before the cutoff an option (`decay_to`, off) - commit 3 had read T60 as a decay to 0.45 and temperature 0 from turn 60; the root policy temperature 1.25 -> 1.1 over 60 turns; both recorded per decision (issue 236(d)) |
 | I20 | built behind its flag, tested (M21 commit 3, `lane/net`) | KL-adaptive full searches - a prototype (6l), `KLAdaptiveConfig.enabled` off: a full search in chunks stops once the root's visit distribution moved less than `min_gain` KL per playout past `min_playouts`, bounded by the full cap; the stop recorded and read as the effort label's convergence. Placeholders: issue 236 |
 | I21 | built behind its flag (off), smoke-tested (2026-11-22); the ranking not started (after the pilot run) | The completed-Q policy target (section 12.2): the function of a record (`train/completed_q.py`, 2026-11-15); the builder writes it behind `TargetConfig.completed_q` ("off" by default; "full", "cheap", "all"), stored and batched beside the policy target; its loss (`losses["completed_q"]`, the main policy head's cross-entropy over every row carrying one, weight 0 by default; `losses.completed_q_arm` moves the policy's weight onto it); the trainer and the losses refuse the arm without its target; `python -m t5d.train.smoke --completed-q`. Placeholders: c_visit 50, c_scale 1, values mapped to [0, 1]. `train/target_arms.py`: the four target arms' configurations, the record-level comparison (`python -m t5d.train.target_arms`) and the held-out yardstick (provisional) - no optimiser step in it. Off equals before byte for byte (532 items checked). Issue 725 |
-| I22 | built behind its flags (both off), tested (2026-11-22) | Coverage across board counts (section 12). Floors (`SamplerConfig.range_floors`; `sampler.floored_shares`, `range_draw`, `coverage_report`; the window keeps per-range pools and exact cost sums): a constraint, water-filled, on each range's share of the training compute (section 9.1's dense model of a row's own tokens), over (50, 100, 200) with data; floor 0.1, a placeholder; sums past the whole refused. Seeded starts (`GeneratorConfig.seeded_starts`, one game in ten, a placeholder; `train/seeded.py`): a stored position is a 5dpgn record and the number of its actions replayed, opened by the engine's own reader; the header's optional `seeded_start`; the temperature schedules read the source's actions plus the game's own; re-seeding from a seeded record refused. No default pool and nothing reads `data/t0database` (the user's call). Issue 726 |
+| I22 | built behind its flags (both off), tested (2026-11-22) | Coverage across board counts (section 12). Floors (`SamplerConfig.range_floors`; `sampler.floored_shares`, `range_draw`, `coverage_report`; the window keeps per-range pools and exact cost sums): a constraint, water-filled, on each range's share of the training compute (section 9.1's dense model of a row's own tokens), over (50, 100, 200) with data; floor 0.1, a placeholder; sums past the whole refused. Seeded starts (`GeneratorConfig.seeded_starts`, one game in ten, a placeholder; `train/seeded.py`): a stored position is a 5dpgn record and the number of its actions replayed, opened by the engine's own reader; the header's optional `seeded_start`; the temperature schedules read the source's actions plus the game's own; re-seeding from a seeded record refused. No default pool, and nothing reads `data/t0database`: the human games are not a source (the user's ruling of 2026-11-23, issue 734). Issue 726 |
 | I23 | built behind `TrainerConfig.recipe` (default the smoke recipe), smoke-tested (2026-11-22) | The pilot's trainer (section 12.8; `train/recipe.py`): batches assembled to a budget of padded tokens from a uniformly drawn pool, cut within the board-count ranges and sorted by token count, every drawn row trained once (`assemble_batches`); a linear warm-up into piecewise-constant steps (`lr_factor`); `Trainer.draw_rows` / `next_batch` / `step_log`. `PILOT_RECIPE`, placeholders: 16,000 tokens, pools of 1,024 rows, 1,000 warm-up steps, no drops, base rate 1e-4. No clipping, weight decay, accumulation or SWA change (no document names them). Issue 724 |
 | I24 | refused (rule) | Supervised pre-training on the human games (section 14.4; 2026-11-15 review): a diagnostic and a source of seeded starts, never a target - nothing to build |
 
@@ -7814,7 +7849,9 @@ needs are proposed under "Proposed spec edits" (402 and up).*
      waiting position and adds the nearest in size under a padding ceiling; the trainer cuts a
      sorted pool within one board-count range. Under a token budget a training step holds from one
      row to about 195, each a mean loss: no accumulation or rescale is ruled. For the user: which
-     example yields, or whether the inference and training budgets may differ.
+     example yields, or whether the inference and training budgets may differ. *Ruled 2026-11-23
+     (the user left the choice to this session): two budgets, both in padded tokens - inference's
+     takes "tens of positions", training's "a 240-board position alone"; edit 416.*
 725. **The completed-Q arm (I21) - what the spec leaves to choose, built as follows** (sections
      12.2, 12.4, 12.5, 12.8, 13.1; register I21, I5, M24). (a) No common yardstick ranks target
      arms, since each arm's policy loss is measured against its own target. Built
@@ -7877,7 +7914,8 @@ needs are proposed under "Proposed spec edits" (402 and up).*
      redone", issues 177-197, the Lazy SMP log), and "E11" for time management's step. The
      register should take an unused name for the Gumbel row (E12 is free in both), and section
      8.4, section 16 and the review's text in this log follow; this log's new rows say "register
-     E10" until then.
+     E10" until then. *Ruled 2026-11-23 (the user left the choice to this session): E12; edit
+     412.*
 731. **Decision 13's target side, built** (register H22, I15; section 12.8, section 16). In a game
      that ended unscored the target builder kept issue 235(g)'s reading: a whole deblunder blend
      gave that decision and every earlier one the best child's WDL and moves-left. Decision 13
@@ -7894,7 +7932,8 @@ needs are proposed under "Proposed spec edits" (402 and up).*
      bit on every path, FP32 and BF16); the CPU backward, which takes its math kernel with a
      learned bias, differs by up to 7.2e-7. The values are padded with the queries and keys, to
      one width, as the CPU fast kernels need. For the user: 8 by default now, or after the GPU
-     session measures both.
+     session measures both. *Ruled by the user, 2026-11-23: the default stays 1, and the compiled
+     GPU kernel path sets 8 - noted at the field; edit 414.*
 733. **G11's requirements 1 and 2 conflict on the eager path, and the kept bias has no bound**
      (section 10.2, register G11, B15). Each query block's mask rows and B15 entries are
      layer-independent - requirement 1 would build them once - but holding them across sixteen
@@ -7904,6 +7943,19 @@ needs are proposed under "Proposed spec edits" (402 and up).*
      FP32, so outputs stay bit for bit (273 MB at 44 boards where section 10.2 says 136 MB in
      BF16), and kept only under a 2 GiB cap (`structure.DISP_ONCE_BYTES`, an implementation
      choice; about a quarter of a 240-board position fits).
+
+734. **The human games and seeded starts** (section 12's coverage passage, section 14.4, register
+     I22, I24; `data/t0database/README.md`, PROVENANCE.md). The review named the human games among
+     the sources of stored positions ("the human games (which reach 186 boards)"; I24: "a
+     diagnostic and a source of seeded starts, never a target"), while the data's own README and
+     PROVENANCE.md call them measurement data only. Put to the user, who ruled on 2026-11-23: "if
+     you are using them as training data no". What seeding does with a position: the game is
+     played on by the engine and every target - policy, values, outcome - is the engine's own, so
+     no human move or result is trained on; but the start position itself becomes a row the
+     network is trained on, and the choice of which large positions it sees is the human games'.
+     On that reading the answer is no: the human games are not a source of seeded starts, and a
+     pool is built from the engine's own games. Nothing read them, so no code path changes. The
+     user may lift this for start positions alone. Proposed: edit 415.
 
 ## Proposed spec edits
 
@@ -9679,7 +9731,7 @@ entry changes in the same edit as its code, which the standing rule defers to up
      lane/engine's issue 408). Register I15's description of unscored games: the same.
 412. **Register E10 renamed** (issue 730). The Gumbel root search row takes an unused name - E12
      is free in the spec, the register and this log - and section 8.4's and section 16's
-     references follow, with the review's own text here.
+     references follow, with the review's own text here. *Ruled 2026-11-23: E12.*
 413. **Section 10.2, section 15.3, section 16 and register G11 - the widths and the structure,
      built** (issues 732, 733). Section 16's G11 entry, new: "`attn_pad_multiple` (1 as built; 8,
      decision 15's, an arm until the GPU session) pads the fast paths' kernel widths 45/33 to
@@ -9691,6 +9743,31 @@ entry changes in the same edit as its code, which the standing rule defers to up
      in 736 kernel calls, the one-block path 6,055 (3,645) in 32. In the not-yet-built list, G11's
      clauses become "the compiled path's launch count; padding as the default (decision 15)".
      Section 10.2's 136 MB for the kept layer-shared bias: FP32 as built, 273 MB.
+
+*Edits 414-416 carry the user's answers of 2026-11-23 ("Where things stand", top).*
+
+414. **The padding's default: section 10.2's "Kernel-friendly widths", section 15.7's Gate 1,
+     section 16 and register G11** (issue 732; decision 15). Section 10.2 now: "so the v1 is to
+     pad them ... not yet built". Should say: the padding is built (`attn_pad_multiple`); the
+     build's default is 1, the widths as built, by the user's ruling of 2026-11-23, because
+     nothing before GPU time can measure the gain and 8 moves every counted cost (+4.3% at 44
+     boards, +6.2% at 240); the compiled GPU kernel path sets 8. Section 15.7, Gate 1: add "set
+     `attn_pad_multiple=8` on the compiled path and re-take the counted costs with it". Edit 413's
+     not-yet-built clause "padding as the default (decision 15)" is withdrawn by this.
+415. **The human games are not a source of seeded starts: section 12's coverage passage, section
+     14.4, section 16 and registers I22 and I24** (issue 734). Section 12 now lists "the human
+     games (which reach 186 boards)" among the sources of stored positions; I24 says "a diagnostic
+     and a source of seeded starts, never a target". Should say: stored positions come from the
+     engine's own longer games, the audit lane's contradictions and the league's finds; the human
+     games are measurement data and a diagnostic, and not training data in any form - neither
+     targets nor start positions (the user's ruling of 2026-11-23).
+416. **Two token budgets: sections 7.8 and 12.8, section 16, registers G12 and I23** (issue 724).
+     Section 7.8 now gives one budget and two examples that cannot both hold. Should say: a token
+     budget counts padded tokens, a batch's positions times its longest member's; inference and
+     training have a budget each, since a training step keeps every layer's activations for the
+     backward pass and a forward does not; inference's is sized so that tens of 44-board positions
+     share a forward (placeholder 65,536), training's so that a 240-board position goes alone
+     (placeholder 16,000); Gate 1's batching curve and the card's memory set both.
 
 ## Session log
 
@@ -10077,16 +10154,6 @@ entry changes in the same edit as its code, which the standing rule defers to up
   run's pre-registration (M25, M26); section 16 and Appendix A (M27). Spec issues 700-718; three independent reviews of the revision, their findings fixed before the report. No existing code changed - one module added, `train/completed_q.py`, I21's target as a function of
   a record, with 15 tests. Nothing committed; the `lane/fix535` merge left staged as found.
   `verify` ok, `rulebook` ok.
-- **2026-11-17 - cited commit ids updated after the history rewrite of 2026-11-16** (`main` and
-  each lane that holds work `main` lacks: one commit each with the same text, once it is free of
-  uncommitted work; a lane with nothing of its own takes it from `main`). On 2026-11-16 the user
-  had the history of `main` and of every lane rewritten and pushed again: every commit has a new
-  id, and an id noted before that date - in a session's notes, a review's range, a comment - is
-  an old one. `CHANGELOG.md`, this file, `docs/MEASUREMENTS.md` and `engine/README.md` now cite
-  the new ids. Still old: the ids in code and test comments, and the engine id recorded in
-  `engine/testdata/hunt-truth/` (that commit is now `b1d0ca9`). The user holds the table of old
-  and new ids. The brief's rule stands: a session never force-pushes or rewrites pushed history.
-  Documents only: no code, no test, nothing the gate covers.
 - **2026-11-22 to 2026-11-23 - the review's code** (the user's instruction to this session: "make
   the changes to code" the review left). Planned item by item, built by one agent per item in the
   main working tree, each report checked before the next; the spec and the register not edited
@@ -10101,6 +10168,27 @@ entry changes in the same edit as its code, which the standing rule defers to up
   the final battery, cut off part-way, was resumed with its one finished shard kept. The main loop
   concluded the `lane/fix535` merge meanwhile (d33a5c0). Nothing committed by this session.
   Checks: "Where things stand", top.
+- **2026-11-17 - cited commit ids updated after the history rewrite of 2026-11-16** (`main` and
+  each lane that holds work `main` lacks: one commit each with the same text, once it is free of
+  uncommitted work; a lane with nothing of its own takes it from `main`). On 2026-11-16 the user
+  had the history of `main` and of every lane rewritten and pushed again: every commit has a new
+  id, and an id noted before that date - in a session's notes, a review's range, a comment - is
+  an old one. `CHANGELOG.md`, this file, `docs/MEASUREMENTS.md` and `engine/README.md` now cite
+  the new ids. Still old: the ids in code and test comments, and the engine id recorded in
+  `engine/testdata/hunt-truth/` (that commit is now `b1d0ca9`). The user holds the table of old
+  and new ids. The brief's rule stands: a session never force-pushes or rewrites pushed history.
+  Documents only: no code, no test, nothing the gate covers.
+  *On `main` 2026-11-23 (the main loop), once `main` was free of uncommitted work: 332 ids
+  replaced (mapped by tree and author date from the reflogs, 346 commits; the 121 ids it shares
+  with `lane/net`'s replacement all equal); five lines quoting an old id "before the rewrite"
+  keep it. Still to take it: `lane/engine` and `lane/search`, once their rounds are committed.*
+- **2026-11-23 - four answers from the user** (to this session, after the code round's report;
+  "Where things stand", top): the padding's default stays 1 with 8 on the compiled GPU kernel
+  (issue 732, edit 414); the human games are not training data, so not a source of seeded starts
+  (issue 734, edit 415); and, left to this session, section 7.8's two examples are two budgets
+  (issue 724, edit 416) and register E10 becomes E12 (issue 730, edit 412). Comments and
+  docstrings only in the code (`net/config.py`, `engine/pool.py`, `train/recipe.py`,
+  `train/seeded.py`, `tests/net/test_kernel_pad.py`); no behaviour changed. ruff clean on the five files; the kernel-padding, recipe and pool test files 67 passed; `verify` ok. Left unstaged for the main loop to commit.
 - **2026-11-23 - `lane/fix535` and `lane/net` merged for main; `lane/audit` and `lane/gate` found
   empty** (the branch of pull request Silicon-Spider/Temporal-5D#2, for main; the user asked for
   the old branches to be cleared and those with new work merged, `lane/net` reviewed first).
@@ -10160,8 +10248,16 @@ entry changes in the same edit as its code, which the standing rule defers to up
       added lines as main wrote them; this branch's id-updated lines where main left the base;
       entries added on both sides interleaved by date. Checked: no heading doubled, and no
       numbered item of either side lost (371 = 325 + 349 - 303, the fix535 base).
-    - For main, `lane/fix535`'s merge now adds only its last commit, the 2026-11-17 id update.
-      Main's new text cites pre-rewrite ids in 35 lines; those are the main loop's id pass.
+    - Merged again at 032db11, after main's own id pass (1adb029) and the user's four answers. The
+      same conflicts, resolved the same way. The 2026-11-17 entries are kept once each, as main's
+      (the lanes' text plus main's paragraph). No entry or numbered item of either side lost. For
+      main, `lane/fix535`'s merge now adds nothing but the record.
+    - CI on 50e3770: `tests/net/test_displacement_far.py::test_the_far_off_arms_parameters_are_those_recorded_before_the_review`
+      (main's, 4149e87) fails. The far tables' absolute sum is 9.452122066628363 against
+      9.452122048001911, about 2e-9 relative against a 1e-9 bound. It fails identically on main's
+      own CI at 032db11 (network run 45153266712), so the failure is main's. For the main loop:
+      re-record `_FAR_SEED_7` on a runner, or bound the absolute sum at the 1e-8 `_same`'s
+      docstring states (issue 602's kind).
     - The merged tree pairs `lane/net`'s cached path with main's new network (B15's per-axis
       far tables on by default) and main's engine. Its checks are in the merge commit and the
       pull request.

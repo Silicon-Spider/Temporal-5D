@@ -634,7 +634,7 @@ FLAGGED on the default path (the 2x rule).** At 44 boards, BF16, one position:
 A count and that estimate are not the same quantity, and the row names neither the quantity nor
 the attention path. "About 10,000" (§10.2's "some 10,000 small operations a forward"; "G9's
 bounded AMD attempt" below) is an order of magnitude read from timings with launches made
-blocking, on torch 2.14.0+rocm10.1.0, at lane/gate 62ff24d (before the far tables), on
+blocking, on torch 2.14.0+rocm10.1.0, at lane/gate 529098d (before the far tables), on
 `synthetic_state(44, 44)`: no operator was counted there (`python/tools/g9_amd_probe.py` counts
 none). Read as the default path - what "as built" says - it is **4.4x below the compute operators
 and 7.6x below the operators dispatched: flagged**. Read as the one-block path - whose timings

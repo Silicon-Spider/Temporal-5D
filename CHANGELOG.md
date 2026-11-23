@@ -16,9 +16,9 @@ The user asked for the old branches to be cleared and the ones with new work mer
 branch of pull request Silicon-Spider/Temporal-5D#2, for main:
 
 - **`lane/fix535` merged** (57e797c; b77c4ca): issue 535's fix and its review round. Its own
-  entries are below. Main took the lane itself the same morning, at 8c4f905 (d33a5c0). So for
-  main this merge now brings only the lane's last commit, the 2026-11-17 commit-id update of
-  the documents.
+  entries are below. Main took the lane itself the same morning, at 8c4f905 (d33a5c0), and made
+  the 2026-11-17 commit-id update itself (1adb029). So for main this merge adds nothing but the
+  record.
 - **`lane/net` merged** (6754794; be01cdb): C26 and C27 behind their flags, with section 15.2's
   rows 6 and 7. Its own entries are below. It was reviewed first, as the user asked (2026-11-23,
   by reading). The review found no HIGH and no MEDIUM finding, and four LOW, none blocking; they
@@ -47,11 +47,71 @@ branch of pull request Silicon-Spider/Temporal-5D#2, for main:
   - main's changed or added lines are kept as main wrote them;
   - this branch's id-updated lines are kept where main left the base text;
   - entries added on both sides are interleaved by date.
-  Main's new text still cites ids from before the rewrite in 35 lines. That is the main loop's
-  id pass, and these lines are not edited here.
+  Main was merged in again at 032db11, after its own id pass (1adb029) and the user's four
+  answers. The 2026-11-17 entries are kept once each, as main's: the lanes' text plus main's
+  paragraph.
+- **CI on the merged tree.** `tests/net/test_displacement_far.py`'s far-table fingerprint (main's,
+  4149e87) fails the same way on main's own CI at 032db11. Its absolute sum is about 2e-9
+  relative off, against a 1e-9 bound. It is main's failure, not this branch's, and the fix is
+  left to main; a comment on the pull request says so.
 
 Spec: none - merges (the merged entries carry their own `Spec:` lines) and a CI time limit; no
 part of the spec describes either. The review's findings propose no spec edit.
+
+### 2026-11-23 - Four answers from the user on the code round's questions: the padding's default, the human games, the two token budgets, register E12
+
+The user answered four of the questions the code round put to them (`docs/BUILD_LOG.md`, "Where
+things stand", "The user's answers"). No behaviour changes: comments and docstrings in the code,
+and the record.
+
+- **The padding's default stays 1, and the compiled GPU kernel path sets 8** (spec issue 732). The
+  note for the GPU session is at the field, `NetConfig.attn_pad_multiple`
+  (`python/t5d/net/config.py` and its module docstring), in the field's refusal message, and in
+  `tests/net/test_kernel_pad.py`'s docstring. The user wrote "pad to 89"; it is read as 8, review
+  decision 15's value.
+- **The human games are not training data** (spec issue 734): the user's rule, applied to seeded
+  starts as well as to targets, since a seeded game's start position becomes a training input.
+  `python/t5d/train/seeded.py` says so; nothing read `data/t0database`, so nothing else changes.
+- **Section 7.8's two examples are two budgets** (spec issue 724; the choice left to this
+  session): inference's and training's, both in padded tokens - as built. The constants' comments
+  in `python/t5d/engine/pool.py` and `python/t5d/train/recipe.py` say which example each honours.
+- **Register E10 becomes E12** (spec issue 730; the choice left to this session): the build log's
+  status row is renamed; the register and the spec follow when edit 412 is applied.
+
+**Checks**: `ruff check` and `ruff format --check` clean on the five Python files;
+`tests/net/test_kernel_pad.py`, `tests/train/test_recipe.py` and `tests/engine/test_pool.py`: 67
+passed; `python oracles/harness.py verify` ok. The only executable change is one error message's
+wording, which no test pins.
+
+Spec: sections 7.8, 10.2, 12, 12.8, 14.4, 15.7 and 16; register E10, G11, G12, I22, I23, I24. Not
+edited here: proposed edits 412 (ruled: E12), 414 (the padding's default), 415 (the human games)
+and 416 (the two budgets) in `docs/BUILD_LOG.md`, with spec issues 724, 730, 732 and 734.
+
+### 2026-11-17 - Cited commit ids follow the history rewrite of 2026-11-16
+
+On 2026-11-16 the user had the history of `main` and of every lane rewritten and pushed again, so
+every commit of this repository has a new id. No commit's files, dates or message text changed
+(ids cited inside commit messages were updated in the same pass). The documents went on citing
+the old ids. Each id of this repository cited in `CHANGELOG.md`, `docs/BUILD_LOG.md`,
+`docs/MEASUREMENTS.md` and `engine/README.md` is now the new id of the same commit, at the length
+it was written with; nothing else in those files changes. The same edit is made, with this entry,
+on `main` and on each lane that holds work `main` lacks, once it is free of uncommitted work; a
+lane with nothing of its own takes it from `main`.
+
+Still the old ids: those in code and test comments (`engine/tests/`, `python/tests/`,
+`oracles/tests/test_lineage.py`), and the engine id recorded in `engine/testdata/hunt-truth/`,
+which is a pinned recording and is not edited by hand (that commit is now `b1d0ca9`). Ids of the
+upstream design documents and of the oracles' pins belong to other repositories and are
+untouched. The rewrite was the user's own decision; the brief's rule against rewriting pushed
+history stands.
+
+On `main` (2026-11-23, by the main loop): made once `main` was free of uncommitted work - after
+the `lane/fix535` merge, the 2026-11-15 spec review and its code round were committed. The old
+ids were mapped to the new by tree and author date from the reflogs (346 commits), and checked
+against `lane/net`'s replacements (121 shared ids, all equal). Five lines that quote an old id
+on purpose, as "before the rewrite", keep it.
+
+Spec: none - commit ids cited in documents; no part of the spec describes it.
 
 ### 2026-11-23 - The review's code: B15's far tables, the completed-Q arm, board-count coverage, the pilot's trainer, the self-play pool, G11's count, G11's padding and once-per-forward structure, and the tree form under graph search
 
@@ -248,26 +308,6 @@ Spec: the design spec, sections 0-16, the summary and Appendix A, and the regist
 edited directly, not proposed; `docs/BUILD_LOG.md` lists every decision made for the user to
 confirm, and spec issues 700-713 give the reasons for the review's own edits. The new module
 implements section 12.2's completed-Q target (register I21) as section 16 pins it.
-
-### 2026-11-17 - Cited commit ids follow the history rewrite of 2026-11-16
-
-On 2026-11-16 the user had the history of `main` and of every lane rewritten and pushed again, so
-every commit of this repository has a new id. No commit's files, dates or message text changed
-(ids cited inside commit messages were updated in the same pass). The documents went on citing
-the old ids. Each id of this repository cited in `CHANGELOG.md`, `docs/BUILD_LOG.md`,
-`docs/MEASUREMENTS.md` and `engine/README.md` is now the new id of the same commit, at the length
-it was written with; nothing else in those files changes. The same edit is made, with this entry,
-on `main` and on each lane that holds work `main` lacks, once it is free of uncommitted work; a
-lane with nothing of its own takes it from `main`.
-
-Still the old ids: those in code and test comments (`engine/tests/`, `python/tests/`,
-`oracles/tests/test_lineage.py`), and the engine id recorded in `engine/testdata/hunt-truth/`,
-which is a pinned recording and is not edited by hand (that commit is now `b1d0ca9`). Ids of the
-upstream design documents and of the oracles' pins belong to other repositories and are
-untouched. The rewrite was the user's own decision; the brief's rule against rewriting pushed
-history stands.
-
-Spec: none - commit ids cited in documents; no part of the spec describes it.
 
 ### 2026-11-09 - Build log: the current state at issue 535's merge
 
