@@ -12134,3 +12134,5 @@ entry changes in the same edit as its code, which the standing rule defers to up
   - **(a) MT-03's part 5** (issue 402): 6f's TT-churn test through the wired settling path; the
     ladder's tests-only store seam; MT-03's store checks shared (`test_store_checks.hpp`); the
     done-means audit's "Proof export under TT churn (6f)" row now green on this lane.
+  - **(b) Round 2's two weak tests**: L1 on Guard's re-search under the model clock (work after the
+    timed run), L8 on Guard's capped scan on a test clock; each fix mutated back - L1's (the model clock's charge the timed run's work alone) KILLED by ladder_the_model_clock_charges_guards_research_with_the_decision, L8's (Guard's scan given guard_ms uncapped) KILLED by ladder_guards_scan_gets_no_more_than_the_hard_bound_leaves, each the other test passing, the file restored and rebuilt.

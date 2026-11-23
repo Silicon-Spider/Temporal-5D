@@ -37,6 +37,7 @@
 #include "t5d/prover.hpp"
 #include "t5d/search.hpp"
 #include "t5d/selfplay.hpp"
+#include "t5d/timeman.hpp"
 #include "t5d/variants.hpp"
 #include "test_framework.hpp"
 #include "test_play.hpp"
@@ -921,6 +922,124 @@ TEST(ladder_guards_hook_is_off_by_default_and_rejects_a_refuted_action_when_on) 
   CHECK(on.guard_refutations >= 1);
   CHECK(on.guard_rejections >= 1);
   CHECK(!(on.actions[0].size() == 1 && on.actions[0][0] == rook_away));
+}
+
+// ---- Guard on a match clock (the E11 review's L1 and L8; the proof channel on here only) ------
+
+namespace {
+
+// A clock the test moves (MatchClock::clock's seam).
+class TestClock final : public Clock {
+ public:
+  double t = 0;
+  double now() override { return t; }
+};
+
+// An evaluator's answers, the clock charged `per_leaf` seconds a leaf.
+class Charging final : public Evaluator {
+ public:
+  Charging(Evaluator& inner, TestClock& clock, double per_leaf) : inner_(inner), clock_(clock), per_leaf_(per_leaf) {}
+  void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
+    inner_.evaluate(batch, out);
+    clock_.t += per_leaf_ * static_cast<double>(batch.size());
+  }
+
+ private:
+  Evaluator& inner_;
+  TestClock& clock_;
+  double per_leaf_;
+};
+
+// Guard's experiment as ladder_guards_hook_..._when_on sets it up: the flat
+// form (a decision is the whole action), the favourite Rc5-a5 refuted by
+// Black's mate in one, the ladder off, the proof channel on.
+PlayParams guard_on(bool synchronous) {
+  PlayParams pp;
+  pp.search = sync_params();
+  pp.search.synchronous = synchronous;
+  pp.search.split = TurnSplit::Flat;
+  pp.search.hunt = pp.search.settling = false;
+  pp.search.asset_map = false;
+  pp.search.proof_channel = true;
+  pp.guard_final = true;
+  pp.guard_research_playouts = 64;
+  pp.max_actions = 1;
+  pp.match_play = true;
+  return pp;
+}
+
+}  // namespace
+
+TEST(ladder_the_model_clock_charges_guards_research_with_the_decision) {
+  // The E11 review's L1: on the model clock a decision is charged its WHOLE
+  // work at its plan's price - here Guard's re-search after its timed run
+  // too (Guard refutes the favourite, which is rejected and searched again).
+  // One flat decision, so the charge is computable from the game's totals;
+  // charging the timed run's work alone (L1's fault) leaves the re-search out.
+  // The plan is about one evaluation (a thousand actions left, no floor, the
+  // signals off), so the timed run is the forced slices' two playouts - as
+  // Guard's own test holds its search to two, the in-tree solver not yet
+  // having seen Black's mate - while the clock holds the re-search's charge.
+  const GameState s = blunder_position();
+  Favouring ev(blunder(s));
+  PlayParams pp = guard_on(true);
+  pp.clock.enabled = true;
+  pp.clock.model_clock = true;
+  pp.clock.base_seconds = 150;
+  pp.clock.time.cost_seconds_per_evaluation = 0.1;
+  pp.clock.time.moves_left_default_turns = 2000;
+  pp.clock.time.min_evaluations = 0;
+  pp.clock.time.signals = false;
+  const GameRecord g = play_game(s, ev, pp);
+  REQUIRE_EQ(g.timed_decisions, std::uint64_t{1});
+  REQUIRE_EQ(g.actions.size(), std::size_t{1});
+  REQUIRE(g.guard_rejections >= 1);  // the premise: work after the timed run
+  const double work = std::max(static_cast<double>(g.evaluations),
+                               static_cast<double>(g.playouts) / pp.clock.time.playouts_per_evaluation_cap);
+  const TimeManager tm(pp.clock.time);
+  const double price = tm.seconds_per_evaluation(static_cast<double>(s.multiverse().board_count()));
+  CHECK(std::abs((pp.clock.base_seconds - g.clock_remaining[0]) - work * price) <= 1e-9);
+  CHECK(g.playouts > 2);  // the timed run's two (the forced slices) and the re-search's
+}
+
+TEST(ladder_guards_scan_gets_no_more_than_the_hard_bound_leaves) {
+  // The E11 review's L8: on a match clock Guard's scan after the search gets
+  // no more than the hard bound leaves - here nothing (the forced slices,
+  // one leaf each at 20 s a leaf, spent it), so Guard stops before its first
+  // depth and the favourite is played unrefuted. Without the clock the same
+  // scan, given guard_ms, refutes it (the premise). The asynchronous mode (the
+  // synchronous mode's scan is node-budgeted, never timed), batches of one:
+  // two playouts, as Guard's own test, so the in-tree solver has not seen the
+  // mate.
+  const GameState s = blunder_position();
+  const Move rook_away = blunder(s);
+  Favouring fav(rook_away);
+  {
+    TestClock clock;
+    Charging ev(fav, clock, 20.0);
+    PlayParams pp = guard_on(false);
+    pp.search.batch_size = 1;
+    pp.clock.enabled = true;
+    pp.clock.clock = &clock;
+    pp.clock.base_seconds = 120;
+    const GameRecord g = play_game(s, ev, pp);
+    REQUIRE_EQ(g.actions.size(), std::size_t{1});
+    CHECK(g.hard_overruns >= 1);  // the premise: the bound spent before Guard
+    CHECK(g.guard_runs >= 1);
+    CHECK_EQ(g.guard_refutations, std::uint64_t{0});
+    CHECK(g.actions[0].size() == 1 && g.actions[0][0] == rook_away);
+  }
+  {
+    TestClock clock;
+    Charging ev(fav, clock, 20.0);
+    PlayParams pp = guard_on(false);
+    pp.search.batch_size = 1;
+    pp.playouts = 2;  // as Guard's own test: the in-tree solver has not seen the mate
+    const GameRecord g = play_game(s, ev, pp);
+    REQUIRE_EQ(g.actions.size(), std::size_t{1});
+    CHECK(g.guard_refutations >= 1);
+    CHECK(!(g.actions[0].size() == 1 && g.actions[0][0] == rook_away));
+  }
 }
 
 // ---- Self-play with the defaults -------------------------------------------------------------

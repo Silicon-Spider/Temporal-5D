@@ -10,6 +10,34 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - Round 2's two weak tests made strong: L1's charge and L8's capped Guard
+
+Round 2 left two LOW fixes without a test that tells the fix from its fault.
+- **L1** (the model clock charges a decision's whole work): its test was a decision with nothing
+  after its timed run, where the old charge and the new agree. Now
+  (`ladder_the_model_clock_charges_guards_research_with_the_decision`): Guard's experiment on the
+  model clock - the flat form, the favourite Rc5-a5 refuted by Black's mate in one, rejected and
+  searched again - so the one decision does work after its timed run; its charge equals the
+  decision's whole work at the plan's price, which the timed run's work alone (L1's fault) falls
+  short of. The plan is about one evaluation (a thousand actions left, no floor, the signals off),
+  so the timed run is the forced slices' two playouts: as Guard's own test holds its search to two,
+  the in-tree solver has not yet seen the mate (with more, it avoids the favourite and Guard has
+  nothing to refute).
+- **L8** (Guard's scan gets no more than the hard bound leaves) had no test. Now
+  (`ladder_guards_scan_gets_no_more_than_the_hard_bound_leaves`): the same experiment on a test
+  clock, asynchronous (the synchronous mode's scan is node-budgeted), batches of one leaf at 20 s a
+  leaf - the forced slices' two playouts spend the hard bound - so Guard runs, stops before its
+  first depth, refutes nothing, and the favourite is played; without the clock the same scan,
+  given guard_ms, refutes it (the premise).
+- Both beside Guard's own test in `test_ladder.cpp`, the proof channel on in these tests only.
+- Each fix mutated back: L1's (the model clock's charge the timed run's work alone) KILLED by
+  `ladder_the_model_clock_charges_guards_research_with_the_decision`, L8's (Guard's scan given
+  guard_ms, uncapped) KILLED by `ladder_guards_scan_gets_no_more_than_the_hard_bound_leaves` - each
+  the other test passing, the file restored and rebuilt after.
+
+Spec: none - tests (§8.6's hard bound as built, issue 458; Guard H42, offline). No proposed edit; no
+measured figure.
+
 ### 2026-11-24 - 6f under TT churn through the wired settling path (MT-03's part 5)
 
 Section 13.1's 6f ("verify the proof-export invariant under TT churn for Hunt and the settling
