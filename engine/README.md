@@ -4175,8 +4175,13 @@ bound as its deadline (`Search::set_deadline`): the turn starts' mate checks and
 form's fallback listing (`SearchBudget::max_time`), the legality classification and the
 verification of unknown edges (`LegalityOptions::deadline`, new) stop at it and answer
 Unknown - never a verdict (H37). The flat form's turn generator is node-budgeted only
-(issue 467). The one exception: a root with no visited child runs one batch whatever the
-clock says (a move needs a visit) - so a decision ends past its bound by at most one batch.
+(issue 467). The one exception: a root with no visited child runs on, whatever the clock
+says, until one has a visit (a move needs a visit) - from an unevaluated root that takes up to
+two evaluator calls, the root's own leaf and then its children's (one slice in the batched mode,
+two one-leaf slices in the synchronous mode), so a fresh root's decision can end that much past
+its bound. A moves-left above `kMovesLeftMaxTurns` (2000 turns; issue 476) is refused from the
+context and capped from the root's network output, so a plan's integral sums at most 1000
+actions.
 
 **The stop/extend table (§8.6; `signals`, on - 6o's on/off switch).** Each signal is a pure
 function (`smart_pruning_stop`, `visit_kld`, `value_overlap`, `unstable`), judged on a
@@ -4185,7 +4190,7 @@ function (`smart_pruning_stop`, `visit_kld`, `value_overlap`, `unstable`), judge
 | Signal | Reading (placeholders) |
 |---|---|
 | Smart pruning - stop | the most visited child's lead over the second exceeds the remaining evaluations (to the soft bound, within the hard) x the playouts per evaluation so far x `smart_pruning_factor` (1.0) |
-| KLDGain - stop | KL(earlier visit distribution \|\| now) per root visit over `kld_interval` (100) visits below `kld_threshold` (5e-5); a fresh root is not compared with nothing |
+| KLDGain - stop | KL(earlier visit distribution \|\| now) per root visit over `kld_interval` (100) visits below `kld_threshold` (5e-5), each child compared with itself (by its step - moves and submit - across the root's re-sorts); a fresh root is not compared with nothing, nor a root that lost a visited child |
 | Root solved - play at once | ONLY with the proof channel on (H41); off, nothing is solved and the stop is void |
 | Overlap and churn - extend | the top two children's own network categoricals (read from the evaluation cache, the root player's view: `Search::root_child_value`) intersect by `overlap_threshold` (0.5) or more AND the last KLD per visit is at least `churn_kld_threshold` (2e-4) |
 | Volatility - extend | the root's uncertainty signal (6m's: the categorical's variance by default) at least `variance_threshold` (0.2) |
@@ -4257,11 +4262,15 @@ the previous value; a solved root stops only with the proof channel); the snapsh
 value (the backed-up mean) and a root child's categorical in the root player's view; the
 spiral guard at 500 boards (all the extensions together within `max_extension`, never past
 the hard bound); the hard bound on a virtual clock against an evaluator three times dearer
-than the prior (never past the bound by more than one batch) and twenty times dearer (on a
+than the prior (past the bound by no more than the largest evaluator call), an unevaluated
+root on an exhausted clock (two evaluator calls and not one more: one slice batched, two
+synchronous), and twenty times dearer (on a
 30 s clock, once the scale is measured, strictly inside it), on the wall clock under four
 spinning threads (within half a second), and inside a batch at 400 boards past the deadline
 (Unknown, never terminal); the model clock's runs bit-identical, its work counted as
-playouts / 4 where the playouts outrun the evaluations (a mate-in-one root); E8's floor and
+playouts / 4 where the playouts outrun the evaluations (a mate-in-one root); a moves-left
+above the bound refused or capped, the integral bounded; the KLD unchanged by a re-sort and the
+step keys of a real root all different; E8's floor and
 its cap at E7's hard bound, each where it binds, and the floor binding on the model clock; the choice
 after any stop among the eligible children (§15.4); the step API driven from C and from
 Python building `run_timed`'s tree, on the model clock and on an elapsed time the driver

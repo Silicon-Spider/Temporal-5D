@@ -7034,9 +7034,12 @@ superseded or made moot says so; nothing is deleted.
     formula. Built (placeholders): `hard = min(hard_multiple(N) x soft, hard_fraction (0.25) x
     (remaining - overhead))`, `hard_multiple` 5 at 50 boards or fewer falling linearly to 2 at
     400 or more; a check stops when spent + `batch_margin` (1.5) x the next batch's predicted
-    time reaches it; one exception: a root with no visited child runs one batch (choosing
-    needs a visit), so a decision can end past the bound by one batch (tested: never more).
-    Edit 333.
+    time reaches it; one exception: a root with no visited child runs on until one has a visit
+    (choosing needs a visit). (Revised 2026-11-23, review L1: "runs one batch ... past the bound
+    by one batch (tested: never more)" was wrong - from an unevaluated root the visit takes up to
+    two evaluator calls, the root's own leaf and then its children's: one slice in the batched
+    mode, two one-leaf slices in the synchronous mode; now tested on an exhausted clock.) Edits
+    333, 342.
 459. **The stop signals' definitions** (§8.6's "visit gap unbridgeable", "root visit
     distribution stops changing"). Built (placeholders): smart pruning - the lead of the most
     visited child (path visits, MCGS) over the second exceeds the remaining evaluations (to
@@ -7044,7 +7047,10 @@ superseded or made moot says so; nothing is deleted.
     `smart_pruning_factor` 1.0 (1: exactly unbridgeable; a single child stops at once);
     KLDGain - `KL(earlier || now)` of the root's visit distributions per root visit, compared
     every `kld_interval` (100) visits, below `kld_threshold` (5e-5) stops (Lc0's pattern; the
-    numbers ours); neither before `stop_min_evaluations` (32). Edit 334.
+    numbers ours); neither before `stop_min_evaluations` (32). Edit 334. (2026-11-23, review L5:
+    the two distributions are matched child by child by step - its moves and submit - not by
+    list position, which a tree-form re-sort scrambles; a child gone that held visits restarts
+    the comparison.)
 460. **"Top-two distributional overlap (categorical head)"** (§8.6). Unstated: whose
     categoricals, which overlap, what churn is. Built (placeholders): the two most visited
     root children's own network categoricals (D3's 51 bins, the root player's view) read from
@@ -7140,6 +7146,13 @@ superseded or made moot says so; nothing is deleted.
     difficulty ... if used at all, a mixture with a random component"). Built: E8 lives in the
     time manager, which self-play never runs (issue 469) - no self-play effect, no PCR cap
     resized. Edit 341.
+476. **How large a moves-left a plan believes** (review L4 of E11). §8.6's integral sums one
+    term an action; a prediction is unbounded (an API caller's context, a network's output -
+    `expm1` of the head, no upper clamp), and a large one held the plan for seconds or for ever.
+    Built (a placeholder): `kMovesLeftMaxTurns` 2000 turns - some 50 times M22's longest human
+    game; a context's moves-left above it refused by `TimeManager::begin`, the root's network
+    output capped at it, the integral summing at most 1000 actions, the moves-left floor and
+    default refused above it. A bound, not a tuning; no spec text describes it.
 
 ## Proposed spec edits
 
@@ -8792,6 +8805,12 @@ struck through, where nothing of it is left to apply); the others stand as writt
 341. **§13.1 6v**: Proposed - add "E8 at match play only (§12.5)", and that the effort label's
     convergence is the search's smart-pruning or KLD stop, not a budget stop. Why: issues 474,
     475.
+342. **§8.6 "Guards"**, revising edit 333 (applied upstream in the spec review of 2026-11-15, not
+    yet on main): now (with 333) - "no batch starts that would end past it". Proposed - add "save
+    that a root with no visited child is searched until one has a visit (a move must be chosen):
+    from an unevaluated root, up to two evaluator calls - its own leaf, then its children's".
+    Why: issue 458 as revised (review L1 of E11: the one-batch bound was wrong, and is now
+    measured).
 
 ## Session log
 
@@ -9179,3 +9198,6 @@ struck through, where nothing of it is left to apply); the others stand as writt
     games, t5d-play's arm in the record; netplay's flagged work counted, its flag documented, bad
     `time_overrides` refused; netplay's increment, model clock and mid-action flag tested (12 of 12
     mutants killed).
+  - Fixes 4 - L1, L4, L5: the fresh-root exception restated everywhere (two evaluator calls; edit
+    342 revises 333) and measured on an exhausted clock; `kMovesLeftMaxTurns` (issue 476) bounds
+    the plan; the KLD matches children by step (issue 459's note) - 7 of 7 mutants killed.

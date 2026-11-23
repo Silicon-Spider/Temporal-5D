@@ -10,6 +10,40 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-23 - E11/E8 review fixes 4: the fresh-root exception stated as it is, a bound on moves-left, the KLD by step
+
+Review of the E11/E8 change, phase 1, findings L1, L4 and L5; each mutant written for them is killed
+on this tree (the exception removed or widened; the integral unbounded; the context's moves-left
+not refused, the root's not capped, the default not bounded; the KLD by position: 7 of 7).
+- **The hard bound's exception, restated (L1)**: a root with no visited child runs on until one
+  has a visit, which from an unevaluated root takes up to two evaluator calls - the root's own leaf,
+  then its children's: one slice in the batched mode, two one-leaf slices in the synchronous mode.
+  "At most one batch past (tested: never more)" was wrong in both modes and untested; it is
+  corrected in `timeman.hpp`'s header comment, the engine README, issue 458, a test's comment and
+  the E11 entry below, and edit 342 revises edit 333. New test: a fresh root on an exhausted clock
+  (remaining at the overhead, a hard bound of 0), batched and synchronous - exactly two evaluator
+  calls, then the hard bound; one slice's predicted time past it batched, two synchronous. No
+  behaviour changes.
+- **A bound on moves-left (L4)**: `kMovesLeftMaxTurns` (2000 turns, a named placeholder - issue
+  476). `TimeManager::begin` refuses a context's moves-left above it (one of 2e8 held `begin`
+  for half a second; above 2^54 the integral's loop never ended); `plan_decision` caps the root's
+  network output at it; `integral_cost_sum` sums at most 1000 actions; `validate` refuses a
+  moves-left floor or default above it. Tested in C++, and from Python (`begin(moves_left=2e8)`
+  refused).
+- **The KLD by step (L5)**: each check's snapshot carries the children's step keys
+  (`RootSnapshot::keys`, `step_key`: the moves and the submit flag hashed), and the KLD lays the
+  earlier visits out in the children's present order by key - a tree-form inherited root, re-sorted
+  after `begin`, read 6-22x the true divergence by position, and its KldGain stop came about 100
+  visits late in 9 of 20 decisions. A child gone that held visits restarts the comparison. A
+  hand-built snapshot without keys is still matched by position. Tested: a re-sort that keeps the
+  set reads a KLD of 0; a real root's keys are all different under both splits.
+- **Docs**: the engine README (the exception; the KLD's row; the "Tested" paragraph); issues 458
+  and 459 revised and 476 new in `docs/BUILD_LOG.md`, edit 342.
+
+Spec: §8.6 "Guards" - edit 342 revises edit 333 (applied upstream in the spec review of
+2026-11-15, not yet on main) to state the exception; register E7 unchanged. Issues 458, 459, 476.
+No measured figure.
+
 ### 2026-11-23 - E11/E8 review fixes 3: match play's clock accounting pinned, a clock seam for it, netplay brought in line
 
 Review of the E11/E8 change (05afde5..644801c then; faaa64e..f974d0c since the history rewrite of
@@ -177,7 +211,9 @@ unstated number a named placeholder with a build-log spec issue (452-470).
   extends), instability; the spiral guard - each extension kind once a decision, a share of the
   original plan, all capped - never past the hard bound. The hard bound: a multiple of the plan
   falling from 5 at 50 boards to 2 at 400, capped at a quarter of the clock; no batch starts that
-  would end past it. The model clock (no clock given): a decision's work at the model's price - a
+  would end past it (Review correction, 2026-11-23: save that a root with no visited child runs
+  until one has a visit - from an unevaluated root two evaluator calls; review fixes 4 above). The
+  model clock (no clock given): a decision's work at the model's price - a
   node-limited timed search, bit-reproducible (H15). Not built: a root-scan reserve (its consumer,
   Guard, is adopted nowhere - issue 306); the proof source of volatility is a hook, off, refused
   unless the search's proof channel is on (issue 180 is open: time management reads no proof).

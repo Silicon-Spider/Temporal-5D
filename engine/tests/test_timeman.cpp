@@ -554,10 +554,13 @@ TEST(timeman_the_spiral_guard_holds_at_high_n) {
 
 TEST(timeman_the_hard_bound_holds_on_a_virtual_clock) {
   // The evaluator costs three times the model's prior, and more at its deeper
-  // leaves (more boards) than the root's shape predicts: the first batch runs
-  // whatever the clock says (a move needs a visit), every later check predicts
-  // from the measured scale - so a decision never ends past its hard bound by
-  // more than one batch.
+  // leaves (more boards) than the root's shape predicts: the root's first
+  // visit is bought whatever the clock says (from an unevaluated root, two
+  // evaluator calls - timeman_a_fresh_root_runs_until_a_child_has_a_visit
+  // measures them on an exhausted clock), and every later check predicts from
+  // the measured scale. Here - a hard bound 4-6 times the first slice, the root
+  // reused after it - no decision ends past its bound by more than its largest
+  // evaluator call.
   for (const char* name : {"Standard", "Standard - Two Timelines"}) {
     TimeParams p;
     TimeManager tm(p);
@@ -1356,4 +1359,116 @@ TEST(timeman_no_batch_starts_that_would_end_past_the_hard_bound) {
   const TimedRun run = run_timed(search, ev, tm, ctx, &clock);
   CHECK(run.verdict.stop == TimeStop::HardBound);  // the premise
   CHECK(clock.t <= run.plan.hard_seconds);
+}
+
+// ---- review round 1 (E11/E8), fixes 4: the fresh root, the moves-left bound, the KLD by step ----
+
+namespace {
+
+// An evaluator that charges a clock a flat price a leaf and counts its calls.
+class CountingEvaluator final : public Evaluator {
+ public:
+  CountingEvaluator(ManualClock& clock, double per_leaf) : clock_(clock), per_leaf_(per_leaf) {}
+  void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
+    inner_->evaluate(batch, out);
+    clock_.t += per_leaf_ * static_cast<double>(batch.size());
+    ++calls;
+  }
+  int calls = 0;
+
+ private:
+  ManualClock& clock_;
+  double per_leaf_;
+  std::unique_ptr<Evaluator> inner_ = make_evaluator(BuiltinEvaluator::Uniform);
+};
+
+}  // namespace
+
+TEST(timeman_a_fresh_root_runs_until_a_child_has_a_visit) {
+  // The hard bound's one exception, measured (review L1). On an exhausted clock
+  // (remaining at the overhead: a hard bound of 0) an unevaluated root still
+  // runs until a child has a visit - two evaluator calls, the root's own leaf
+  // and then its children's - and not a call more. Batched, the two are one
+  // slice: the decision ends one slice's predicted time past its bound;
+  // synchronous, two one-leaf slices: two slices' time. (A flat price a leaf,
+  // so a slice's predicted time - from the measured scale - is exact.)
+  for (const bool sync : {false, true}) {
+    SearchParams sp = quiet_params();
+    sp.synchronous = sync;
+    Search search(variant("Standard"), sp);
+    ManualClock clock;
+    CountingEvaluator ev(clock, 0.01);
+    TimeManager tm;
+    TimeContext ctx;
+    ctx.remaining_seconds = TimeParams{}.overhead_seconds;
+    const TimedRun r = run_timed(search, ev, tm, ctx, &clock);
+    CHECK_EQ(r.plan.hard_seconds, 0.0);
+    CHECK(r.verdict.stop == TimeStop::HardBound);
+    CHECK_EQ(ev.calls, 2);
+    CHECK_EQ(r.batches, std::uint64_t{2});
+    bool visited = false;
+    for (const RootChild& c : search.root_children()) visited = visited || c.visits > 0;
+    CHECK(visited);
+    CHECK(near(clock.t / r.verdict.predicted_batch_seconds, sync ? 2.0 : 1.0, 1e-9));
+  }
+}
+
+TEST(timeman_an_implausible_moves_left_costs_a_bounded_plan) {
+  // Review L4: the integral summed one term an action, so a prediction of 2e8
+  // turns held begin() for half a second, and one above 2^54 never ended. Now
+  // a context's moves-left above kMovesLeftMaxTurns is refused, the root's
+  // network output is capped at it, and the integral sums at most half as
+  // many actions (issue 476).
+  TimeParams p;
+  TimeContext ctx;
+  ctx.remaining_seconds = 100;
+  const TimePlan capped = plan_decision(p, 0.01, 100, 0, true, ctx, 1e300);
+  CHECK_EQ(capped.moves_left_turns, kMovesLeftMaxTurns);
+  CHECK_EQ(capped.our_actions, 1000.0);
+  CHECK_EQ(integral_cost_sum(p, 100, 1e300, 2), integral_cost_sum(p, 100, 1000, 2));
+  CHECK(integral_cost_sum(p, 100, 1000, 2) > integral_cost_sum(p, 100, 999, 2));
+  Search search(variant("Standard"), quiet_params());
+  TimeManager tm;
+  ctx.moves_left_turns = 2e8;
+  CHECK_THROWS_AS(tm.begin(search, ctx), std::invalid_argument);
+  ctx.moves_left_turns = kMovesLeftMaxTurns;
+  CHECK(tm.begin(search, ctx).our_actions == 1000.0);
+  TimeParams bad;
+  bad.moves_left_default_turns = 1e6;
+  CHECK_THROWS_AS(TimeManager{bad}, std::invalid_argument);
+  bad = TimeParams{};
+  bad.moves_left_floor_turns = 1e6;
+  CHECK_THROWS_AS(TimeManager{bad}, std::invalid_argument);
+}
+
+TEST(timeman_the_kld_matches_children_by_step) {
+  // Review L5: across a re-sort that keeps the set (the tree form re-sorts an
+  // inherited root after begin's snapshot) each child is compared with itself.
+  // A distribution unchanged in proportion is a KLD of 0 - by position this
+  // one would read KL((.5, .3, .2) || (.2, .5, .3)) / 100, about 2.2e-3.
+  TimeManager tm;
+  tm.begin(plan_of(1000), {50, 30, 20}, 100, {11, 22, 33});
+  RootSnapshot r = snap(100, {40, 100, 60});  // the children 33, 11, 22, each doubled
+  r.keys = {33, 11, 22};
+  const TimeVerdict v = tm.check(r, std::nan(""));
+  CHECK(std::isfinite(v.kld_gain));
+  CHECK(std::abs(v.kld_gain) <= 1e-15);
+  // A child gone that held visits: the comparison starts again.
+  RootSnapshot gone = snap(150, {150, 150});
+  gone.keys = {33, 11};
+  CHECK(std::isnan(tm.check(gone, std::nan("")).kld_gain));
+  // The keys a real root gives: one a child, all different, under both splits.
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
+    SearchParams sp = quiet_params();
+    sp.split = split;
+    Search search(variant("Standard - Two Timelines"), sp);
+    search.run(*uniform, Limits{16});
+    const RootSnapshot s = snapshot(search, 0, 0, TimeParams{});
+    std::vector<std::uint64_t> keys = s.keys;
+    CHECK_EQ(keys.size(), s.visits.size());
+    CHECK(keys.size() > 1);
+    std::sort(keys.begin(), keys.end());
+    CHECK(std::adjacent_find(keys.begin(), keys.end()) == keys.end());
+  }
 }

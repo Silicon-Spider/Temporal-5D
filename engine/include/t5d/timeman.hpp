@@ -79,8 +79,12 @@
 // engine's calls inside the batch - the turn starts' mate checks, the legality
 // classification and its verification, the flat form's fallback listing - stop
 // at, answering Unknown, never a verdict (H37). The one exception: a decision
-// whose root has no visited child yet runs one batch whatever the clock says
-// (a move must be chosen, and choosing needs a visit).
+// whose root has no visited child yet runs on, whatever the clock says, until
+// one has a visit (a move must be chosen, and choosing needs a visit) - from an
+// unevaluated root that takes up to two evaluator calls, the root's own leaf
+// and then its children's: one slice in the batched mode (two calls inside
+// it), two one-leaf slices in the synchronous mode. So a fresh root's decision
+// can end past its bound by those two calls.
 //
 // NO ROOT-SCAN RESERVE (§8.6's "Guards": "a reserve held for one re-search if
 // that scan refutes"; register E7): its one named consumer, Guard's
@@ -226,6 +230,9 @@ struct TimeParams {
   /// give none): about a whole human game (M22's data: 29,292 actions in 692
   /// games, 42 a game).
   double moves_left_default_turns = 40;
+  // (A moves-left above kMovesLeftMaxTurns is refused from the context and
+  // capped from the root's network output: plan_decision's integral then sums
+  // at most half as many actions.)
   /// Boards one action adds, by the board count at its start: M22's mean
   /// moves per turn on the human games under 50, 50-99 and 100+ boards (a
   /// travel move's second board left out; issue 457).
@@ -376,6 +383,9 @@ struct RootSnapshot {
   std::uint64_t playouts = 0;     ///< since the decision began
   std::uint32_t root_visits = 0;
   std::vector<std::uint32_t> visits;  ///< path visits (MCGS: the edges')
+  /// Each child's step_key, in the same order (snapshot() fills it; a
+  /// hand-built snapshot may leave it empty, and is then matched by position).
+  std::vector<std::uint64_t> keys;
   double root_q = 0;                  ///< the root's backed-up value
   double root_variance = 0;           ///< its uncertainty signal (0: none given)
   double root_net_value = 0;          ///< its own evaluation's W - L
@@ -391,6 +401,19 @@ struct RootSnapshot {
   /// value and the network's (0: no proof).
   double proof_gap = 0;
 };
+
+/// The most turns left a plan believes (a named placeholder, build-log spec
+/// issue 476: some 50 times M22's longest human game, far above any game the
+/// engine will play): a context's moves-left above it is refused by
+/// TimeManager::begin, the root's network output is capped at it, and
+/// integral_cost_sum sums at most half as many actions - so a plan costs a
+/// bounded time however large the prediction (review L4).
+inline constexpr double kMovesLeftMaxTurns = 2000;
+
+/// The identity of a root child's step - its moves and whether it submits -
+/// as the KLD signal matches children across checks (review L5: the root's
+/// children are re-sorted and renumbered, never compared by position).
+std::uint64_t step_key(const RootChild& child) noexcept;
 
 /// The root of `search` now; `evaluations` and `playouts` since the decision
 /// began; `params` decides what is read (the categoricals with the signals on,
@@ -413,7 +436,8 @@ double hard_multiple(const TimeParams& p, double boards) noexcept;
 /// (its share is the inverse) - over `actions` actions, N_0 =
 /// `boards`, N_{k+1} = N_k + `step` x boards_per_action(N_k) (step 2: both
 /// players' actions between two of ours; 1: every action counted - §8.6's
-/// table). Its evaluations per action follow as T / sum.
+/// table). Its evaluations per action follow as T / sum. At most
+/// ceil(kMovesLeftMaxTurns / 2) actions are summed.
 double integral_cost_sum(const TimeParams& p, double boards, double actions, double step) noexcept;
 /// KL(prev || cur) of two visit distributions (each normalised over itself;
 /// prev's zeros contribute nothing; cur longer than prev: the new children
@@ -455,13 +479,15 @@ class TimeManager {
 
   /// Plans a decision at `search`'s root and begins it. Throws
   /// std::invalid_argument for a context out of range (remaining not > 0, a
-  /// negative increment or moves-left), or for proof_volatility without the
-  /// search's proof channel (issue 180).
+  /// negative increment, a moves-left negative or above kMovesLeftMaxTurns),
+  /// or for proof_volatility without the search's proof channel (issue 180).
   TimePlan begin(const Search& search, const TimeContext& ctx);
   /// Begins a decision on a plan made elsewhere (plan_decision): the root's
-  /// visits now (the KLD's first comparison) and its total. The tests' entry;
-  /// begin(search, ...) is this after plan_decision.
-  void begin(const TimePlan& plan, std::vector<std::uint32_t> visits = {}, std::uint32_t root_visits = 0);
+  /// visits now (the KLD's first comparison), its total, and the children's
+  /// step keys (empty: matched by position - RootSnapshot::keys). The tests'
+  /// entry; begin(search, ...) is this after plan_decision.
+  void begin(const TimePlan& plan, std::vector<std::uint32_t> visits = {}, std::uint32_t root_visits = 0,
+             std::vector<std::uint64_t> keys = {});
   /// Between batches: stop, go on, or extend. `elapsed`: seconds since begin
   /// by the caller's clock (it also measures the cost scale); NaN: the model
   /// clock. Throws std::logic_error outside a decision.
@@ -503,6 +529,7 @@ class TimeManager {
   double last_elapsed_ = 0;
   double last_work_ = 0;
   std::vector<std::uint32_t> kld_prev_;
+  std::vector<std::uint64_t> kld_prev_keys_;
   std::uint32_t kld_prev_visits_ = 0;
   double kld_gain_ = std::numeric_limits<double>::quiet_NaN();
   std::optional<double> last_value_;   // the previous decision's root value

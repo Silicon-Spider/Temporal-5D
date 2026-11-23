@@ -7,6 +7,8 @@
 #include <cmath>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "t5d/ladder.hpp"
 
@@ -58,9 +60,11 @@ void validate(const TimeParams& p) {
   need(std::isfinite(p.cost_ema) && p.cost_ema > 0 && p.cost_ema <= 1, "cost_ema: in (0, 1]");
   need(std::isfinite(p.cost_fixed_fraction) && p.cost_fixed_fraction >= 0 && p.cost_fixed_fraction < 1,
        "cost_fixed_fraction: in [0, 1)");
-  need(finite_at_least(p.moves_left_floor_turns, 0), "moves_left_floor_turns: finite, 0 or more");
-  need(std::isfinite(p.moves_left_default_turns) && p.moves_left_default_turns > 0,
-       "moves_left_default_turns: positive and finite");
+  need(finite_at_least(p.moves_left_floor_turns, 0) && p.moves_left_floor_turns <= kMovesLeftMaxTurns,
+       "moves_left_floor_turns: 0 to kMovesLeftMaxTurns (2000)");
+  need(std::isfinite(p.moves_left_default_turns) && p.moves_left_default_turns > 0 &&
+           p.moves_left_default_turns <= kMovesLeftMaxTurns,
+       "moves_left_default_turns: positive, at most kMovesLeftMaxTurns (2000)");
   for (const double b : p.boards_per_action) need(finite_at_least(b, 0), "boards_per_action: finite, 0 or more");
   need(p.boards_per_action_ranges[0] > 0 && p.boards_per_action_ranges[0] < p.boards_per_action_ranges[1],
        "boards_per_action_ranges: positive and ascending");
@@ -135,7 +139,8 @@ double integral_cost_sum(const TimeParams& p, double boards, double actions, dou
   const double c0 = cost_relative(p, boards);
   double n = boards;
   double sum = 0;
-  for (double k = 0; k < actions; k += 1) {
+  const double terms = std::min(actions, std::ceil(kMovesLeftMaxTurns / 2.0));  // bounded (issue 476)
+  for (double k = 0; k < terms; k += 1) {
     sum += cost_relative(p, n) / c0;
     n += step * boards_per_action(p, n);
   }
@@ -206,7 +211,8 @@ TimePlan plan_decision(const TimeParams& p, double scale, int boards, int mandat
   double ml = ctx.moves_left_turns;
   if (!(std::isfinite(ml) && ml >= 0)) ml = root_moves_left;
   out.moves_left_given = std::isfinite(ml) && ml >= 0;
-  out.moves_left_turns = std::max(out.moves_left_given ? ml : p.moves_left_default_turns, p.moves_left_floor_turns);
+  out.moves_left_turns = std::min(
+      std::max(out.moves_left_given ? ml : p.moves_left_default_turns, p.moves_left_floor_turns), kMovesLeftMaxTurns);
   // Our remaining actions: the turns alternate, ours first (this one).
   const double a = std::max(1.0, std::ceil(out.moves_left_turns / 2.0));
   out.our_actions = a;
@@ -296,6 +302,32 @@ TimePlan apply_difficulty(const TimeParams& p, const TimePlan& e7, const std::ar
 
 // ---- the root as the signals read it ------------------------------------------------
 
+std::uint64_t step_key(const RootChild& child) noexcept {
+  // FNV-1a over each move's fields, then the submit flag: equal steps, equal
+  // keys; a root's children differ in their steps.
+  std::uint64_t h = 0xCBF29CE484222325ull;
+  const auto mix_in = [&h](std::int64_t v) {
+    for (int b = 0; b < 8; ++b) {
+      h ^= static_cast<std::uint64_t>((v >> (8 * b)) & 0xFF);
+      h *= 0x100000001B3ull;
+    }
+  };
+  mix_in(static_cast<std::int64_t>(child.moves.size()));
+  for (const Move& m : child.moves) {
+    mix_in(m.from_timeline);
+    mix_in(m.from_half_turn);
+    mix_in(m.to_timeline);
+    mix_in(m.to_half_turn);
+    mix_in(m.from_square);
+    mix_in(m.to_square);
+    mix_in(m.aux_square);
+    mix_in(static_cast<std::int64_t>(m.promotion));
+    mix_in(static_cast<std::int64_t>(m.flags));
+  }
+  mix_in(child.submit ? 1 : 0);
+  return h;
+}
+
 RootSnapshot snapshot(const Search& search, std::uint64_t evaluations, std::uint64_t playouts,
                       const TimeParams& params) {
   RootSnapshot r;
@@ -313,7 +345,11 @@ RootSnapshot snapshot(const Search& search, std::uint64_t evaluations, std::uint
   r.batch_size = search.params().synchronous ? 1 : std::max<std::size_t>(search.params().batch_size, 1);
   const std::vector<RootChild> children = search.root_children();
   r.visits.reserve(children.size());
-  for (const RootChild& c : children) r.visits.push_back(c.visits);
+  r.keys.reserve(children.size());
+  for (const RootChild& c : children) {
+    r.visits.push_back(c.visits);
+    r.keys.push_back(step_key(c));
+  }
   if (params.signals) {
     // The top two children by visits (ties: the lower index).
     std::size_t top[2] = {children.size(), children.size()};
@@ -389,8 +425,10 @@ TimePlan TimeManager::begin(const Search& search, const TimeContext& ctx) {
   if (!finite_at_least(ctx.increment_seconds, 0)) {
     throw std::invalid_argument("TimeContext::increment_seconds: finite, 0 or more");
   }
-  if (!std::isnan(ctx.moves_left_turns) && !finite_at_least(ctx.moves_left_turns, 0)) {
-    throw std::invalid_argument("TimeContext::moves_left_turns: finite and 0 or more, or NaN (none)");
+  if (!std::isnan(ctx.moves_left_turns) &&
+      !(finite_at_least(ctx.moves_left_turns, 0) && ctx.moves_left_turns <= kMovesLeftMaxTurns)) {
+    throw std::invalid_argument(
+        "TimeContext::moves_left_turns: 0 to kMovesLeftMaxTurns (2000) turns, or NaN (none) - build-log spec issue 476");
   }
   if (params_.proof_volatility && !search.params().proof_channel) {
     throw std::invalid_argument(
@@ -411,15 +449,20 @@ TimePlan TimeManager::begin(const Search& search, const TimeContext& ctx) {
     effort_decisions_ += 1;
   }
   std::vector<std::uint32_t> visits;
-  for (const RootChild& c : search.root_children()) visits.push_back(c.visits);
-  begin(plan_, std::move(visits), rv.visits);
+  std::vector<std::uint64_t> keys;
+  for (const RootChild& c : search.root_children()) {
+    visits.push_back(c.visits);
+    keys.push_back(step_key(c));
+  }
+  begin(plan_, std::move(visits), rv.visits, std::move(keys));
   const SearchStats& st = search.stats();
   e0_ = st.evaluations;
   p0_ = st.playouts;
   return plan_;
 }
 
-void TimeManager::begin(const TimePlan& plan, std::vector<std::uint32_t> visits, std::uint32_t root_visits) {
+void TimeManager::begin(const TimePlan& plan, std::vector<std::uint32_t> visits, std::uint32_t root_visits,
+                        std::vector<std::uint64_t> keys) {
   plan_ = plan;
   e0_ = 0;
   p0_ = 0;
@@ -430,6 +473,7 @@ void TimeManager::begin(const TimePlan& plan, std::vector<std::uint32_t> visits,
   last_elapsed_ = 0;
   last_work_ = 0;
   kld_prev_ = std::move(visits);
+  kld_prev_keys_ = std::move(keys);
   kld_prev_visits_ = root_visits;
   kld_gain_ = kNaN;
   verdict_ = TimeVerdict{};
@@ -474,13 +518,33 @@ TimeVerdict TimeManager::check(const RootSnapshot& root, double elapsed) {
   v.predicted_batch_seconds = static_cast<double>(root.batch_size) * s;
   // KLDGain: every kld_interval root visits, the divergence per visit.
   if (root.root_visits >= kld_prev_visits_ + p.kld_interval) {
-    if (root.visits.size() >= kld_prev_.size()) {
+    const double visits = static_cast<double>(root.root_visits - kld_prev_visits_);
+    if (!root.keys.empty() && root.keys.size() == root.visits.size() && kld_prev_keys_.size() == kld_prev_.size()) {
+      // By step (review L5): the earlier visits laid out in the children's order
+      // now. A child gone that held visits: no comparison - start again.
+      std::unordered_map<std::uint64_t, std::size_t> at;
+      at.reserve(root.keys.size());
+      for (std::size_t i = 0; i < root.keys.size(); ++i) at.emplace(root.keys[i], i);
+      std::vector<std::uint32_t> earlier(root.visits.size(), 0);
+      bool lost = false;
+      for (std::size_t j = 0; j < kld_prev_.size() && !lost; ++j) {
+        if (kld_prev_[j] == 0) continue;
+        const auto it = at.find(kld_prev_keys_[j]);
+        if (it == at.end()) {
+          lost = true;
+        } else {
+          earlier[it->second] = kld_prev_[j];
+        }
+      }
       // NaN where the earlier distribution was empty (a fresh root): not yet measured.
-      kld_gain_ = visit_kld(kld_prev_, root.visits) / static_cast<double>(root.root_visits - kld_prev_visits_);
+      kld_gain_ = lost ? kNaN : visit_kld(earlier, root.visits) / visits;
+    } else if (root.visits.size() >= kld_prev_.size()) {
+      kld_gain_ = visit_kld(kld_prev_, root.visits) / visits;  // hand-built: by position
     } else {
       kld_gain_ = kNaN;  // a child was removed: the comparison starts again
     }
     kld_prev_ = root.visits;
+    kld_prev_keys_ = root.keys;
     kld_prev_visits_ = root.root_visits;
   }
   v.kld_gain = kld_gain_;
@@ -492,7 +556,9 @@ TimeVerdict TimeManager::check(const RootSnapshot& root, double elapsed) {
     return v;
   };
   const bool visited = std::any_of(root.visits.begin(), root.visits.end(), [](std::uint32_t x) { return x > 0; });
-  if (!visited) return finish(TimeStop::None);  // one batch must run: a move needs a visit
+  // The one exception to the hard bound: a move needs a visit - the search runs
+  // on until a root child has one (from an unevaluated root, two evaluator calls).
+  if (!visited) return finish(TimeStop::None);
   if (root.solved && root.proof_channel) return finish(TimeStop::Solved);  // H41: only with the channel on
   if (v.elapsed_seconds + p.batch_margin * v.predicted_batch_seconds >= plan_.hard_seconds) {
     return finish(TimeStop::HardBound);

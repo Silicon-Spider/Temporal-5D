@@ -1528,7 +1528,7 @@ TEST(capi_search_time_management_parameters_and_refusals) {
   CHECK(plan.hard_seconds > plan.soft_seconds);
   CHECK_EQ(t5d_timeman_check(tm.get(), s.get(), -1.0, &v, nullptr), T5D_ERR_ARGUMENT);
   REQUIRE_EQ(t5d_timeman_check(tm.get(), s.get(), 0.0, &v, nullptr), T5D_OK);
-  CHECK_EQ(v.stop, T5D_TIME_STOP_NONE);  // no visit yet: one batch must run
+  CHECK_EQ(v.stop, T5D_TIME_STOP_NONE);  // no visit yet: the search must run until a child has one
   CHECK_EQ(t5d_timeman_new_game(tm.get()), T5D_OK);
   CHECK_EQ(t5d_timeman_new_game(nullptr), T5D_ERR_ARGUMENT);
   CHECK_EQ(t5d_search_set_deadline(s.get(), -1.0, nullptr), T5D_ERR_ARGUMENT);

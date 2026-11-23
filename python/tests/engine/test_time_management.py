@@ -106,6 +106,15 @@ def test_the_allocator_names_are_the_headers_constants():
     assert defined == ALLOCATORS
 
 
+def test_an_implausible_moves_left_is_refused():
+    """A moves-left above the plan's bound (2000 turns, build-log spec issue 476) is refused: the
+    integral summed one term an action, and 2e8 turns held the plan for half a second."""
+    with Game.variant("Standard") as g, Search(g, params=search_params(hunt=0, settling=0)) as s, TimeManager() as tm:
+        with pytest.raises(Exception, match="issue 476"):
+            tm.begin(s, remaining=60.0, moves_left=2e8)
+        assert tm.begin(s, remaining=60.0, moves_left=2000.0).our_actions == 1000.0
+
+
 def test_the_time_manager_refuses_a_proof_hook_set_by_hand():
     """``TimeManager``'s own refusal, past ``time_params``' (a field set afterwards)."""
     p = time_params()
