@@ -2449,3 +2449,66 @@ smallest node (5.1e-3, 1.0x) and under its largest by 1.5x - it would not catch 
 committed (the main loop's instruction); the 2-layer test is unchanged. The flips are not rare at 16
 layers (1.2% of the last layer's codes), which section 15.2's protocol assumes; BUILD_LOG issue 278
 carries the question.
+
+### Section 15.2's network rows on the finished v1 - rows 1 and 11 re-measured (numerics; no threshold, no verdict)
+
+**What it is.** Step 2's "section 15.2 re-run on the finished v1 network" for rows 1 (cached = dense,
+C2, C17) and 11 (cache precision = live precision, G1, C15): the largest gaps between the cached path
+(`python/t5d/net/cache.py`) and its references, at the tests' 2 layers and at the v1's 16, on every
+geometry of `python/tests/net/test_cache.py`, against the bounds the tests assert. The bounds were
+last measured on 2026-10-17, before B15's table, F6's Mish in the heads and M20's defaults changed the
+network. No threshold applies; the stop rule of the main loop's brief (a result within 10% of its
+bound, or over it) applied to every row, and one row met it - the FP8 cache at FP32 resolution at 16
+layers, the entry above. The tests that assert these bounds were extended with this run: BF16 and FP8
+on every geometry, the every-switch sets on three seeds (BUILD_LOG, the audit's rows 1 and 11).
+
+**Conditions.** 2026-11-28, machine `dev-r` with no other job of the build running (this run's own
+probes ran two at a time), PyTorch 2.13.0+cpu, Python 3.14.7, NumPy 2.5.2, 12 torch threads, `lane/net`
+at main d470681; random weights at initialisation scale. The network: `NetConfig()`'s v1 with
+`attn_scope="block_causal"` - 16 layers, or 2 for the tests' depth - in FP32 or BF16 as each row says,
+FP8 frozen K/V (`frozen_kv_format="fp8"`) where it says so. Measured by a probe beside the tests, on
+the tests' own constructions:
+- FP32 (row 1): 7 geometries x the lineage and creation readings x both C20 readings, model seeds
+  1000 x seed + case and roots of their own; seeds 0-2 at 2 layers (588 nodes), seed 0 at 16 layers
+  (196 nodes); random 6-move paths; cached against `reference_output` (from the root's history under
+  the past-and-epoch-history reading); at each root, the root refresh against the dense pass.
+- The every-switch sets (row 1): `test_cached_equals_one_full_pass_with_every_switch`'s 11 flag sets,
+  standard geometry, model seeds 0-4, 2 layers (385 nodes).
+- BF16 (rows 1 and 11): 7 geometries, model seeds 0-2 at 2 layers and 0-1 at 16, a random 5-move path
+  from each root (`_trees`); cached against the BF16 full pass ("live") and against the FP32 one; the
+  root refresh against the dense BF16 pass.
+- FP8 (row 11): the same trees, seeds 0-2 at 2 layers and 0 at 16; cached against the FP8 network's
+  own forward, under the BF16 trunk (the v1's configuration) and the FP32 trunk; the FP8 network
+  against the "match" one (BF16).
+
+| Quantity | 2 layers | 16 layers | Bound asserted | Margin (2 / 16) |
+|---|---|---|---|---|
+| FP32 cached against the full pass: trunk (max abs) | 2.38e-6 | 3.34e-6 | 2e-5 | 8.4x / 6.0x |
+| ... heads (value, WDL, policy, per-board, submit) | 1.67e-6 | 2.03e-6 | 1e-4 | 60x / 49x |
+| FP32 root refresh against the dense pass: trunk / heads | 1.43e-6 / 1.19e-6 | 2.15e-6 / 1.31e-6 | 2e-5 / 1e-4 | 14x / 9.3x (trunk) |
+| The every-switch sets, seeds 0-4: trunk / heads | 1.91e-6 / 1.79e-6 | - | 2e-5 / 1e-4 | 10x / 56x |
+| BF16 cached against live: trunk RMS / max | 1.64e-3 / 1.42e-2 | 1.96e-3 / 1.20e-2 | 6e-3 / 4e-2 | 3.7x, 2.8x / 3.1x, 3.3x |
+| ... value / policy | 6.95e-4 / 7.85e-3 | 1.44e-3 / 9.73e-3 | 5e-3 / 2.5e-2 | 7.2x, 3.2x / 3.5x, 2.6x |
+| BF16 cached against FP32: trunk RMS / max | 2.33e-3 / 1.44e-2 | 2.33e-3 / 1.37e-2 | 1e-2 / 6e-2 | 4.3x, 4.2x / 4.3x, 4.4x |
+| ... value / policy | 3.95e-3 / 1.24e-2 | 3.81e-3 / 1.12e-2 | 2e-2 / 3e-2 | 5.1x, 2.4x / 5.3x, 2.7x |
+| ... its RMS over `1.3 * live RMS + 3e-4` (live against FP32: 2.34e-3 at both depths) | 0.702 | 0.701 | 1 | 1.4x / 1.4x |
+| BF16 refreshed root against the dense pass: trunk RMS / max | 6.70e-4 / 9.71e-3 | 1.29e-3 / 1.08e-2 | 3e-3 / 4e-2 | 4.5x, 4.1x / 2.3x, 3.7x |
+| ... value / policy | 4.06e-4 / 4.99e-3 | 1.11e-3 / 7.07e-3 | 5e-3 / 2.5e-2 | 12x, 5.0x / 4.5x, 3.5x |
+| FP8 frozen K/V, BF16 trunk, cached against the FP8 forward: trunk RMS / max | 3.00e-3 / 3.81e-2 | 3.94e-3 / 2.64e-2 | 8e-3 / 1e-1 | 2.7x, 2.6x / 2.0x, 3.8x |
+| ... value / policy | 1.01e-3 / 1.88e-2 | 2.00e-3 / 1.90e-2 | 6e-3 / 4e-2 | 5.9x, 2.1x / 3.0x, 2.1x |
+| FP8 frozen K/V, FP32 trunk, cached against the FP8 forward: trunk RMS | 8.01e-5 | 6.12e-4 | 4e-4 (2 layers) | 5.0x / **over** |
+| ... value / policy | 3.58e-5 / 1.89e-4 | 1.97e-4 / 3.53e-3 | 5e-5 / 5e-3 (2 layers) | 1.4x, 26x / **over**, 1.4x |
+| FP8 network against "match" (BF16): trunk RMS / max | 9.06e-3 / 5.59e-2 | 7.79e-3 / 5.40e-2 | 3e-2 / - | 3.3x / 3.9x |
+| ... value / policy | 1.28e-2 / 3.53e-2 | 9.67e-3 / 3.18e-2 | 4e-2 / 1e-1 | 3.1x, 2.8x / 4.1x, 3.1x |
+| ... each tree's largest RMS, the smallest of them (FP8 is in use) | 6.77e-3 | 6.97e-3 | above 1e-3 | 6.8x / 7.0x |
+
+*Read.* Every bound but one holds on the finished v1, on every geometry and at both depths, by 1.4x
+or more. The BF16 and FP8 figures are at most 28% above the 2026-10-17 ones, which were taken on the
+standard geometry alone (the largest rise: the FP8 network's value logit against "match", 1.28e-2
+against 1.0e-2); the FP32 trunk's at 16 layers (3.3e-6) is a little above the 2.4e-6 the tests'
+docstring recorded. The BF16 cache is as accurate as the live BF16 pass at both depths (the cached RMS against
+FP32 equals the live one's, 2.33e-3 against 2.34e-3). FP8 under the BF16 trunk - the v1's own
+configuration - holds its bounds at 16 layers by 2.0x. The exception is the FP8 cache at FP32
+resolution, whose bounds were measured at 2 layers: at 16 layers it is over them, and the entry above
+attributes it. At 2 layers its value logit's margin, 1.4x, is the narrowest of the table (one FP8
+rounding flip, as in the A5 entry above).

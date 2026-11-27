@@ -10,6 +10,32 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-28 - Section 15.2's rows 1 and 11 re-measured on the finished v1; BF16 and FP8 on every geometry, the every-switch sets on three seeds
+
+Step 2's "section 15.2 re-run on the finished v1 network" for rows 1 (cached = dense) and 11 (cache
+precision = live precision), part 2 of the main loop's brief. The bounds were last measured on
+2026-10-17, before B15's table, F6's Mish in the heads and M20's defaults changed the network.
+- `docs/MEASUREMENTS.md`, a new entry: every row's largest gap at the tests' 2 layers and the v1's
+  16, on all seven geometries, against the bound its test asserts. Every bound holds by 1.4x or
+  more - the FP32 trunk 3.3e-6 at 16 layers (bound 2e-5), the BF16 cache as close to FP32 as the
+  live BF16 pass (RMS 2.33e-3 against 2.34e-3), FP8 under the BF16 trunk (the v1's configuration)
+  2.0x inside at 16 layers - except the FP8 cache at FP32 resolution at 16 layers (issue 278, the
+  entry before it).
+- `python/tests/net/test_cache.py`: `test_bf16_cache_is_the_live_precision`,
+  `test_fp8_cache_equals_the_fp8_network` and `test_the_fp8_network_is_a_bounded_approximation_of_match`
+  run on every geometry (duplicated boards, deep travel, many timelines, 5x5, even start, the
+  register arm; the standard one alone before), through a `_trees(geometry, seed)` helper;
+  `test_cached_equals_one_full_pass_with_every_switch` runs seeds 3, 0 and 1 (seed 3 alone before).
+  No bound changed. The module docstring and the tests' docstrings carry the re-measured figures.
+  `test_fp8_cache_equals_the_fp8_network_at_fp32_resolution` is unchanged.
+- `docs/BUILD_LOG.md`: the audit's rows 1 and 11 no longer short (row 11 with issue 278 open), the
+  equivalence clause's count and the net lane's work items brought up to the re-run; row 16's
+  constructed travel turns logged as left (optional, not cheap); proposed edit 418; the session log.
+
+Spec: section 15.2's rows C2/C17 and G1 and its protocol ("tolerance matched to the arithmetic"),
+register C2, C17, G1, C15 - section 15.2 has no estimate to write over; the measured tolerances are
+proposed as a parenthesis in the protocol (edit 418, M4).
+
 ### 2026-11-28 - Row 11's FP8 cache at FP32 resolution at the v1's 16 layers: attributed to rounding flips, and no 16-layer bound committed (issue 278)
 
 Step 2's re-run of section 15.2's network rows on the finished v1 (part 2) stopped on one result:
