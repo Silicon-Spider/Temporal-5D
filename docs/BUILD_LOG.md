@@ -5365,6 +5365,10 @@ superseded or made moot says so; nothing is deleted.
     SN-2):* no frozen token's K/V depends on a destination token in the causal epoch and in whatever a
     search computes below a refresh's anchor; a refreshed epoch's history K/V are the refresh's dense
     pass over the anchor, which reads the anchor's destination tokens - reading 276(f), kept as built.
+    And section 15.2's cached rows ran for A5 on fewer constructions than A1's at first; the review
+    round brought them to A1's coverage - the C27 row, all 16 engine variants (the full pass and the
+    step API), C20 on three geometries, the creation reading on seven, BF16 on seeds 0-2 with a
+    refreshed root, B16 below a refreshed anchor (SN-2).
 253. **The window under A5** (§10.4, §14.4; register A5, C5, C7, M5, M16, M18). §14.4: A5 "composes
     with the window (boards)"; the joint test waits for the pilot run (M18) and the window stays
     unbuilt (M5, M16). Built: `EngineScope.tokens` - the window's token subset, the only code that
@@ -12655,3 +12659,9 @@ entry changes in the same edit as its code, which the standing rule defers to up
     completed. The stale refusal text fixed; MEASUREMENTS' conditions and margins; the default-path
     tool committed (`python -m t5d.net.default_path`; 5e77028 against this tree: 119 outputs bit for
     bit). Checks: ruff clean.
+  - **A5's cached rows at A1's coverage** (SN-2): the C27 row under A5 (21 cases per commit, the
+    rest slow), every engine variant (`a5` in the full-pass test, and the step API's test with an A5
+    network: 32 cases, 6,840 transient tokens), C20 on three geometries, the creation reading on
+    seven, BF16 on seeds 0-2 with a refreshed root, FP8/BF16's trunk max, and B16 below a refreshed
+    anchor. Checks: ruff clean; `test_cache_a5.py` "61 passed", the A5 C27 cases "21 passed", the A5
+    variant tests "32 passed".

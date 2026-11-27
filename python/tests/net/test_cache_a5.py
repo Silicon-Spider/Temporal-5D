@@ -228,13 +228,17 @@ def test_a5_cached_equals_one_full_pass(geometry, supersession):
     assert seen > 0, "the path met no transient token"
 
 
-@pytest.mark.parametrize("geometry", ["standard", "deep_travel", "many_timelines"])
-def test_a5_cached_equals_one_full_pass_under_the_creation_reading(geometry):
-    """(a) under ``causal_past="creation"``: a frozen board's past changes when an earlier head is
-    superseded, and the cache recomputes it; the transient tokens are live under it as under any."""
-    model = _model(230, causal_past="creation")
+@pytest.mark.parametrize("supersession", [R2, R1])
+@pytest.mark.parametrize("geometry", list(GEOMETRIES))
+def test_a5_cached_equals_one_full_pass_under_the_creation_reading(geometry, supersession):
+    """(a) under ``causal_past="creation"`` on every geometry and both C20 readings, as A1's: a
+    frozen board's past changes when an earlier head is superseded, and the cache recomputes it; the
+    transient tokens are live under it as under any. Each case a seed of its own."""
+    case = list(GEOMETRIES).index(geometry) * 2 + (supersession == R1)
+    model = _model(230 + case, causal_past="creation", supersession_scope=supersession)
     with torch.no_grad():
-        assert _check_tree(model, _root(geometry, 30), 30, what=(geometry,)) > 0
+        seen = _check_tree(model, _root(geometry, 30 + case), 30 + case, history=supersession == R1, what=(geometry, supersession))
+    assert seen > 0
 
 
 @pytest.mark.parametrize(
@@ -290,12 +294,16 @@ def test_every_attention_path_is_one_function_under_a5(impl):
 
 
 @pytest.mark.parametrize("supersession", [R2, R1])
-def test_a5_supersession_recompute_is_path_independent(supersession):
-    """(b), C20 under A5: two move orders reaching one multiverse - each in its own store - give one
-    A5 position (its candidate moves seeded by the content) and bit-for-bit one evaluation, equal to
-    the full pass."""
-    model = _model(260, supersession_scope=supersession)
-    root = _root("standard", 0)
+@pytest.mark.parametrize("geometry", ["standard", "duplicated", "even_start"])
+def test_a5_supersession_recompute_is_path_independent(geometry, supersession):
+    """(b), C20 under A5 on A1's three geometries and seeds: two move orders reaching one multiverse -
+    each in its own store - give one A5 position (its candidate moves seeded by the content) and bit
+    for bit one evaluation, equal to the full pass."""
+    for seed in (0, 1) if geometry == "standard" else (2,):
+        _a5_orders(_model(260 + seed, supersession_scope=supersession), _root(geometry, seed), supersession, (geometry, seed))
+
+
+def _a5_orders(model, root, supersession, what) -> None:
     with torch.no_grad():
         for first, second in _orders(root):
             ends = []
@@ -307,7 +315,7 @@ def test_a5_supersession_recompute_is_path_independent(supersession):
                 ends.append((tree, node, tree.evaluate(node)))
             (t1, n1, o1), (_, n2, o2) = ends
             assert n1.universe.digest() == n2.universe.digest()
-            assert _identical(o1, o2), (first, second)
+            assert _identical(o1, o2), (what, first, second)
             history_from = t1.view(t1.root) if supersession == R1 else None
             _close(o1, reference_output(model, t1.view(n1), history_from=history_from))
 
@@ -390,17 +398,94 @@ def test_a5_root_refresh_reduces_to_dense_at_the_root(supersession):
         _close(tree.evaluate(node), reference_output(model, tree.view(node), anchor=view))
 
 
+def _refreshed_search(model, refresh: str, seed: int):
+    """``test_cache.py``'s search with a refreshed epoch - a root refresh, or a node refresh two moves
+    down - and four nodes below its anchor, under A5 (each node's A5 view)."""
+    root = _root("many_timelines" if refresh == "root" else "deep_travel", seed)
+    tree = SearchTree(CachedEvaluator(model, CacheConfig(root_refresh=refresh == "root", node_refresh=refresh == "node")), root)
+    anchor = tree.root
+    if refresh == "node":
+        anchor = tree.path(_random_moves(root, np.random.default_rng(seed), 2))
+        tree.refresh(anchor)
+    nodes, node = [], anchor
+    for move in _random_moves(anchor.universe, np.random.default_rng(seed + 50), 4, jump_prob=0.4):
+        node = tree.child(node, move)
+        nodes.append(node)
+    return tree, anchor, nodes
+
+
+@pytest.mark.parametrize("refresh", ["root", "node"])
+def test_a5_status_biases_below_a_refreshed_anchor(refresh):
+    """B16 in a refreshed epoch under A5, against ``test_cache.py``'s oracle: B16's table moved between
+    two fresh searches leaves the anchor's evaluation bit for bit as it was - the refresh pass adds no
+    B16 - in the cached path and in the reference, and moves every node below the anchor in both; then
+    moving only the entries of statuses the history boards hold and no other frozen board of a node
+    does still moves that node - its live rows, transient tokens among them, read the history boards'
+    keys with the node's own status. Transient tokens at the anchor and at every node."""
+    seed = 12 if refresh == "root" else 13
+    model = _model(seed)
+    table = model.status.table.detach().clone()
+    noise = torch.randn(table.shape, generator=torch.Generator().manual_seed(seed))
+
+    def evaluations(delta, which=None):
+        model.status.table.copy_(table + delta)
+        tree, anchor, nodes = _refreshed_search(model, refresh, seed)
+        picked = [anchor, *nodes] if which is None else [[anchor, *nodes][i] for i in which]
+        out = [(tree.evaluate(n), reference_output(model, tree.view(n), anchor=tree.view(anchor))) for n in picked]
+        return out, tree, anchor, nodes
+
+    try:
+        with torch.no_grad():
+            base, tree, anchor, nodes = evaluations(torch.zeros_like(table))
+            assert all(tree.view(n).transient.any() for n in [anchor, *nodes])
+            moved, _, _, _ = evaluations(noise)
+            for path in (0, 1):  # the cached path, the reference
+                assert _identical(base[0][path], moved[0][path]), (path, "the anchor: the refresh pass adds no B16")
+                for i in range(1, len(base)):
+                    assert not torch.allclose(base[i][path].trunk, moved[i][path].trunk, atol=1e-4), (path, i, "below the anchor")
+            a_view = tree.view(anchor)
+            history = {(int(a_view.timeline[b]), int(a_view.half_turn[b])) for b in np.flatnonzero(~a_view.is_head)}
+            checked = 0
+            for i, node in enumerate(nodes, start=1):
+                view = tree.view(node)
+                key = model.make_context(collate([view])).structure.status_index.key[0]
+                held: dict[bool, set[int]] = {True: set(), False: set()}
+                for b in np.flatnonzero(~view.is_head):
+                    first = int(view.board_tokens(int(b), frozen=True)[0])
+                    held[(int(view.timeline[b]), int(view.half_turn[b])) in history].add(int(key[first]))
+                only = sorted(held[True] - held[False])
+                if not only:
+                    continue
+                delta = torch.zeros_like(table)
+                delta[..., only] = noise[..., only]
+                (out,), _, _, _ = evaluations(delta, [i])
+                for path in (0, 1):
+                    assert not torch.allclose(base[i][path].trunk, out[path].trunk, atol=1e-4), (path, i, "the history boards' keys")
+                checked += 1
+            assert checked, "a node whose history boards hold a status no other frozen board of it holds"
+    finally:
+        model.status.table.copy_(table)
+
+
 # --- (e) storage precision (G1, C15) -------------------------------------------------------------------------
 
 
 def test_a5_bf16_cache_is_the_live_precision():
-    """(e), G1 under A5: the BF16 cache's evaluation is as far from the FP32 full pass as the BF16
-    full pass is (``test_cache.py``'s bounds, measured there for A1)."""
-    for seed in (0, 1):
+    """(e), G1 under A5, as A1's (``test_cache.py``'s bounds and seeds 0-2): the BF16 cache stores K/V
+    in BF16, no rounding of its own; at a refreshed root its evaluation is the dense BF16 pass up to
+    summation order; below, a cached evaluation is as far from the FP32 full pass as the BF16 full
+    pass is."""
+    for seed in (0, 1, 2):
         m16, m32 = _model(seed, "bf16"), _model(seed, "fp32")
         root, moves = _bf16_trees(seed)
         with torch.no_grad():
+            refreshed = SearchTree(CachedEvaluator(m16, CacheConfig(root_refresh=True)), root)
+            assert refreshed.view(refreshed.root).transient.any()
+            dense = m16(collate([refreshed.view(refreshed.root)]), scope="dense", return_trunk=True)
+            g = _gaps(refreshed.evaluate(refreshed.root), dense)
+            assert g["trunk_rms"] < 3e-3 and g["trunk_max"] < 4e-2 and g["value"] < 5e-3 and g["policy"] < 2.5e-2, g
             tree = SearchTree(CachedEvaluator(m16), root)
+            assert all(e.kv.dtype == torch.bfloat16 and e.scale is None for e in tree.evaluator.store.entries.values())
             node = tree.root
             for move in [None, *moves]:
                 if move is not None:
@@ -409,6 +494,8 @@ def test_a5_bf16_cache_is_the_live_precision():
                 cached, live, exact = tree.evaluate(node), reference_output(m16, view), reference_output(m32, view)
                 g_cached, g_live = _gaps(cached, exact), _gaps(live, exact)
                 assert g_cached["trunk_rms"] < 1.3 * g_live["trunk_rms"] + 3e-4, (g_cached, g_live)
+                g = g_cached  # and within tests/net/test_precision.py's BF16 bounds, as A1's
+                assert g["trunk_rms"] < 1e-2 and g["trunk_max"] < 6e-2 and g["value"] < 2e-2 and g["policy"] < 3e-2, g
                 g = _gaps(cached, live)
                 assert g["trunk_rms"] < 6e-3 and g["trunk_max"] < 4e-2 and g["value"] < 5e-3 and g["policy"] < 2.5e-2, g
 
@@ -420,7 +507,10 @@ def test_a5_fp8_cache_equals_the_fp8_network():
     ``test_cache.py``'s bounds; the stored entries are FP8."""
     for seed in (0, 1, 2):
         root, moves = _bf16_trees(seed)
-        bounds = (("fp32", dict(trunk_rms=4e-4, value=5e-5, policy=5e-3)), ("bf16", dict(trunk_rms=8e-3, value=6e-3, policy=4e-2)))
+        bounds = (
+            ("fp32", dict(trunk_rms=4e-4, value=5e-5, policy=5e-3)),
+            ("bf16", dict(trunk_rms=8e-3, trunk_max=1e-1, value=6e-3, policy=4e-2)),
+        )
         for dtype, bound in bounds:
             model = _model(seed, dtype, frozen_kv_format="fp8")
             with torch.no_grad():

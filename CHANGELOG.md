@@ -10,6 +10,35 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-28 - Decision 7's review: A5's cached rows brought to A1's coverage (SN-2)
+
+The spec pass found that "section 15.2's cached rows run for A5" overstated the coverage against
+`test_cache.py`'s protocol. The main loop decided to bring it to A1's. Added:
+- **The C27 row under A5** (`tests/net/test_turn_refresh.py`, `test_supersession_deferred_under_a5`;
+  review decision 16 makes it required behind the cached flag): T6 with each node's A5 view, on every
+  geometry and epoch. Seed 0 with the lineage reading and both C20 readings run per commit; the rest
+  of T6's matrix is slow, as A1's is. T6's helpers now read the tree's view, which is the node's
+  state itself under A1.
+- **Every engine variant** (`tests/engine/test_cached_variants.py`): the full-pass test gains an `a5`
+  configuration, so all 16 variants under both C20 readings, each state converted strictly.
+  `test_a5_step_api_cached_equals_dense_on_every_variant` runs the step API's test with an A5
+  network on all 16, tree and graph, causal and with the root refresh. 6,840 transient tokens were
+  met; the largest gap is 1.91e-6.
+- **C20 on A1's three geometries and seeds**, and the creation reading on all seven geometries
+  under both C20 readings (`tests/net/test_cache_a5.py`).
+- **G1:** BF16 on seeds 0-2, with A1's refreshed-root check (a refreshed root holding transient
+  tokens against the dense BF16 pass), the entries asserted BF16, and `test_precision.py`'s BF16
+  bounds. The FP8/BF16 case asserts `trunk_max < 1e-1` as A1's does.
+- **B16 below a refreshed anchor with transient tokens** (`test_a5_status_biases_below_a_refreshed_anchor`,
+  root and node refresh): `test_cache.py`'s oracle, with transient tokens at the anchor and at every
+  node.
+
+No tolerance is changed. Run time: the per-commit A5 C27 cases take about 94 s, the A5 variant tests
+about 107 s, and `test_cache_a5.py` about 75 s.
+
+Spec: §15.2 (the C2/C17, C20, C27, C3, C3a, G1 and B16 rows' protocol: "every variant",
+"adversarial constructions"); register C17, C20, C27, A5; review decision 16. No spec text changes.
+
 ### 2026-11-28 - Decision 7's review, the records: the refresh's reading logged, the settled readings cited, the stale text, MEASUREMENTS' margins, the default-path tool (SN-1, SN-3 to SN-8; issue 277)
 
 The three-pass review of 218b1a3 found no HIGH. This entry and the ones after it fix every finding as
