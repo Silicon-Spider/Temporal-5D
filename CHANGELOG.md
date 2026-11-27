@@ -10,6 +10,24 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-28 - Merge main (d4327ba) into lane/net, before decision 7's review round
+
+Main's commits since 5e77028 are `lane/search`'s round 3 and register E12 part 1 (the Gumbel root
+search, off) with its review round. E12 changes the engine's `t5d_search_params` (720 bytes), so the
+worktree's engine was rebuilt before any engine-backed test ran.
+
+Two files conflicted, both sides kept:
+- `CHANGELOG.md`, rebuilt by heading: the lane's decision-7 entry above main's.
+- `docs/BUILD_LOG.md`: the session log holds main's two entries, then the lane's.
+
+`docs/design/` and `oracles/` are main's. No number collides: the lane holds issues 276-299 and edits
+386-399; main's new numbers are issues 484-499 and 415, and edits 312, 314 and 347-359.
+
+Checks on the merged tree: the engine rebuilt (E12's layout); ruff "All checks passed!", "145 files
+already formatted"; the A5 tests, the engine's included: "68 passed, 1 deselected".
+
+Spec: no part of the spec describes a merge. The merged entries carry their own Spec lines.
+
 ### 2026-11-27 - Decision 7 built: A5's destination tokens are live tokens under the block-causal scope and the cache (register C17; issue 252 settled)
 
 The 2026-11-15 review's decision 7, which the user confirmed as a ruling, is register C17: "piece-centric
@@ -90,6 +108,372 @@ Spec: §7.3, §14.4 and §16; register C17, A5, C15, B12, B16, C26. Decision 7 i
 276 (new) holds the five readings the ruling leaves to the build, for the user. Proposed edit 386
 brings §7.3's and §16's "dense scope only" lines and register A5 up to the build. Edit 194 is marked
 superseded by decision 7.
+
+### 2026-11-27 - Build log: the current state at register E12's merge
+
+`docs/BUILD_LOG.md`:
+- `lane/engine`'s line under "Now" says register E12's part 1 merged with its review round, that
+  the lane is idle, and that part 2 waits on issue 416 and I21's ranking.
+- "Work items, by lane" follows the same change.
+- The Lazy SMP timing log gains the merge battery's row.
+- The main loop accepts the fix round's reading row 20. The allocation by rank is exact, batched
+  or synchronous. The survivors may differ between the two, because values below the root are
+  backed up under virtual loss. That row stays the user's to confirm.
+
+Spec: no part of the spec describes the build log's bookkeeping.
+
+### 2026-11-27 - Register E12's review round, verified: the checks and the survivors' re-run
+
+Checks: engine 923 of 923 (`py engine/build.py --werror --test`, on b418c98, 22 minutes; the in-suite Lazy SMP run 293 against 314); after the `heap_bytes` check was strengthened (dd0c073) the Gumbel tests 47 of 47; the Lazy SMP test x3 on dd0c073 (`mcts.cpp` changed: 1 thread 293 each run, 5 threads 314 / 314 / 316; load 64 / 19 / 31% before, 21 / 56 / 12% after - the table); ruff "All checks passed!" and "144 files already formatted"; pytest `tests/engine` and `tests/train` with T5D_REQUIRE_ENGINE=1: 931 passed, 1 skipped (test_records' opt-in T5D_RECORDS run) in 29 minutes, on dd0c073; verify exit 0 (pins, corpus, known divergences, rulebook, boundary, provenance, engine baseline, golden observations: ok; its 17 notes on the proof channel's required sets, which it does not fail on, as before). The commit-tier gate is the main loop's at the merge (ftxi is not built in this worktree).
+
+The mutation pass's 35 gaps, re-run with its runner and list on a fresh copy of dd0c073 (M03 and
+M04 re-expressed against the capped check; the pristine library rebuilt before the Python mutant):
+34 KILLED by named tests, M20 EQUIVALENT.
+
+| id | what the mutant did | verdict | by |
+|---|---|---|---|
+| G07 | stream_seed: root key not mixed | KILLED | gumbel_stream_and_variate_are_the_headers_pinned_forms |
+| G08 | stream_seed: salt changed | KILLED | gumbel_stream_and_variate_are_the_headers_pinned_forms |
+| G09b | stream_seed: ^ -> + (compiling form of G09) | KILLED | gumbel_stream_and_variate_are_the_headers_pinned_forms |
+| G10 | variate: counter index instead of index + 1 | KILLED | gumbel_stream_and_variate_are_the_headers_pinned_forms |
+| G11 | variate: counter's odd constant changed | KILLED | gumbel_stream_and_variate_are_the_headers_pinned_forms, capi_gumbel_fields_reach_the_search |
+| M16 | draw: stream ignores the root key | KILLED | mcts_gumbel_root_g_is_the_seed_and_root_keys_stream |
+| G13 | sample_order: ties to the higher index | KILLED | gumbel_sample_order_ties_go_to_the_lower_index |
+| G29 | v_mix: zero prior mass not guarded | KILLED | gumbel_mixed_value_with_no_prior_mass_is_v_net |
+| G33 | max_open_visits: closed actions counted | KILLED | gumbel_sigma_scale_counts_open_actions_only |
+| G38b | score: unvisited edge takes its q, not v_mix (compiling form of G38) | KILLED | gumbel_best_scores_an_unvisited_candidate_by_v_mix |
+| G59 | best: v_net instead of v_mix | KILLED | gumbel_best_scores_an_unvisited_candidate_by_v_mix |
+| G42 | halve: keep floor(c / 2) | KILLED | gumbel_halving_keeps_the_ceiling_of_half |
+| G43 | halve: keep not capped by members | KILLED | gumbel_halving_keeps_only_the_members_left |
+| G48 | next: ties to the last candidate | KILLED | gumbel_next_ties_go_to_the_first_candidate, gumbel_nan_scores_order_last_in_the_choice_and_the_halving |
+| G37b | refill: takes a closed edge (compiling form of G37) | KILLED | gumbel_refill_skips_a_closed_edge |
+| G54 | next: every-closed fallback skips the shown edges | KILLED | gumbel_with_every_candidate_closed_the_shown_then_the_next_open_edges_are_taken |
+| G55 | next: every-closed fallback never takes an unshown edge | KILLED | gumbel_with_every_candidate_closed_the_shown_then_the_next_open_edges_are_taken |
+| G57 | best: no fallback to the shown edges | KILLED | gumbel_with_every_candidate_closed_the_shown_then_the_next_open_edges_are_taken |
+| M03 | validate: c_visit +inf accepted (re-expressed: isfinite and the cap gone) | KILLED | mcts_gumbel_constants_are_capped_so_sigma_stays_finite |
+| M04 | validate: c_visit 0 refused (re-expressed) | KILLED | mcts_gumbel_constants_are_capped_so_sigma_stays_finite |
+| M13 | set_priors: draw with the flag off | KILLED | mcts_gumbel_is_off_by_default_and_inert, mcts_gumbel_memory_budget_counts_the_roots_buffers |
+| M23 | gumbel_next: instantiated not grown | KILLED | mcts_gumbel_a_refilled_candidate_is_instantiated_at_once |
+| M28 | select_once: Wait does not release the path | KILLED | mcts_gumbel_waits_at_most_once_a_phase, mcts_gumbel_batched_allocation_is_the_synchronous_one, mcts_gumbel_wait_releases_the_roots_virtual_visit, mcts_gumbel_a_batch_ends_at_a_halvings_wait |
+| M29 | gather: Wait does not end the batch | KILLED | mcts_gumbel_a_batch_ends_at_a_halvings_wait (hangs; the run's timeout) |
+| M33 | choose_gumbel: batch check removed | KILLED | mcts_gumbel_choice_refused_while_a_batch_waits |
+| M36 | choose_gumbel: edge index returned, not the root_children index | KILLED | mcts_gumbel_choice_indexes_root_children_after_a_removal |
+| T02 | TimeManager::begin: refused only after the manager has begun | KILLED | mcts_gumbel_timed_refusal_leaves_the_manager_unchanged |
+| S01 | play_game: not refused | KILLED | mcts_gumbel_game_loop_refuses_before_any_evaluation |
+| C01 | params_from: gumbel_m not copied | KILLED | capi_gumbel_fields_reach_the_search |
+| C03 | params_from: gumbel_c_visit not copied | KILLED | capi_gumbel_fields_reach_the_search |
+| C04 | params_from: gumbel_c_scale not copied | KILLED | capi_gumbel_fields_reach_the_search |
+| C05 | params_from: c_visit and c_scale swapped | KILLED | capi_gumbel_fields_reach_the_search |
+| C06 | params_from: gumbel_root not checked 0/1 | KILLED | capi_gumbel_fields_reach_the_search |
+| P05 | search.py: choose_gumbel returns 0 | KILLED | test_gumbel_choice_is_a_finalist_and_varies_with_the_seed |
+| M20 | fill: dead ends open | EQUIVALENT | `mark_dead_end` prunes the root edge in the same call; a root child has no other parent |
+
+This round's own fixes, mutated back on the same copy: N01 (a collision no longer ending the batch)
+KILLED by `mcts_gumbel_waits_at_most_once_a_phase` and `mcts_gumbel_batched_allocation_is_the_synchronous_one`;
+N02, N03 (the SF-1 refusals) by `mcts_gumbel_refusals_name_their_parameter`; N04-N06 (the caps in
+`validate` and `Root::make`) by `mcts_gumbel_constants_are_capped_so_sigma_stays_finite`; N07, N08
+(the NaN ordering) by `gumbel_nan_scores_order_last_in_the_choice_and_the_halving`; N09, N10
+(`memory_bytes`, `heap_bytes`) by `mcts_gumbel_memory_budget_counts_the_roots_buffers`. M03 taken
+literally (isfinite alone dropped) is EQUIVALENT: the cap refuses +infinity and `>= 0` refuses NaN.
+
+`docs/BUILD_LOG.md`: issue 415's checks and its review block's verification and user bullets, the
+Lazy SMP log's row, the session log, the E12 row, the lane's line and the user's list.
+
+Spec: no part of the spec describes the checks; no proposed edit; no measured figure for
+MEASUREMENTS (test counts; the Lazy SMP timings are the build log's table).
+
+### 2026-11-27 - Register E12's review round: the readings and references put right, the memory budget (SF-2 to SF-7, minor points)
+
+- **SF-2**: reading (a) and readings row 16 quote both texts - §16's "**E10**: Gumbel root search
+  as an arm of the search (§8.4), after I21's ranking" in its list of decisions "with code still
+  to follow", and register E12's Gate column, "6g; after I21's ranking" - and say why the arm is
+  built off (the ranking gates whether the experiment runs; an arm that is off changes nothing).
+- **SF-3**: the flag-off claim now says what is shown - every hook behind the flag and nothing
+  allocated (by reading), the four other fields inert by digest under all three splits, and the
+  as-built root order (TP-1's absolute check) - in the README, issue 415, `mcts.hpp`, the
+  binding's test docstring and the part-1 CHANGELOG entry. `validate`'s range checks on the
+  gumbel fields keep running with the flag off (an absurd value refused either way), and the
+  documents say so.
+- **SF-4**: readings rows 27-29 - reading (j) (`choose_gumbel()`'s refusals), the proof channel's
+  refusal (new reading (n): E9's rules would let a proof decide the move the halving chooses; H23
+  keeps the channel off, so it binds after the sign-off) and the five record-header keys per
+  search arm without a version bump (new reading (o)).
+- **SF-5**: the generator's arm is issue 416 in the README, `search.py` and
+  `test_gumbel_root.py`; the part-1 CHANGELOG entry's "edit 312 names the C fields" corrected
+  (it names the flag only); edit 312's stream wording gains its XOR.
+- **SF-6**: the build log's "Not built, and why" and next-steps lines say part 1 is built (with
+  the "until edit 412" note); issue 415's "Checks" entry is written at the round's end.
+- **SF-7**: reading (b) and row 17 credit Karnin et al. with the ceil-halving and Danihelka et
+  al. with the max(1, ·) floor and the leftover visits to the last two.
+- **The correctness pass's minor points**: `memory_bytes()` (`Limits::bytes`' measure) counts a
+  Gumbel root's buffers - `gumbel::Root::heap_bytes()` (new) and the view; off, nothing (test
+  `mcts_gumbel_memory_budget_counts_the_roots_buffers`, which fails with the term taken out; its
+  check of `heap_bytes()` itself names all four buffers, so that leaving one out fails too).
+  Reading (d), the README and `mcts.hpp` say that a search cut mid-schedule chooses among the
+  current survivors where the paper's choice is among a completed halving's. (`Root::score` was
+  made private with EC-3.)
+
+Spec: §16 and register E12 - proposed edit 312's stream wording corrected (the XOR); no new edit.
+Readings rows 16, 17 reworded and 27-29 added (issue 415 (a), (b), (j), (n), (o)) for the user.
+
+### 2026-11-27 - Register E12's review round: the mutation pass's tests adopted (TP-1)
+
+The mutation pass found 35 real gaps among 128 mutants (77 killed, 10 equivalent - accepted). Its
+candidate tests are adopted, under names that say what they pin, and cover 34 gaps:
+
+- `engine/tests/test_gumbel.cpp`, the pure parts: `gumbel_stream_and_variate_are_the_headers_pinned_forms`
+  (G07-G11, G09b: `stream_seed`, `variate` and a sample's g by value, for four (seed, root key)
+  pairs), `gumbel_sample_order_ties_go_to_the_lower_index` (G13),
+  `gumbel_mixed_value_with_no_prior_mass_is_v_net` (G29), `gumbel_sigma_scale_counts_open_actions_only`
+  (G33), `gumbel_best_scores_an_unvisited_candidate_by_v_mix` (G38b, G59),
+  `gumbel_next_ties_go_to_the_first_candidate` (G48),
+  `gumbel_with_every_candidate_closed_the_shown_then_the_next_open_edges_are_taken` (G54, G55,
+  G57), `gumbel_halving_keeps_the_ceiling_of_half` (G42), `gumbel_halving_keeps_only_the_members_left`
+  (G43), `gumbel_refill_skips_a_closed_edge` (G37b).
+- The search's arm: `mcts_gumbel_root_g_is_the_seed_and_root_keys_stream` (M16),
+  `mcts_gumbel_choice_refused_while_a_batch_waits` (M33),
+  `mcts_gumbel_choice_indexes_root_children_after_a_removal` (M36),
+  `mcts_gumbel_a_refilled_candidate_is_instantiated_at_once` (M23),
+  `mcts_gumbel_wait_releases_the_roots_virtual_visit` (M28, batches of 5),
+  `mcts_gumbel_a_batch_ends_at_a_halvings_wait` (M29 - redesigned: since EC-1's fix a gather of
+  SIZE_MAX in a phase's first batch ends at a collision, so it is asked where every candidate has
+  two of its three visits, and returns the 16 third visits at the wait),
+  `mcts_gumbel_timed_refusal_leaves_the_manager_unchanged` (T02: the manager's plan and scale in a
+  decision begun on a plain search, the same after the refused call),
+  `mcts_gumbel_game_loop_refuses_before_any_evaluation` (S01: by name, no evaluation). M03 and M04
+  (c_visit +infinity and 0) are covered by EC-3's `mcts_gumbel_constants_are_capped_so_sigma_stays_finite`.
+- The C API: `capi_gumbel_fields_reach_the_search` (C01, C03-C05 under the random evaluator, each
+  field shown to change the tree; C06 - `gumbel_root` 2 and -1 refused, as `params_from`'s
+  `boolean()` refuses every int32 flag other than 0 or 1: the ABI's convention, followed).
+- The binding (`python/tests/engine/test_gumbel_root.py`): `test_gumbel_choice_is_a_finalist_and_varies_with_the_seed`
+  (P05), `test_the_gumbel_fields_reach_the_step_loop` (the step loop under a non-uniform Python
+  evaluator: the same search twice the same, each Gumbel field changing the tree, the choice a
+  finalist; both splits), `test_the_gumbel_streams_pinned_values` (no engine: the header's PINNED
+  FORMS written out in Python give the numbers the C++ test pins).
+- **M13** (the inert test was relative): `mcts_gumbel_is_off_by_default_and_inert` adds an
+  absolute check - with the flag off the root's edges are in the as-built order (the stable sort
+  by prior; both splits) and `gumbel_view` is empty. Four older tests already killed M13:
+  `mcts_root_noise_is_seeded_and_only_at_the_root`, `mcts_tree_form_evaluates_a_carried_root_it_inherited`,
+  `mcts_i15_root_cpuct_and_the_effort_label`, `selfplay_plays_only_moves_known_legal_whatever_the_budget`.
+- **M20** (a root child turned dead end counted as open) is equivalent, not a gap: a node's
+  `dead_end` is set only by `mark_dead_end`, which prunes the edge into it in the same call, and a
+  root child has no other parent (build-log issue 415's review block).
+- Documents: the README's tests paragraph; issue 415's review block, the lane's line.
+
+Spec: no part of the spec describes the tests; register E12's row unchanged. No proposed edit.
+
+### 2026-11-27 - Register E12's review round: batched allocation exactly the synchronous one (EC-1, EC-2)
+
+- **EC-1 (MEDIUM): under batching the last two survivors did not split their visits equally.**
+  The root's pick counts an edge's virtual loss as its visits in flight, and a collision's
+  virtual loss is released at the batch's end without becoming a visit: the last two ended 48
+  and 50 where the synchronous search gives 49 and 49 (seed 6, batches of 32; 10 of 20 seeds
+  unequal at batches of 128). Under a Gumbel root a collision now ends the batch (`gather`,
+  `mcts.cpp`): the colliding candidate was the pick, with the fewest visits, and would be the
+  pick again, so nothing could go to it before the batch's evaluations return - and no pick ever
+  counts a collision path. No counter was needed. New test
+  `mcts_gumbel_batched_allocation_is_the_synchronous_one` (the correctness pass's
+  `rv_batched_vs_sync_random` and `rv_last_phase_imbalance`, adopted): 240 pairs - both splits,
+  batches of 8, 32 and 128, seeds 0-19, the Random and the uniform evaluators - each candidate's
+  visits, ranked, the synchronous search's and the schedule's; under the uniform evaluator edge by
+  edge and the choice too. Under the Random one the halving keeps other survivors in 83 of 120
+  pairs: it reads the candidates' values, and below the root a batch's leaves are chosen under
+  virtual loss - batched search itself, not the allocation (counted, not checked).
+- **EC-2 (LOW): "at most once a phase" was false with collisions.** With EC-1's fix a phase
+  waits at most once; the claim stands, now pinned by `mcts_gumbel_waits_at_most_once_a_phase`
+  (the correctness pass's `rv_search_waits_per_phase`, its bound tightened: at most one wait a
+  phase, at most one collision a batch, every short batch ending at one or the other; gathers of
+  5, 7, 24 and 32, seeds 1-6, both splits). `mcts_gumbel_batched_and_synchronous_allocate_alike`'s
+  bound drops its `+ collisions`. Both new tests fail with the fix taken out.
+- Documents: `gumbel.hpp`'s `Action::pending`, `mcts.hpp`'s header note, the README's "Selection
+  and batches" and tests; the build log's readings row 20 and issue 415 (e), its review block,
+  the lane's line.
+
+Spec: §8.4 (sequential halving's equal visits), register E12 - proposed edits 312 and 314 gain the
+collision rule (a batch ends at a halving's wait or a collision under the root; the allocation the
+synchronous search's). No new edit; no measured figure for MEASUREMENTS (test counts only).
+
+### 2026-11-27 - Register E12's review round: the root's logits held to I21's, sigma's constants capped (SF-1, EC-3)
+
+The fix round of register E12 part 1's three-pass review (spec, correctness, mutation; the main
+loop's decisions binding), on `lane/engine` after main c2f9013 was merged (M23).
+
+- **SF-1 (MEDIUM): the root's logits could drift from I21's raw logits.** The draw, the halving
+  and the choice read ln of the root prior, which `policy_temperature` and `unknown_prior_scale`
+  still shaped under the arm (only `root_policy_temperature` was refused); at
+  `unknown_prior_scale` 0 unknown moves could never be candidates. `validate` now refuses both
+  away from 1 under `gumbel_root`, each named. With the refusals each candidate's logit is the
+  network's raw logit less one constant. The submit was checked: a legal submit the network gives
+  no logit takes `submit_share`, and `train.targets.raw_prior` (which `train.completed_q` reads)
+  gives it the same share from the record's full-search parameters, which the generator's
+  overrides set for the cheap searches too - the two agree exactly, so nothing changed there.
+  New test `mcts_gumbel_root_logits_are_the_raw_logits_i21_reads`; the refusals added to
+  `mcts_gumbel_refusals_name_their_parameter` and the binding's
+  `test_gumbel_choice_and_refusals_reach_python`.
+- **EC-3 (LOW): sigma overflowed to NaN with parameters `validate` accepted** (c_visit 1e308 and
+  c_scale 10: a lost candidate's sigma infinity x 0, and `best()` played it). `gumbel_c_visit`
+  and `gumbel_c_scale` are each capped at 1e6 (`gumbel::kMaxCVisit`, `kMaxCScale`,
+  placeholders), refused above it by `validate` (with the flag on or off) and by
+  `gumbel::Root::make`; each refusal names its own field (one message named both). `best()` and
+  `halve()` order a NaN score below every other, so their orders stay strict weak orders. Tests
+  `mcts_gumbel_constants_are_capped_so_sigma_stays_finite` (the review's two probes turned into
+  refusals) and `gumbel_nan_scores_order_last_in_the_choice_and_the_halving`.
+- **The correctness pass's minor point on `Root::score`**: it is private (only `best` and
+  `halve` call it, with open edges).
+- Documents: `mcts.hpp`'s parameter comments, the README's "Gumbel root search", `search.py`'s
+  docstring; the build log's readings row 18 reworded and row 26 added (issue 415 (c), (m)),
+  issue 415's review-round block, the E12 row and the lane's line.
+
+Spec: §8.4, §16 (I21's "the network's raw" logits), register E12 and I21 - proposed edits 312 and
+314 reworded (the logit the raw one up to a constant, the two refusals, the caps; edit 314's
+"replaced, not compounded" is true now that a policy temperature other than 1 is refused). No new
+edit; the caps are placeholders the spec does not give (issue 415 (m), readings row 26).
+
+### 2026-11-24 - Register E12 (Gumbel root search), part 1: the C API and the binding
+
+The five `t5d_search_params` fields in front of `expand` (still last), in `params_from`, the
+layout table and the defaults; `t5d_search_choose_gumbel` appended (build-log issue 415).
+`python/t5d/engine/capi.py` mirrors them (`CSearchParams`, `_SIGNATURES`: a library without
+them is refused at load) and `Search.choose_gumbel()` binds the choice, with a docstring bullet
+in `search.py`. Tests: `capi_gumbel_fields_defaults_and_choice` (the fields at their offsets,
+their defaults, the C search the C++ one by digest and choice, the refusals through the C API),
+and `python/tests/engine/test_gumbel_root.py` (the defaults and layout, the record header's
+round trip, the step loop the engine's own run digest for digest under the board-move split and
+the tree form, the choice and the refusals as `EngineArgumentError`, and the numbers the engine
+pins against `train.completed_q` and `train.selfplay.mix`).
+
+Spec: register E12; §16 - edit 312 names the flag (`gumbel_root`); the five C fields and
+`t5d_search_choose_gumbel` are the engine ABI's, which no part of the spec lists (corrected by
+the review round of 2026-11-27, SF-5). Record headers gain five keys per search arm
+(`params_dict`); the record version stays 2, as for every appended field.
+
+### 2026-11-24 - Register E12 (Gumbel root search), part 1: the search's arm, off
+
+`SearchParams::gumbel_root` (off) with `gumbel_m` 16, `gumbel_simulations` (the driver's: its
+playout cap less one), `gumbel_c_visit` 50 and `gumbel_c_scale` 1 (build-log issue 415). On, a
+self-play root takes a Gumbel sample of its open edges at its expansion - drawn before
+`set_priors`' commit point, adopted with it by a nothrow move (issue 535's discipline) - its
+children the sample in its order, and selection at the root is the halving's; a phase waits for
+its pending visits by ending the batch short (`Selected::Wait`); a candidate found illegal in the
+first phase gives its place to the next of the sample; `Search::choose_gumbel()` is the move,
+`gumbel_view()` the tests' table. Refused, each by name: the flat form (part K), root noise and
+a root policy temperature (the draw replaces them), the asset map and Hunt's suggestions (root
+steering; `asset_map` is on by default), the proof channel, n 0; under the arm `choose()`, a
+`choose_by_visits` temperature and every re-root; a timed decision at `TimeManager::begin`
+(`src/timeman.cpp`: where `run_timed` and Python's timed loop both begin) and the C++ game loop
+(`src/selfplay.cpp`). Off, every hook is behind the flag and the arm's state allocates nothing;
+the four other fields are inert by digest (worded so by the review round of 2026-11-27, SF-3).
+`engine/tests/
+test_gumbel.cpp` gains twelve search tests (inert off; the refusals; the sample and the
+schedule's visits at the root; the argmax choice and v_mix; a planted move for 20 seeds; one
+simulation a sample of the prior; unknown candidates verified and replaced; batched and
+synchronous alike; the tree form and MCGS; one-move and mated roots; every allocation of the
+root's first delivery failing in turn; the timed decision and the game loop). `engine/README.md`: the
+section "Gumbel root search". Not a truth source.
+
+Spec: §8.4, §8.6, §16, register E12, I19, C14, part K - proposed edits 312-314 (issue 415's
+readings (b)-(l)).
+
+### 2026-11-24 - Register E12 (Gumbel root search), part 1: the pure parts
+
+Register E12's sample and halving as pure functions, before any search uses them (build-log
+issue 415): `engine/include/t5d/gumbel.hpp` and `engine/src/gumbel.cpp` - the Gumbel variate
+(52-bit, counter-based: an edge's g a function of the stream and its index only), the stream
+from the search seed and the root key (salt "GUMBEL12"), the Gumbel-top-k order, sequential
+halving's schedule (Karnin et al.: ceil(log2 m) phases, the leftovers to the last two), sigma
+and v_mix in I21's form (q mapped onto [0, 1]; the target side's numbers), and `gumbel::Root`,
+the halving's state - which edge to visit next, when to wait for pending visits, the first
+phase's refill, the choice - allocating nothing after its draw. Written from Danihelka et al.
+(ICLR 2022), Karnin, Koren and Somekh (ICML 2013) and the Gumbel-top-k trick; no
+implementation opened (H29). `engine/tests/test_gumbel.cpp`: nine tests - the variate's ends
+and moments, the sample's laws and its softmax frequencies, the schedule's hand counts and laws,
+sigma and v_mix on the numbers `train/completed_q.py` pins, the halving driven as a bandit
+(every survivor at its target at each halving, the kept half the test's own), the wait, the
+refill and the drop, the choice better than the prior and, at c_scale 0, a sample of it. Not a
+truth source. The build log carries the item's readings (issue 415, rows 16-25 of the readings
+table), the generator's arm's design and two questions (issue 416), and edits 312-315.
+
+Spec: §8.4, §16, register E12 (E10 until edit 412), I21, part K - proposed edits 312-315; the
+spec's numbers unchanged (m 16, c_visit 50, c_scale 1, the paper's placeholders).
+
+### 2026-11-24 - Build log: the current state at the search lane's third round
+
+`docs/BUILD_LOG.md`: `lane/search`'s line under "Now" and "Work items, by lane" say round 3 merged.
+That is MT-03's settling-scan part and L1's and L8's tests. The lane is idle apart from the user's
+questions. The Lazy SMP timing log gains the merge battery's row.
+
+Spec: no part of the spec describes the build log's bookkeeping.
+
+### 2026-11-24 - Round 3 of lane/search, verified: the checks
+
+The round's two items (MT-03's part 5; round 2's two weak tests), checked on its final tree.
+Checks on 22d980e: engine 876 of 876 (`--werror`); the long twin added (`long_ladder_settling_scans_keep_their_facts_in_the_stores_under_tt_churn_6f`) passed, its figures as measured; the Lazy SMP test x3, owed by the ladder's seam (1 thread 293 each run, 5 threads 313 / 312 / 317; the engine lane's E12 work beside, load 9 / 13 / 20% before, 7 / 7 / 28% after - the table); verify ok (exit 0; its note of 17 problems in the required sets of the proof channel's tiers, which it does not fail on, as before); gate commit "oracle layer [commit]: ok", SMOKE TEST - PASSED (baseline 41 compared, 0 declined), proof channel DISABLED. No Python changed (no ruff or pytest owed); no truth source (the nightly not owed).
+
+Spec: none - checks and their record. No proposed edit; no measured figure.
+
+### 2026-11-24 - Round 2's two weak tests made strong: L1's charge and L8's capped Guard
+
+Round 2 left two LOW fixes without a test that tells the fix from its fault.
+- **L1** (the model clock charges a decision's whole work): its test was a decision with nothing
+  after its timed run, where the old charge and the new agree. Now
+  (`ladder_the_model_clock_charges_guards_research_with_the_decision`): Guard's experiment on the
+  model clock - the flat form, the favourite Rc5-a5 refuted by Black's mate in one, rejected and
+  searched again - so the one decision does work after its timed run; its charge equals the
+  decision's whole work at the plan's price, which the timed run's work alone (L1's fault) falls
+  short of. The plan is about one evaluation (a thousand actions left, no floor, the signals off),
+  so the timed run is the forced slices' two playouts: as Guard's own test holds its search to two,
+  the in-tree solver has not yet seen the mate (with more, it avoids the favourite and Guard has
+  nothing to refute).
+- **L8** (Guard's scan gets no more than the hard bound leaves) had no test. Now
+  (`ladder_guards_scan_gets_no_more_than_the_hard_bound_leaves`): the same experiment on a test
+  clock, asynchronous (the synchronous mode's scan is node-budgeted), batches of one leaf at 20 s a
+  leaf - the forced slices' two playouts spend the hard bound - so Guard runs, stops before its
+  first depth, refutes nothing, and the favourite is played; without the clock the same scan,
+  given guard_ms, refutes it (the premise).
+- Both beside Guard's own test in `test_ladder.cpp`, the proof channel on in these tests only.
+- Each fix mutated back: L1's (the model clock's charge the timed run's work alone) KILLED by
+  `ladder_the_model_clock_charges_guards_research_with_the_decision`, L8's (Guard's scan given
+  guard_ms, uncapped) KILLED by `ladder_guards_scan_gets_no_more_than_the_hard_bound_leaves` - each
+  the other test passing, the file restored and rebuilt after.
+
+Spec: none - tests (§8.6's hard bound as built, issue 458; Guard H42, offline). No proposed edit; no
+measured figure.
+
+### 2026-11-24 - 6f under TT churn through the wired settling path (MT-03's part 5)
+
+Section 13.1's 6f ("verify the proof-export invariant under TT churn for Hunt and the settling
+scans") for the settling scans as the ladder runs them - build-log spec issue 402's part 5, which
+waited on E10's merge. MT-03 drove the bare prover as a settling scan would; this drives the scan
+itself.
+- **The test** (`ladder_settling_scans_keep_their_facts_in_the_stores_under_tt_churn_6f`, and a
+  `long_` twin): `VerificationLadder`'s settling job - full df-pn (prove_only off), the settling
+  class, one thread by nodes (the synchronous mode), the game's one prover kept across its scans -
+  with its transposition table cut to 1 or 2 entries. On the root: the verdict against the default
+  table's and the references (Tally), H19 at the root (proofs in the solved store, disproofs or a
+  confirmed game fact in the disproof store), certificates confirmed by E4, the root asked again in
+  the next decision answered from the stores with nothing expanded. On the proof's continuation: the
+  attacker's next turn start after its first action and a defence, asked as a PV change's scan,
+  proven from the stores. On sequences of related roots sharing the stores (consecutive turn starts
+  of random games under every ruleset and both Q4 readings, alternately a root's and a PV change's
+  scan), each decided root asked again after the sequence and answered from the stores. A sample of
+  each solved store's facts held to the brute-force game tree (a Draw to E4's stalemate). Measured:
+  2,040 roots under churn - 924 proven, 1,920 disproven, 210 unknown (2,838 confirmed by the references); 1,900 compared with the default table and asked again, all answered from the stores; 404 continuations and 944 sequence roots answered from them; 3,564 store entries held to the game tree, 3,542 confirmed and 22 beyond its budget (33 s); the long twin (5.5 minutes): 4,894 roots - 2,622 proven, 4,284 disproven, 429 unknown; 4,608 compared and answered again; 556 continuations, 2,298 sequence roots; 7,852 store entries, 6,820 confirmed, 1,032 beyond the game tree's budget (13.1%).
+- **An engine change, tests only** (`t5d/ladder.hpp`, `ladder.cpp`):
+  `VerificationLadder::use_settling_stores_for_tests(proofs, disproofs)` builds the game's settling
+  prover over stores the test owns. The prover's own stores list nothing (a
+  `ConcurrentSolvedStore`; the disproof store has no listing at all), so without it no test could
+  hold the scans' stored facts to the game tree. Synchronous mode only (the scans then run on the
+  caller's thread), before the first scan; refused otherwise (tested). Nothing outside the tests
+  calls it, and it is no permanent store (H19, H23).
+- **MT-03's store checks** (`check_store`, `exports_hold`, `loss_confirmed`, `root_class`,
+  `stalemate_now`) moved unchanged from `test_prover.cpp` into `tests/test_store_checks.hpp`, shared
+  by both tests.
+- The build log's done-means audit: the "Proof export under TT churn (6f)" row is green on this
+  lane (the prover's, Hunt's and the wired settling scans' tests); issue 402 records part 5.
+
+Spec: §13.1 6f and §11.3 (H19), register H17 and H1 v3's settling scans - tested as built, nothing
+to propose. A ladder source changed (a tests-only seam): the Lazy SMP test runs at the round's end.
+No proposed edit; no measured figure for MEASUREMENTS (test counts only).
 
 ### 2026-11-24 - Build log: the current state at the search lane's merge
 
