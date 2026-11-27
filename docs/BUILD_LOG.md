@@ -831,7 +831,11 @@ pushed after every commit, taking main by merge, never rebase (re-check with `gi
   the block-causal scope and the cache, never cached; issue 252 settled, readings issue 276, edit
   386); its three-pass review's fix round made (2026-11-28: SN-1 to SN-8, NC-1, NC-2, TP-1; issue
   277; 17 of 17 targeted survivors killed) - **merged 2026-11-28**, with the main loop's battery on
-  the merged tree. For the user: issue 276's readings (a) and (f), issue 277. **C26/C27 merged 2026-11-24** with their review fixes: the root
+  the merged tree. For the user: issue 276's readings (a) and (f), issue 277. **Step 2's re-run, part 2,
+  2026-11-28** (section 15.2's rows 1 and 11 on the finished v1, every geometry, both depths; the F1
+  probe): every bound holds but the FP8 cache at FP32 resolution at 16 layers - attributed to rounding
+  flips, no 16-layer bound committed (issue 278, for the main loop, then the user); row 16 left
+  (optional). **C26/C27 merged 2026-11-24** with their review fixes: the root
   refresh anchored at the root leaf's input (issue 259), the phase form behind its flag, refresh
   and supersession inside a turn in the search-tree fixture, the engine path refusing node
   refreshes, the K/V store dropping past root refreshes (issue 273 resolved), the start shortcut
@@ -2661,6 +2665,10 @@ The protocol (section 15.2) asks for:
         "cross_timeline" game's `positions[2:]`). It is not marked slow, and its frozen boards
         include a duplicated pair.
       - MT-04 covers three variants (slow).
+      - Re-measured on the finished v1 over both, model seeds 0-2 (2026-11-28; MEASUREMENTS, "F1
+        on engine positions under the cached configuration"): trunk RMS 2.0e-3 / max 1.2e-2,
+        policy 9.5e-3, value 1.4e-3 - the bounds 3.1x or more above; with FP8 frozen K/V (no test
+        asserts it on engine positions) RMS 4.5e-3, 1.8x inside `test_cache.py`'s FP8 bound.
     - Mostly seeds 0-2 and 2 layers, BF16 bounds as in row 1. The exceptions:
       `test_the_fp8_network_is_a_bounded_approximation_of_match` and both `test_quant.py`
       cache tests use seeds 0-1, and `test_kv_memory_accounting` runs 3 layers.
@@ -12842,3 +12850,8 @@ entry changes in the same edit as its code, which the standing rule defers to up
     above. The tests extended: BF16, FP8 and FP8 against "match" on all seven geometries, the
     every-switch sets on seeds 3, 0 and 1; no bound changed. The audit's rows 1 and 11 no longer
     short; row 16's constructed turns left (optional). Edit 418 (M4).
+  - **F1 on engine positions** (MEASUREMENTS, "F1 on engine positions under the cached
+    configuration"): F1 (BF16, 16 layers) cached against the full pass on `test_network.py`'s
+    record and MT-04's three variants, model seeds 0-2 - trunk RMS 2.0e-3, policy 9.5e-3, the bounds
+    3.1x or more above; with FP8 frozen K/V, RMS 4.5e-3 (1.8x inside `test_cache.py`'s FP8 bound).
+    `test_f1_cached_on_a_real_position`'s docstring carries the figures.

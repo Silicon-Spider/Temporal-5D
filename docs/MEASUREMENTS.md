@@ -2512,3 +2512,36 @@ configuration - holds its bounds at 16 layers by 2.0x. The exception is the FP8 
 resolution, whose bounds were measured at 2 layers: at 16 layers it is over them, and the entry above
 attributes it. At 2 layers its value logit's margin, 1.4x, is the narrowest of the table (one FP8
 rounding flip, as in the A5 entry above).
+
+### F1 on engine positions under the cached configuration - re-measured on the finished v1 (numerics; no threshold, no verdict)
+
+**What it is.** Rows 1 and 11 on real engine positions at F1's full size: F1 as shipped (`NetConfig()`,
+BF16 trunk, 16 layers) under the block-causal scope, its cached evaluations against the BF16 full pass
+(`reference_output`), on the positions `python/tests/engine/test_network.py`'s
+`test_f1_cached_on_a_real_position` and `test_cached_variants.py`'s `test_f1_bf16_cached_on_three_variants`
+assert on; and the same network with FP8 frozen K/V against the FP8 network's own forward, which no
+test asserts on engine positions (compared here with `test_cache.py`'s FP8 bounds). Part of step 2's
+re-run (the entry above); the figures before it were taken before B15's table, F6's Mish in the heads
+and M20's defaults changed the network.
+
+**Conditions.** 2026-11-28, machine `dev-r` (another probe of this run beside it), PyTorch 2.13.0+cpu,
+Python 3.14.7, NumPy 2.5.2, 12 torch threads, the engine library built Release in `lane/net` at main
+453ba11 (the network code of d470681); random weights at initialisation scale, model seeds 0-2.
+Positions: the "cross_timeline" record's `positions[2:]` (3 states, its frozen boards including a
+duplicated pair; the epoch opened at the first), and seed 3's random play on Standard - Turn Zero,
+Standard - Reversed Royalty and Misc - Timeline Strategos, every second state (the epoch opened a third
+of the way in) - 198 evaluations over both formats and the three seeds.
+
+| Quantity | Largest | Where | Bound | Margin |
+|---|---|---|---|---|
+| F1 ("match"), cached against the BF16 full pass: trunk RMS / max | 1.99e-3 / 1.24e-2 | Timeline Strategos, seed 1 | 8e-3 / 5e-2 | 4.0x / 4.0x |
+| ... policy / value logits | 9.53e-3 / 1.41e-3 | Reversed Royalty / Turn Zero, seed 1 | 3e-2 / 5e-3 | 3.1x / 3.6x |
+| F1 with FP8 frozen K/V, cached against the FP8 network's forward: trunk RMS / max | 4.47e-3 / 3.22e-2 | Timeline Strategos / Reversed Royalty, seed 2 | 8e-3 / 1e-1 (`test_cache.py`'s) | 1.8x / 3.1x |
+| ... policy / value logits | 1.96e-2 / 2.82e-3 | Turn Zero, seed 1 / Reversed Royalty, seed 0 | 4e-2 / 6e-3 | 2.0x / 2.1x |
+
+*Read.* F1's own gaps on engine positions are the synthetic trees' at 16 layers (BF16 cached against
+live, RMS 2.0e-3): the F1 tests' bounds hold by 3.1x or more. Against MT-04's figures of 2026-10-23
+(one seed: RMS 1.97e-3, max 1.15e-2, policy 7.18e-3, value 1.32e-3) the policy logit is a third larger
+over three seeds. With FP8 frozen K/V the engine positions' trunk RMS (4.47e-3) is above the synthetic
+trees' at 16 layers (3.94e-3) and 1.8x inside `test_cache.py`'s FP8 bound; no test asserts FP8 on
+engine positions.

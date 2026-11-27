@@ -10,6 +10,24 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-28 - F1 on engine positions under the cached configuration, re-measured on the finished v1
+
+The last item of step 2's re-run, part 2: F1 as shipped (BF16, 16 layers) under the block-causal
+scope, cached against the full pass, on the engine positions `test_network.py`'s
+`test_f1_cached_on_a_real_position` and MT-04's `test_f1_bf16_cached_on_three_variants` assert on,
+model seeds 0-2; and with FP8 frozen K/V against the FP8 network's forward.
+- `docs/MEASUREMENTS.md`, a new entry: trunk RMS 1.99e-3 / max 1.24e-2, policy 9.53e-3, value
+  1.41e-3 - the tests' bounds 3.1x or more above; FP8 RMS 4.47e-3, 1.8x inside `test_cache.py`'s FP8
+  bound (no test asserts FP8 on engine positions).
+- `python/tests/engine/test_network.py`: `test_f1_cached_on_a_real_position`'s docstring carries the
+  re-measured figures in place of the 2026-10-17 ones. No bound changed.
+- `docs/BUILD_LOG.md`: the audit's row 11 (F1's coverage), the session log, and `lane/net`'s line
+  under "Now" with part 2's outcome.
+
+Spec: section 15.2's rows C2/C17 and G1 on engine positions, register C2, C17, G1 - edit 418's
+parenthesis gives the synthetic trees' figures; the engine positions match them in BF16 and are 13%
+higher in FP8 (RMS 4.47e-3 against 3.94e-3); nothing more proposed.
+
 ### 2026-11-28 - Section 15.2's rows 1 and 11 re-measured on the finished v1; BF16 and FP8 on every geometry, the every-switch sets on three seeds
 
 Step 2's "section 15.2 re-run on the finished v1 network" for rows 1 (cached = dense) and 11 (cache
