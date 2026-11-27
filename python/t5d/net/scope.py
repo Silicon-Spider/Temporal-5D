@@ -22,6 +22,14 @@ for one position (``board_scope``), and then per token (``BlockCausalScope``):
 * **The live set** - the head boards - reads every board and the global registers; the
   heads read each other in both directions (C19: "every head attends to every head").
 * **Global registers** read everything ("reading is free") and are read by live tokens.
+* **Register A5's destination tokens on superseded boards** (``Batch.transient``; section 7.3,
+  register C17, ruled by the 2026-11-15 review's decision 7: "piece-centric destination tokens are
+  live tokens wherever they sit - read only by live tokens, never cached"): they exist because of
+  this node's candidate moves, so they are the one exception to "all of a board's tokens are
+  created together". A transient token reads what any live token reads - every board, the global
+  registers and every other transient token - and is read by live tokens only: the heads, the
+  global registers and the other transient tokens, never by a frozen token, its own board's
+  included ("that would be present-to-frozen flow"). It takes a slot of its own, after padding's.
 
 Under ``causal_past="lineage"`` a frozen board's keys are boards that were already
 superseded when it was created, so its key set never changes. Under ``"creation"`` an
@@ -77,6 +85,10 @@ import torch
 
 from .config import NetConfig
 from .state import TOKEN_GLOBAL_REGISTER, Batch, PositionState
+
+#: The scope's slots beyond the boards': the global registers, padding, and register A5's transient
+#: tokens (``BlockCausalScope``).
+EXTRA_SLOTS = 3
 
 
 def lineage_matrix(parent: np.ndarray, source: np.ndarray | None = None) -> np.ndarray:
@@ -175,14 +187,21 @@ def state_scope(state: PositionState, cfg: NetConfig, history: np.ndarray | None
 class BlockCausalScope:
     """The block-causal scope of a batch, rows built on demand (like ``AttnStructure``).
 
-    Every token has a *slot*: its board's index, ``n_boards`` for a global register, or
-    ``n_boards + 1`` for padding; ``allowed`` ``(B, S, S)`` says which slot reads which,
-    so a block of query rows costs ``O(rows x L)`` and no ``(L, L)`` tensor exists."""
+    Every token has a *slot*: its board's index, ``n_boards`` for a global register,
+    ``n_boards + 1`` for padding, or ``n_boards + 2`` for a transient token (register A5's
+    destination token on a superseded board - the module docstring); ``allowed`` ``(B, S, S)``
+    says which slot reads which, so a block of query rows costs ``O(rows x L)`` and no ``(L, L)``
+    tensor exists."""
 
     slot: torch.Tensor  # (B, L) long
     allowed: torch.Tensor  # (B, S, S) bool: query slot -> key slot
-    live_tokens: torch.Tensor  # (B, L) bool: tokens of head boards, and global registers
+    live_tokens: torch.Tensor  # (B, L) bool: tokens of head boards, global registers and transient tokens
     live_boards: torch.Tensor  # (B, Nb) bool: head boards
+
+    @property
+    def n_boards(self) -> int:
+        """The batch's largest board count: the board slots are ``[0, n_boards)``."""
+        return int(self.allowed.shape[-1]) - EXTRA_SLOTS
 
     @classmethod
     def build(cls, batch: Batch, cfg: NetConfig, history: torch.Tensor | None = None) -> BlockCausalScope:
@@ -190,7 +209,8 @@ class BlockCausalScope:
         position's epoch history - see ``board_scope``; None: each its own anchor)."""
         bsz, length = batch.kind.shape
         nb = batch.board_valid.shape[1]
-        slots = nb + 2
+        slots = nb + EXTRA_SLOTS
+        transient_slot = nb + 2
         allowed = torch.zeros(bsz, slots, slots, dtype=torch.bool)
         for i in range(bsz):
             n = int(batch.n_boards[i])
@@ -205,13 +225,23 @@ class BlockCausalScope:
             allowed[i, nb, nb] = True
             allowed[i, nb + 1, :n] = True  # padding: every valid key (discarded)
             allowed[i, nb + 1, nb] = True
+            # A5's transient tokens (the module docstring): read as live tokens read - every board,
+            # the global registers, each other - and read by live tokens only.
+            allowed[i, transient_slot, :n] = True
+            allowed[i, transient_slot, nb] = True
+            allowed[i, transient_slot, transient_slot] = True
+            allowed[i, :n, transient_slot] = torch.from_numpy(head)
+            allowed[i, nb, transient_slot] = True
+            allowed[i, nb + 1, transient_slot] = True
         on_board = batch.valid & (batch.board >= 0)
         is_global = batch.valid & (batch.kind == TOKEN_GLOBAL_REGISTER)
         slot = torch.where(
             on_board, batch.board, torch.where(is_global, torch.full_like(batch.board, nb), torch.full_like(batch.board, nb + 1))
         )
+        slot = torch.where(batch.transient, torch.full_like(slot, transient_slot), slot)
         live_boards = batch.board_valid & batch.board_head
-        head_slot = torch.cat([live_boards, torch.ones(bsz, 1, dtype=torch.bool), torch.zeros(bsz, 1, dtype=torch.bool)], dim=1)
+        ones, zeros = torch.ones(bsz, 1, dtype=torch.bool), torch.zeros(bsz, 1, dtype=torch.bool)
+        head_slot = torch.cat([live_boards, ones, zeros, ones], dim=1)
         live_tokens = head_slot.gather(1, slot) & batch.valid
         device = batch.kind.device
         return cls(slot.to(device), allowed.to(device), live_tokens.to(device), live_boards.to(device))

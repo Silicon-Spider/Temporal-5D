@@ -58,7 +58,7 @@ from t5d.engine.evaluator import CachedNetworkEvaluator, NetworkEvaluator, _spli
 from t5d.engine.play import ROYAL_IDS
 from t5d.net import NetConfig, build_model
 from t5d.net.cache import CacheConfig, CachedEvaluator, input_digest, reference_output, state_digest
-from t5d.net.state import PIECE_IDS, RELATION_IDS
+from t5d.net.state import PIECE_IDS, RELATION_IDS, to_piece_centric
 from tests.engine.helpers import ENGINE_VARIANTS, requires_engine
 from tests.net.test_cache import _close
 
@@ -76,6 +76,9 @@ PLAYOUTS = 16  # per search of the step-API test
 CONFIGS = {
     "v1": {},
     "step1": dict(board_layout_embedding=True, opp_reply=True, optimistic_policy=True),
+    # Register A5 under the cache (decision 7): each state converted at the network's edge, strictly,
+    # its destination tokens on superseded boards live (``tests/net/test_cache_a5.py``).
+    "a5": dict(piece_centric=True),
 }
 
 #: Section 6's switches (stage N2), each set with the typed relations it reads.
@@ -233,11 +236,15 @@ def test_cached_equals_full_pass_on_every_variant(variant, config):
     history. Two seeds per variant; together they branch, leave a timeline inactive, and reach
     every kind of state."""
     seen = dict.fromkeys(("branched", "inactive", "mid-action", "shifted", "black acting"), False)
-    replies = 0
+    replies = transient = 0
     for seed in SEEDS:
         positions = _positions(variant, seed)
         seen = {k: seen[k] or v for k, v in _coverage(positions).items()}
         states = _with_replies(positions)
+        if CONFIGS[config].get("piece_centric"):  # A5 has no reply head (issue 251): its states take no reply space
+            none = np.zeros((0, 3), dtype=np.int64)
+            states = [to_piece_centric(replace(s, opp_moves=none), strict=True) for s in states]
+            transient += sum(int(s.transient.sum()) for s in states)
         r = len(states) // 3
         for supersession in (R2, R1):
             model = _model(10 * seed + (supersession == R1), supersession_scope=supersession, **CONFIGS[config])
@@ -256,6 +263,9 @@ def test_cached_equals_full_pass_on_every_variant(variant, config):
             assert cached.store.hits > 0, "later states reuse earlier states' frozen boards"
     assert all(seen.values()), (variant, seen)
     assert replies > 0 or not CONFIGS[config].get("opp_reply"), "D4's reply head compared on some moves"
+    # Random play is pseudo-legal and lands travel on history boards on most variants; A5's live
+    # destination tokens there are counted (Turn Zero and some small boards may offer none).
+    GAPS["a5 transient tokens"] = GAPS.get("a5 transient tokens", 0.0) + transient
 
 
 # --- (d): the C step API, cached against dense on the search's own leaves -----------------------
@@ -297,6 +307,10 @@ class _CachedAgainstDense:
 
     def __init__(self, model, refresh: bool, seen: dict) -> None:
         self.model = model
+        #: Register A5: the references read each leaf's A5 view, converted strictly as the cached
+        #: evaluator converts it (``CachedNetworkEvaluator._fit``).
+        self.a5 = bool(model.cfg.piece_centric)
+        self.transient = 0
         self.refresh = refresh
         self.cached = CachedNetworkEvaluator(CachedEvaluator(model, CacheConfig(root_refresh=refresh)))
         self.dense = NetworkEvaluator(model, scope="block_causal")
@@ -305,16 +319,23 @@ class _CachedAgainstDense:
         self.leaves = self.repeats = 0
         self.keys: list[bytes] = []
 
+    def _view(self, position):
+        state = state_of(position)
+        return to_piece_centric(state, strict=True) if self.a5 else state
+
     def start(self, root):
-        self.root = state_of(root)
+        self.root = self._view(root)
         return self.cached.start(root)
 
     def __call__(self, positions):
         evs = self.cached(positions)
         if self.refresh:
-            refs = [_split(reference_output(self.model, state_of(p), anchor=self.root), [state_of(p)])[0] for p in positions]
+            views = [self._view(p) for p in positions]
+            refs = [_split(reference_output(self.model, v, anchor=self.root), [v])[0] for v in views]
         else:
             refs = self.dense(positions)
+        if self.a5:
+            self.transient += sum(int(self._view(p).transient.sum()) for p in positions)
         for p, ev, ref in zip(positions, evs, refs, strict=True):
             GAPS["step-api fp32"] = max(GAPS["step-api fp32"], _evals_close(ev, ref, (self.refresh, self.leaves)))
             key = _leaf_key(state_of(p))
@@ -377,6 +398,21 @@ def test_step_api_cached_equals_dense_on_every_variant(variant):
             seen: dict = {}
             evs = [_search(model, root, refresh, graph, seen)[0] for graph in (0, 1)]
             assert evs[1].repeats > 0, (variant, refresh)  # the graph search met the tree search's leaves
+
+
+@pytest.mark.parametrize("variant", ENGINE_VARIANTS)
+def test_a5_step_api_cached_equals_dense_on_every_variant(variant):
+    """The same through the engine's search with register A5 (decision 7): ``CachedNetworkEvaluator``
+    converts each leaf at the network's edge, strictly, and every leaf equals the dense block-causal
+    path's (``NetworkEvaluator`` converts alike) or, with C3's root refresh, the two-level reference
+    over its A5 view - in tree and graph mode, a leaf met twice evaluated twice alike."""
+    model = _model(100 + ENGINE_VARIANTS.index(variant), piece_centric=True)
+    with _search_root(variant) as root:
+        for refresh in (False, True):
+            seen: dict = {}
+            evs = [_search(model, root, refresh, graph, seen)[0] for graph in (0, 1)]
+            assert evs[1].repeats > 0, (variant, refresh)
+            GAPS["a5 transient tokens"] = GAPS.get("a5 transient tokens", 0.0) + sum(e.transient for e in evs)
 
 
 @pytest.mark.parametrize("variant", ["Standard - Two Timelines", "Misc - Timeline Battleground"])

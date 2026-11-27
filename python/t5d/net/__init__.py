@@ -20,8 +20,10 @@ benchmark (``cost.py``, ``cache_bench.py``), with register G11's count of what o
 dispatches (``opcount.py``). See ``config.py`` for which register rows are
 built here and which are flags for later stages. Register A7: the input is read from the acting
 player's side (``state.py``; ``mirror`` is a position's colour-swapped mirror). Register A5, a
-prototype behind its flag (``NetConfig.piece_centric``, off; dense scope only): piece-centric
-tokens - the pieces and the candidate moves' destination squares (``to_piece_centric``).
+prototype behind its flag (``NetConfig.piece_centric``, off): piece-centric tokens - the pieces
+and the candidate moves' destination squares (``to_piece_centric``); under the block-causal scope
+and the cache its destination tokens on superseded boards are live tokens, never cached (register
+C17).
 """
 
 from .cache import CacheConfig, CachedEvaluator, Epoch, KVStore, reference_output

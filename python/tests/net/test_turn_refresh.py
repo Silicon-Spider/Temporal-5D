@@ -159,11 +159,13 @@ def _build(model, root, moves, evaluated: set[int], epoch: str):
     return tree, path, anchor
 
 
-def _eager(ev: CachedEvaluator, node) -> set:
-    """Recompute at supersession: every frozen board of ``node``'s position without an entry, from both
-    colours' sides, in the node's epoch. The keys computed."""
+def _eager(tree: SearchTree, node) -> set:
+    """Recompute at supersession: every frozen board of ``node``'s position (the network's view of
+    it - ``SearchTree.view``, A5's for a piece-centric network) without an entry, from both colours'
+    sides, in the node's epoch. The keys computed."""
+    ev = tree.evaluator
     before = set(ev.store.entries)
-    state = node.state
+    state = tree.view(node)
     for view in (state, viewed_by(state, 1 - int(state.acting_player))):
         work = ev.prepare(view, node.epoch)
         for b in ev.missing(work):
@@ -171,17 +173,18 @@ def _eager(ev: CachedEvaluator, node) -> set:
     return set(ev.store.entries) - before
 
 
-def _reads(ev: CachedEvaluator, node) -> set:
-    plan = ev._plan(node.state, node.epoch)
+def _reads(tree: SearchTree, node) -> set:
+    plan = tree.evaluator._plan(tree.view(node), node.epoch)
     return {plan.key(node.epoch, int(b)) for b in plan.frozen}
 
 
-def _reference(model, node, epoch: str, root, anchor, supersession: str):
+def _reference(model, tree: SearchTree, node, epoch: str, anchor, supersession: str):
+    view, root = tree.view(node), tree.view(tree.root)
     if epoch == "root":
-        return reference_output(model, node.state, anchor=root.state())
+        return reference_output(model, view, anchor=root)
     if epoch == "node" and node.epoch is anchor.epoch:
-        return reference_output(model, node.state, anchor=anchor.state)
-    return reference_output(model, node.state, history_from=root.state() if supersession == R1 else None)
+        return reference_output(model, view, anchor=tree.view(anchor))
+    return reference_output(model, view, history_from=root if supersession == R1 else None)
 
 
 def _deferral_case(model, root, moves, evaluated, epoch, supersession, what, deferral: bool = True) -> int:
@@ -195,16 +198,16 @@ def _deferral_case(model, root, moves, evaluated, epoch, supersession, what, def
     deferred_reads = 0
     for dn, sn in zip(d_path, s_path, strict=True):
         if sn.inner:
-            at_inner |= _eager(s_ev, sn)
+            at_inner |= _eager(eager, sn)
             continue
         stored = set(d_ev.store.entries)
         out = deferred.evaluate(dn)
         assert _identical(out, eager.evaluate(sn)), (what, _depth(dn))
-        ref = _reference(model, dn, epoch, root, d_anchor, supersession)
+        ref = _reference(model, deferred, dn, epoch, d_anchor, supersession)
         if out.trunk.dtype == torch.float32:
             _gap(out, ref)
         _close(out, ref, what=(what, _depth(dn)))
-        deferred_reads += bool((_reads(d_ev, dn) & at_inner) - stored)
+        deferred_reads += bool((_reads(deferred, dn) & at_inner) - stored)
     assert d_ev.store.entries.keys() <= s_ev.store.entries.keys(), what
     for k, e in d_ev.store.entries.items():
         f = s_ev.store[k]
@@ -226,12 +229,12 @@ T6_CASES = ((0, "lineage"), (1, "two_parent"))
 T6_SLOW_CASES = ((0, "two_parent"), (1, "lineage"), (2, "lineage"), (2, "two_parent"))
 
 
-def _t6(geometry: str, epoch: str, cases) -> None:
+def _t6(geometry: str, epoch: str, cases, **flags) -> None:
     for seed, reading in cases:
         for supersession in (R2, R1):
             case = (seed * 4 + 2 * (supersession == R1) + (reading == "two_parent")) % len(MARKINGS)
             marking = MARKINGS[(case + EPOCHS.index(epoch)) % len(MARKINGS)]
-            model = _model(600 + seed, causal_past=reading, supersession_scope=supersession)
+            model = _model(600 + seed, causal_past=reading, supersession_scope=supersession, **flags)
             root = _root(geometry, seed)
             rng = np.random.default_rng([seed, EPOCHS.index(epoch), reading == "two_parent"])
             moves, keep = _turn_path(root, rng)
@@ -254,6 +257,25 @@ def test_supersession_deferred_to_the_next_evaluated_node_is_exact(geometry, epo
 def test_supersession_deferred_to_the_next_evaluated_node_is_exact_full_matrix(geometry, epoch):
     """The rest of T6's matrix: seeds 0 and 1 under their other reading, seed 2 under both."""
     _t6(geometry, epoch, T6_SLOW_CASES)
+
+
+@pytest.mark.parametrize("epoch", EPOCHS)
+@pytest.mark.parametrize("geometry", list(GEOMETRIES))
+def test_supersession_deferred_under_a5(geometry, epoch):
+    """Section 15.2's C27 row under register A5 (decision 7; review decision 16 makes the row
+    required behind the cached flag): T6 with a piece-centric network - each node's A5 view, its
+    destination tokens on superseded boards live (``SearchTree.view``) - on every geometry and
+    epoch, seed 0 under the lineage reading, both C20 readings; the deferred and the eager arms bit
+    for bit, every evaluated node the reference, the deferral real."""
+    _t6(geometry, epoch, T6_CASES[:1], piece_centric=True)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("epoch", EPOCHS)
+@pytest.mark.parametrize("geometry", list(GEOMETRIES))
+def test_supersession_deferred_under_a5_full_matrix(geometry, epoch):
+    """The rest of T6's matrix under A5: seed 1 under the two-parent reading, and the slow cases."""
+    _t6(geometry, epoch, T6_CASES[1:] + T6_SLOW_CASES, piece_centric=True)
 
 
 @pytest.mark.parametrize("flags", [dict(causal_past="creation"), dict(frozen_features="current")], ids=["creation", "current-features"])
@@ -286,7 +308,7 @@ def test_the_deferral_in_bf16_and_fp8():
         eager, s_path, _ = _build(model, root, moves, evaluated, "root")
         for dn, sn in zip(d_path, s_path, strict=True):
             if sn.inner:
-                _eager(eager.evaluator, sn)
+                _eager(eager, sn)
             else:
                 assert _identical(deferred.evaluate(dn), eager.evaluate(sn)), (flags, _depth(dn))
 

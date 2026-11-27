@@ -134,6 +134,17 @@ Representation (design spec section 2; register A1-A4):
   square-centric: the conversion runs at the network's edge (``engine.evaluator``,
   ``train.targets``).
 
+  **Under the block-causal scope** (register C17, ruled by the 2026-11-15 review's decision 7,
+  section 7.3: "piece-centric destination tokens are the one exception to 'created together'"):
+  a destination token on a superseded board - a travel's landing square on a history board - is
+  a *transient* token (``PositionState.transient``, ``Batch.transient``): it exists because of
+  this node's candidate moves, so it is a live token wherever it sits. It reads what any live
+  token reads, carries a live token's input features (its board's current status among them),
+  is read by no frozen token and is never cached (``scope.py``, ``embed.py``, ``status.py``,
+  ``cache.py``). A destination token on a head board is a head board's token, live already.
+  Every other token of a superseded board - its pieces and its per-board registers - is the
+  board's own, intrinsic: what a frozen board's K/V are made of. Under A1 nothing is transient.
+
 Board storage order is free: the network has no absolute positions (section 4), so a
 reordering of boards permutes the per-board outputs and changes nothing else. Synthetic
 states store boards sorted by ``(p, h)``.
@@ -828,6 +839,36 @@ class PositionState:
 
     # -- token-level arrays --
 
+    @property
+    def transient(self) -> np.ndarray:
+        """``(T,)`` bool, in this position's own layout: register A5's destination tokens on
+        superseded boards - each an empty cell some candidate move lands on (A5's only empty-cell
+        tokens), on a board that is no head. Live tokens under the block-causal scope, never part of
+        their board's frozen K/V (the module docstring; section 7.3, register C17). All False under
+        A1."""
+        lay = self.layout
+        out = np.zeros(lay.n_tokens, dtype=bool)
+        if self.token_cells is None:
+            return out
+        board, cell, _ = lay.body_maps()
+        square = cell >= 0
+        b, c = board[square], cell[square]
+        out[: lay.n_body][square] = (self.piece[b, c] == 0) & ~self.is_head[b]
+        return out
+
+    def board_tokens(self, board: int, *, frozen: bool = False) -> np.ndarray:
+        """Board ``board``'s tokens (its squares in cell order, then its registers), as indices
+        in this position's own layout; ``frozen``: without its transient tokens - the tokens a
+        superseded board's frozen K/V hold (``transient``; under A1 every token of the board)."""
+        lay = self.layout
+        start, stop = int(lay.board_offsets[board]), int(lay.board_offsets[board + 1])
+        tokens = np.arange(start, stop, dtype=np.int64)
+        if frozen and self.token_cells is not None and not self.is_head[board]:
+            cells = np.flatnonzero(self.token_cells[board])  # the board's square tokens, in token order
+            keep = np.concatenate([self.piece[board, cells] != 0, np.ones(self.regs_per_board, dtype=bool)])
+            tokens = tokens[keep]
+        return tokens
+
     def token_arrays(self) -> dict[str, np.ndarray]:
         """Per-token arrays in this position's own layout (storage order), length ``T``, in the
         acting player's view (register A7; the module docstring): ``owner`` (``OWNER_*``),
@@ -1236,6 +1277,16 @@ class Batch:
         possible = none if self.submit_possible is None else self.submit_possible
         legal = none if self.submit_legal is None else self.submit_legal
         return possible, legal & possible
+
+    @property
+    def transient(self) -> torch.Tensor:
+        """``(B, L)`` bool: register A5's destination tokens on superseded boards - empty-cell
+        tokens of a piece-centric batch on boards that are no heads (``PositionState.transient``):
+        live tokens under the block-causal scope, wherever they sit (section 7.3, register C17).
+        All False under A1."""
+        if not self.piece_centric:
+            return torch.zeros_like(self.valid)
+        return self.valid & (self.kind == TOKEN_SQUARE) & (self.piece == 0) & (self.is_head == 0)
 
     @property
     def batch_size(self) -> int:

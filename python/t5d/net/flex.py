@@ -72,6 +72,7 @@ from .attention import (
     quantised_operands,
 )
 from .displacement import pair_entry, pair_far_cell
+from .scope import EXTRA_SLOTS
 from .state import TOKEN_BOARD_REGISTER, TOKEN_GLOBAL_REGISTER, TOKEN_PAD, TOKEN_SQUARE
 from .structure import MASK_ROLES
 
@@ -112,6 +113,7 @@ class ScoreInputs:
     typed_table: torch.Tensor | None = None  # (H, types x orientations)
     # B12
     pair_table: torch.Tensor | None = None  # (B, H, Nb + 1, Nb + 1)
+    smolgen_tokens: torch.Tensor | None = None  # (B, L) bool: B12's rows token by token (A5's transient tokens; None: by board)
     # B15
     disp_kind: torch.Tensor | None = None  # (B, L) long, padding marked
     disp_coords: torch.Tensor | None = None  # (B, L, 4) long, raw
@@ -168,6 +170,7 @@ class ScoreInputs:
             if st.pair_table is None:
                 raise RuntimeError("this structure's board-pair smolgen needs the layer input: use AttnContext.for_layer")
             out.pair_table = st.pair_table
+            out.smolgen_tokens = st.smolgen_tokens
             out.board = st.board_idx
         if st.disp is not None:
             if st.disp_table is None:
@@ -211,7 +214,10 @@ def make_score_mod(inp: ScoreInputs):
         if inp.typed is not None:
             s = s + (inp.typed[b, q, k] * inp.typed_table[h]).sum()
         if inp.pair_table is not None:
-            s = s + inp.pair_table[b, h, inp.board[b, q], inp.board[b, k]]
+            pair = inp.pair_table[b, h, inp.board[b, q], inp.board[b, k]]
+            if inp.smolgen_tokens is not None:  # rows by token: A5's transient tokens are live rows
+                pair = torch.where(inp.smolgen_tokens[b, q], pair, torch.zeros_like(pair))
+            s = s + pair
         if inp.bias is not None:
             s = s + inp.bias[b, h, q, k]
         return s
@@ -303,7 +309,7 @@ def _slot_reach(ctx: AttnContext, n_heads: int) -> tuple[torch.Tensor, torch.Ten
         board = st.board_idx
         kind = st.kind
     elif ctx.scope is not None:
-        n_boards = ctx.scope.allowed.shape[-1] - 2
+        n_boards = ctx.scope.n_boards
         board = torch.where(ctx.scope.slot < n_boards, ctx.scope.slot, torch.full_like(ctx.scope.slot, n_boards))
         kind = None
     else:
@@ -312,6 +318,12 @@ def _slot_reach(ctx: AttnContext, n_heads: int) -> tuple[torch.Tensor, torch.Ten
     is_global = valid & (board == n_boards) if kind is None else valid & (kind == TOKEN_GLOBAL_REGISTER)
     slot = torch.where(valid & ~is_global & (board < n_boards), board, torch.where(is_global, n_boards, pad_slot))
     n_slots = n_boards + 2
+    transient_slot = None
+    if ctx.scope is not None:
+        # The scope's slots: register A5's transient tokens have one of their own (``scope.py``).
+        transient_slot = n_boards + 2
+        n_slots = n_boards + EXTRA_SLOTS
+        slot = torch.where(ctx.scope.slot == transient_slot, torch.full_like(slot, transient_slot), slot)
     # Which slots hold a valid key (padding never does).
     holds = torch.zeros(bsz, n_slots, dtype=torch.bool, device=device)
     holds.scatter_(1, torch.where(valid, slot, torch.full_like(slot, pad_slot)), valid)
@@ -334,6 +346,12 @@ def _slot_reach(ctx: AttnContext, n_heads: int) -> tuple[torch.Tensor, torch.Ten
                 pass  # its own board's tokens: its own slot
             else:  # same_square: a square on any board
                 role_reach[:, :n_boards, :n_boards] = True
+            if transient_slot is not None:
+                # A transient token is a live row on any board's block and is read by live rows
+                # on every role: its slot reaches, and is reached from, every slot (a superset -
+                # the mask function decides each pair).
+                role_reach[:, transient_slot, :] = True
+                role_reach[:, :, transient_slot] = True
             uncovered = st.uncovered_registers(role) & valid
             if st.registers == "read":
                 rows = torch.zeros(bsz, n_slots, dtype=torch.bool, device=device)

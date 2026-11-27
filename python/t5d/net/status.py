@@ -19,6 +19,8 @@ head's entry for the key board's status. Nowhere else:
   the present, which C17 allows only at refreshes - so frozen rows are computed without it
   and stay valid between refreshes (a forced reading of "key biases"; spec issue 216);
 * a live key carries its status as inputs (A3); global registers and padding have no board;
+  register A5's destination tokens on superseded boards (``Batch.transient``) are live keys
+  ("section 4.1's status key biases are for frozen keys and do not apply to it", section 7.3);
 * not under the dense scope: a dense pass gives every board its A3 features as inputs. The
   refresh, a dense pass, stays as built - M20 ruled issue 31's option, "a refresh gives them
   the anchor's values" - so a refreshed epoch's history boards keep the anchor's features in
@@ -104,7 +106,7 @@ def status_index(batch: Batch, status: StatusKeyBias, live: torch.Tensor) -> Sta
     """B16's per-token index of a batch under the block-causal scope: each frozen board's
     tokens' status from the batch's own Delta-t-to-present and active flags (the present of the
     position evaluated - recomputed every evaluation), and the live rows ``live`` ``(B, L)``."""
-    frozen = batch.valid & (batch.board >= 0) & (batch.is_head == 0)
+    frozen = batch.valid & (batch.board >= 0) & (batch.is_head == 0) & ~batch.transient  # A5's transient tokens are live
     key = torch.where(frozen, status.status(batch.dt, batch.active), torch.full_like(batch.kind, status.n_status))
     return StatusIndex(key=key, live=live & batch.valid, any_frozen=bool(frozen.any()))
 

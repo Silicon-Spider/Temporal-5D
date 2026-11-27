@@ -183,9 +183,9 @@ def token_counts(state, regs_per_board: int | None = None, global_regs: int | No
     ``destinations`` (D: the empty destination cells - a capture lands on a piece's token),
     ``head_pieces``, ``head_destinations`` (D on head boards), ``a1``, ``a5`` (``T``), and the
     analytic cached configuration's sets (``cached_*``): the live queries - A1 the heads' tokens and
-    the global registers, A5 the heads' pieces and registers, every destination token (transient,
-    never cached - BUILD_LOG issue 252's reading (f)) and the global registers - and the frozen
-    boards' cached tokens."""
+    the global registers, A5 the heads' pieces and registers, every destination token (live, never
+    cached - register C17 as ruled, settling BUILD_LOG issue 252) and the global registers - and the
+    frozen boards' cached tokens: the sets the cached path computes (``cache.py``)."""
     r = state.regs_per_board if regs_per_board is None else int(regs_per_board)
     g = state.global_regs if global_regs is None else int(global_regs)
     occupied = state.piece != 0
@@ -221,9 +221,9 @@ def token_counts(state, regs_per_board: int | None = None, global_regs: int | No
 def piece_centric_costs(counts: dict[str, int], cfg: NetConfig, bytes_per_value: float = 2.0) -> dict[str, float]:
     """Section 9.1's model at ``token_counts``' figures, A1 against A5: the dense evaluation
     (``dense_flops``), the analytic cached node (the live queries against every token -
-    ``pass_flops``; A5's destination tokens live, BUILD_LOG issue 252) and the frozen boards' K/V
-    bytes per state (``kv_bytes``), with each ratio A1 / A5. Analytic: A5 under the block-causal
-    scope is refused as built (issue 252), so its cached figures are this model's only."""
+    ``pass_flops``; A5's destination tokens live, BUILD_LOG issue 252 ruled) and the frozen boards'
+    K/V bytes per state (``kv_bytes``), with each ratio A1 / A5. Analytic; the cached path now runs
+    A5 on these very sets (``cache.py``), and ``cache_bench`` measures it."""
     out: dict[str, float] = {}
     for arm in ("a1", "a5"):
         t = counts[arm]
