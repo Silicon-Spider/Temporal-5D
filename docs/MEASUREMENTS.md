@@ -985,6 +985,50 @@ varlen kernels), which stay deferred to NVIDIA time (M19). The head-width findin
 on the sdpa path at 44 boards, 1.2-2.2x on block_sparse) is device-neutral in form and is the
 network lane's to take or leave (issue 521).
 
+### F1's CPU evaluation rate - self-play through the engine (command; not yet measured on a quiet machine)
+
+**What it will measure.** §15.6 cites "the only rate today is the CPU's, 6.9 evaluations/s for
+F1". The figure comes from stage N5's end-to-end run (CHANGELOG, 2026-10-04, machine `dev`: 20
+games, F1 at 21,359,370 parameters in BF16, 0.60 decisions/s and 6.9 evaluations/s). Its
+command, games, variants and threads were not recorded, and it predates E10's provers and the
+flat form. Since 2026-11-28 (`lane/search`) `python -m t5d.engine.evalrate` gives the figure a
+command. It plays a fixed number of self-play games with the v1 network at random weights
+through the engine (`netplay.play_game`: the engine's search through the C step API). Seeds,
+variants, splits and threads are fixed.
+
+The provers are off by default: no Hunt, no settling scans, no asset map. The figure is the
+network's own rate within the search. `--provers` turns all three on. The game loop's exact
+questions (H22's turn-start verdict and move verification) stay on; they are the game's.
+
+Its first output line is the full configuration: the network's every field and parameter count,
+the game settings, the seeds, PyTorch's threads, the machine, the engine library's file name and
+the commit. Then one line per game, then the totals:
+- `decisions_per_s` and `evaluations_per_s` over the games' wall time, as N5 reported them;
+- the network's forward passes (`forwards`) and the positions they evaluated, with
+  `positions_per_forward` and `forwards_per_s`;
+- `network_positions_per_s`, positions over the network's own seconds, with `network_share`;
+- `by_range`: the network's calls by board-count range (6b″'s ranges), each call filed under its
+  largest position, with forwards, positions, seconds and positions/s. §15.6 reads a rate per
+  board-count range; the pooled figure is the games' mix of sizes.
+
+**Command** (from `python/`; the defaults written out):
+
+```
+python -m t5d.engine.evalrate --net F1 --games 1 --variant Standard --variant "Standard - Two Timelines" --split ply --threads 4 --seed 1
+```
+
+That is 2 games: Standard and Standard - Two Timelines, the ply split, 16 playouts and batches of
+8 per decision, I11's caps at 6 turns or 80 boards (netplay's settings, as at N5), seeds 1 + 101
+g, and 4 PyTorch threads (netplay's default and the runbook's candidate).
+
+**Run time: not known.** On the shared machine (2026-11-28, load about 50% beside it), a 2-turn
+Standard game (`--cap-turns 2`) took 70 s: 16 decisions, 178 evaluations at 2.5/s, 99.9% of the
+time in the network, 15 boards at its end. A default 6-turn Standard game ran past 50 minutes
+and was stopped. Today's v1 forward costs far more on the CPU than N5's network did: B15's bias
+and M20's register rows came after N5. Budget an hour or more for the two default games, or
+bound the run with `--cap-turns`. The figure is CPU-labelled and informational. §15.6's Phase-3
+re-check stays deferred until a GPU rate exists.
+
 ## §15.6 verdicts
 
 ### Movegen throughput (M9) - pseudo-legal: PASS; with fast legality: inside the STOP band at 240 boards on one core

@@ -10,6 +10,48 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-28 - F1's CPU evaluation rate: a reproducible command (`python -m t5d.engine.evalrate`)
+
+§15.6 cites "6.9 evaluations/s for F1", from stage N5's end-to-end run. Its command, games,
+variants and threads were never recorded. It also ran before E10's provers existed. The
+quiet-machine block re-measures it. Nothing was measured here.
+
+- `python/t5d/engine/evalrate.py` (new): plays a fixed number of self-play games with the v1
+  network at random weights through the engine (`netplay.play_game`). The seeds, variants,
+  split and threads are fixed, and the defaults are written out in its docstring.
+  - **The provers are off by default** (the main loop's decision): no Hunt, no settling scans,
+    no asset map, so the figure is the network's own rate within the search. `--provers` turns
+    all three on at their defaults.
+  - The first line is the full configuration: every network field and the parameter count, the
+    game settings, the seeds, PyTorch's threads, the machine, the engine library's file name and
+    the commit. Then one line per game, then the totals.
+  - The totals give decisions/s and evaluations/s over the games' wall time (N5's two figures),
+    the network's forward passes, positions per forward, forwards/s, and the network's own
+    positions/s with its share of the wall time. Every rate is a rate of sums.
+  - `by_range` files the network's calls by board-count range, as §15.6 reads a rate (6b″'s
+    ranges, each call under its largest position). `RangedEvaluator`, a `NetworkEvaluator`,
+    times each call.
+  - Defaults: one game each of Standard and Standard - Two Timelines under the ply split, at
+    netplay's settings (N5's: 16 playouts, batches of 8, caps of 6 turns or 80 boards), seeds
+    1 + 101 g, 4 threads. The games are kept few because the v1's forward is slow on the CPU.
+    On the shared machine a 2-turn F1 game took 70 s (2.5 evaluations/s); a 6-turn one ran
+    past 50 minutes and was stopped.
+- `python/tests/engine/test_evalrate.py` (new):
+  - the provers are off unless asked, and the seeds follow netplay;
+  - the totals are rates of the sums;
+  - each network call is filed under its largest position's range;
+  - one short F1 game runs end to end: the configuration is printed in full and every leaf the
+    search counted reached the network in forwards of at most `--batch`;
+  - `--provers` reaches the games (small network).
+  No timing is read.
+- `docs/MEASUREMENTS.md`: a new section, "F1's CPU evaluation rate", with the command, marked
+  "not yet measured on a quiet machine". `docs/BUILD_LOG.md`: step 5's list, the lane line and
+  the main loop's work item.
+
+Spec: §15.6 ("6.9 evaluations/s for F1") and §15.3's dense evaluations/s (register F1, M19) are
+what the figure will be read against. No spec text describes the tool, so no edit is proposed.
+The edit to §15.6's sentence follows the measurement (the main loop's).
+
 ### 2026-11-28 - The forward bench: the embedding's time, and A8's repetitions and medians
 
 A8's table has one usable column, the embedding's time (`T5DNet.embed_tokens`). It was timed by a
