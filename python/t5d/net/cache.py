@@ -161,9 +161,21 @@ in ``reference_output`` alike. That is one rule in both, which comparing them ca
 ``test_cache.py`` checks it against an oracle of its own (B16's table changed, the anchor's
 evaluation stays bit for bit and every node below it moves).
 
-**Not supported** (``CachedEvaluator`` refuses them): register A5's piece-centric tokens (its
-destination tokens on frozen boards have no reading under C17 - BUILD_LOG issue 252); B12's
-``board_bilinear`` form, which
+**Register A5's piece-centric tokens** (a prototype behind ``NetConfig.piece_centric``; register
+C17 as the 2026-11-15 review's decision 7 rules it, settling BUILD_LOG issue 252; section 7.3).
+Boards differ in length, and a superseded board's tokens split in two: its own - its pieces and
+its per-board registers, intrinsic, what its entry holds (``PositionState.board_tokens(frozen=
+True)``) - and its transient destination tokens, the landing squares of this node's candidate
+moves (``PositionState.transient``). "Piece-centric destination tokens are the one exception to
+'created together'": a transient token is a live token wherever it sits, so it is computed in the
+live pass with the heads and the global registers, reading every key; no frozen token reads it
+(``scope.py``), and it is never stored. So a board's entry - its K/V, its outputs, its digest - is
+the same at every node whatever moves land on it, and a refresh stores the anchor's boards' own
+tokens only (the dense pass reads the anchor's destination tokens, as it reads the move graph:
+present information, allowed at refreshes). The live pass computes a transient token's rows in
+blocks of whole boards beside the heads, its board's own rows computed and discarded.
+
+**Not supported** (``CachedEvaluator`` refuses them): B12's ``board_bilinear`` form, which
 reads every board's per-board register states at every layer - frozen boards' hidden
 states are not cached; and B12 with no global registers (its context is then the mean of
 every square, frozen ones included). The ``relative_cells`` default reads only the global
@@ -188,7 +200,7 @@ from .model import NetOutput, T5DNet
 from .quant import trunk_format
 from .rope import rope_angles, rope_cos_sin
 from .scope import board_scope
-from .state import TOKEN_BOARD_REGISTER, Batch, PositionState, collate
+from .state import TOKEN_BOARD_REGISTER, Batch, PositionState, collate, to_piece_centric, to_square_centric
 
 KV_FORMATS = FROZEN_KV_FORMATS  # the storage formats (``kvformat.py``)
 
@@ -510,11 +522,6 @@ class CachedEvaluator:
 
     def __init__(self, model: T5DNet, config: CacheConfig | None = None, store: KVStore | None = None) -> None:
         cfg = model.cfg
-        if cfg.piece_centric:
-            raise NotImplementedError(
-                "the cached path refuses a piece-centric network (A5): a destination token on a frozen board appears and "
-                "vanishes from node to node, so the board's stored K/V would go stale (C17; BUILD_LOG issue 252)"
-            )
         if cfg.attn_scope != "block_causal":
             raise ValueError("the cached path evaluates a network of the block-causal scope (NetConfig.attn_scope)")
         if model.smolgen is not None and (cfg.smolgen_form != "relative_cells" or cfg.global_regs == 0):
@@ -620,13 +627,14 @@ class CachedEvaluator:
         idents = {int(b): board_ident(state, int(b)) for b in frozen}  # intrinsic: history membership
         anchor = state_digest(state)
         epoch = Epoch(f"{kind}:{next(self._epochs)}:{anchor[:12]}", kind, parent, anchor, frozenset(idents.values()), True)
-        tpb = state.layout.tokens_per_board
         acting = int(state.acting_player)
         for view in (state, viewed_by(state, 1 - acting)):
             captured: list[tuple[torch.Tensor, torch.Tensor]] = []
             out = model(collate([view]), scope="dense", kv_hook=_capture_into(captured), return_trunk=True)
             for b in frozen:
-                sl = slice(int(b) * tpb, (int(b) + 1) * tpb)
+                # The board's own tokens in this view: its transient destination tokens (A5) are live,
+                # read by the dense pass and never cached (section 7.3).
+                sl = _own_tokens(view, int(b))
                 kv = torch.stack([torch.stack([k[0, :, sl], v[0, :, sl]]) for k, v in captured])
                 entry = self._entry(kv, out.trunk[0, sl], (), "refresh")
                 self.store.put((epoch.key, _history_digest(board_ident(view, int(b), acting=True))), entry)
@@ -714,25 +722,36 @@ class CachedEvaluator:
         if work.coords is None:
             work.coords = model.coordinates(batch)
         coords_all = work.coords
-        tpb = state.layout.tokens_per_board
+        # The board's own tokens - every token of it but register A5's transient destination
+        # tokens, which are live (``PositionState.board_tokens``) - and the frozen tokens of the
+        # boards it reads, in (p, h) order.
+        start, stop = int(state.layout.board_offsets[b]), int(state.layout.board_offsets[b + 1])
+        own_np = state.board_tokens(b, frozen=True)
+        whole = own_np.shape[0] == stop - start  # no transient token on it (always so under A1)
         key_boards = sorted(plan.deps[b], key=lambda j: (int(state.timeline[j]), int(state.half_turn[j])))
-        own = torch.arange(b * tpb, (b + 1) * tpb)
-        keys = torch.cat([torch.arange(j * tpb, (j + 1) * tpb) for j in key_boards] + [own])
-        n_keys, c = keys.shape[0], tpb
+        own = torch.from_numpy(own_np)
+        keys = torch.cat([torch.from_numpy(state.board_tokens(j, frozen=True)) for j in key_boards] + [own])
+        n_keys, c = keys.shape[0], own.shape[0]
         entries = [self.store[plan.key(epoch, j)] for j in key_boards]
+        local = None if whole else torch.from_numpy(own_np - start)
+
+        def own_rows(t: torch.Tensor) -> torch.Tensor:
+            """The rows of the board's own tokens among the rows ``[start, stop)``."""
+            return t if local is None else t[..., local, :]
+
         # Rows: the scope and the structure for this board's queries, on its key set - the
         # mask once, the bias per layer (B15's table is per layer). The structure's smolgen
         # and B16's status biases are live rows' only, so a frozen board's rows have neither;
         # B15 is geometry and biases them (``scope.py``).
         st = None if ctx.structure is None else ctx.structure.for_frozen_rows()
         frozen_ctx = replace(ctx, structure=st)
-        allowed = _block_mask(frozen_ctx, b * tpb, (b + 1) * tpb)[..., keys]
+        allowed = own_rows(_block_mask(frozen_ctx, start, stop))[..., keys]
         caller_bias = None  # a caller's dense bias (the cache's own contexts have none)
         if ctx.bias is not None:
-            caller_bias = _block_rows(replace(frozen_ctx, structure=None), b * tpb, (b + 1) * tpb)[1][..., keys]
+            caller_bias = own_rows(_block_rows(replace(frozen_ctx, structure=None), start, stop)[1])[..., keys]
         # Positions relative to the board itself (integer offsets: exact in any frame).
         coords = coords_all[:, keys].clone()
-        coords[..., 2:4] -= coords_all[:, b * tpb, 2:4][:, None, :]
+        coords[..., 2:4] -= coords_all[:, start, 2:4][:, None, :]
         cos, sin = rope_cos_sin(rope_angles(coords, model.rope_axis, model.rope_freq))
         spatial_free = batch.kind[:, keys] == TOKEN_BOARD_REGISTER  # B8: no file or rank (M20)
         compact = AttnContext(
@@ -745,7 +764,7 @@ class CachedEvaluator:
             spatial_dims=model.rope_spatial,
             quant=ctx.quant,
         )
-        x = emb[:, b * tpb : (b + 1) * tpb]
+        x = emb[:, start:stop] if whole else emb[:, own]
         layers: list[torch.Tensor] = []
         with model._autocast(x.device):
             # The trunk's own block steps around this attention (``trunk.Block``): the same
@@ -762,8 +781,9 @@ class CachedEvaluator:
                 bias = caller_bias
                 if st is not None:
                     st_l = st.for_layer(None, layer) if st.layer_dependent else st
-                    s_bias = st_l.bias_rows(b * tpb, (b + 1) * tpb, cols=keys[None])
+                    s_bias = st_l.bias_rows(start, stop, cols=keys[None])
                     if s_bias is not None:
+                        s_bias = own_rows(s_bias)
                         bias = s_bias if bias is None else bias + s_bias
                 if ctx.shaw is not None:
                     # B17: the board's own queries against its key set's classes (geometry).
@@ -817,23 +837,41 @@ class CachedEvaluator:
 
     def live_pass(self, work: NodeWork, query_boards=None) -> torch.Tensor:
         """The live set - every head (``query_boards``: a subset, for section 15.3's
-        changed-boards-only cost probe; its output is then meaningless) and the global
-        registers - against every frozen board's stored K/V; returns the final trunk output
-        ``(1, L, d)`` with the frozen boards' stored outputs in their rows."""
+        changed-boards-only cost probe; its output is then meaningless), register A5's transient
+        tokens and the global registers - against every frozen board's stored K/V; returns the final
+        trunk output ``(1, L, d)`` with the frozen boards' stored outputs in their rows. A query board
+        is meant to be a head; a superseded one given there is computed live as well, each of its
+        tokens once."""
         model, cfg = self.model, self.model.cfg
         state, ctx, emb, plan, epoch = work.state, work.ctx, work.emb, work.plan, work.epoch
         lay = state.layout
-        tpb, length, lb = lay.tokens_per_board, lay.n_tokens, lay.n_body
+        length, lb = lay.n_tokens, lay.n_body
+        offsets = lay.board_offsets
         heads_all = [int(b) for b in np.flatnonzero(state.is_head)]
         # The cost probe's other heads keep zero K/V: same key count, meaningless values.
         query = heads_all if query_boards is None else sorted(int(b) for b in query_boards)
         frozen = [int(b) for b in plan.frozen]
         entries = [self.store[plan.key(epoch, b)] for b in frozen]
-        frozen_tok = torch.cat([torch.arange(b * tpb, (b + 1) * tpb) for b in frozen]) if frozen else torch.zeros(0, dtype=torch.long)
-        live_tok = torch.cat([torch.arange(b * tpb, (b + 1) * tpb) for b in query] + [torch.arange(lb, length)])
-        blocks = _runs(query, cfg.attn_block_boards, tpb)
+        own = {b: state.board_tokens(b, frozen=True) for b in frozen}  # a frozen board's cached tokens
+        frozen_tok = torch.from_numpy(np.concatenate([own[b] for b in frozen])) if frozen else torch.zeros(0, dtype=torch.long)
+        # Register A5's transient tokens (destination tokens on superseded boards) are live rows:
+        # computed in blocks of whole boards beside the heads (their boards' other rows discarded).
+        transient = np.flatnonzero(state.transient)
+        row_boards = sorted(set(query) | {int(x) for x in np.searchsorted(offsets, transient, side="right") - 1})
+        live_body = np.concatenate([np.arange(offsets[b], offsets[b + 1]) for b in query] + [transient, np.zeros(0, np.int64)])
+        # Sorted and each token once: a superseded board given as a query board (the cost probe's
+        # misuse) would bring its transient tokens twice (the decision-7 review's guard).
+        live_body = np.unique(live_body).astype(np.int64)
+        live_tok = torch.cat([torch.from_numpy(live_body), torch.arange(lb, length)])
+        blocks = _runs([(int(offsets[b]), int(offsets[b + 1])) for b in row_boards], cfg.attn_block_boards)
         global_free = lb < length  # the position-free global registers' rows (B8), apart
         kernel_rows = torch.cat([torch.arange(s, e) for s, e in blocks])[None] if blocks else None
+        # Where each live body row sits among the kernel rows (None: they are the kernel rows - A1).
+        pick = None
+        if transient.size:
+            at = np.full(lb, -1, dtype=np.int64)
+            at[kernel_rows[0].numpy()] = np.arange(kernel_rows.shape[1])
+            pick = torch.from_numpy(at[live_body])
         x = emb[:, live_tok]
         d_head = cfg.d_head
         with model._autocast(x.device):
@@ -860,7 +898,10 @@ class CachedEvaluator:
                         h_full[:, live_tok] = h
                     ctx_l = ctx_l.for_layer(h_full, layer)
                 fast = _FastPath(q_full, k_full, v_full, ctx_l)
-                outs = [_live_rows(fast, ctx_l, blocks, kernel_rows)] if blocks else []
+                outs = []
+                if blocks:
+                    rows_out = _live_rows(fast, ctx_l, blocks, kernel_rows)
+                    outs.append(rows_out if pick is None else rows_out[:, :, pick])
                 if global_free:
                     allowed_g, bias_g = _block_rows(ctx_l, lb, length)
                     s_g = _scores(fast.q[:, :, lb:], fast.k, fast.scale, fast.cd)
@@ -874,7 +915,7 @@ class CachedEvaluator:
         h_all = out_live.new_zeros(1, length, out_live.shape[-1])
         h_all[:, live_tok] = out_live
         for b, e in zip(frozen, entries, strict=True):
-            h_all[0, b * tpb : (b + 1) * tpb] = e.out
+            h_all[0, torch.from_numpy(own[b])] = e.out
         return h_all
 
 
@@ -930,12 +971,15 @@ def viewed_by(state: PositionState, acting: int) -> PositionState:
     (a player with no move). COMMITTED-CLASS SILENCE (C2, C3: what the dense pass over a
     refresh's anchor reads from the other colour's side; spec issue 229) - a placeholder,
     fixed in code: no second arm can be built until something supplies the other colour's
-    move graph."""
+    move graph. Under register A5 the view has no destination token - the other colour has no
+    candidate moves here, so its tokens are the pieces and the registers (BUILD_LOG issue 276)."""
     if int(acting) == int(state.acting_player):
         return state
     none = np.zeros((0, 3), dtype=np.int64)
-    return replace(
-        state,
+    a5 = state.piece_centric
+    base = to_square_centric(state) if a5 else state
+    view = replace(
+        base,
         acting_player=int(acting),
         submit_possible=False,
         submit_legal=False,
@@ -946,6 +990,9 @@ def viewed_by(state: PositionState, acting: int) -> PositionState:
         opp_moves=none.copy(),
         edges=none.copy(),
     )
+    # Register A5: with no moves there are no destination tokens - the view's tokens are the
+    # pieces (and registers): A5's token set rebuilt for it.
+    return to_piece_centric(view, strict=True) if a5 else view
 
 
 def _capture_into(captured: list) -> object:
@@ -958,19 +1005,33 @@ def _capture_into(captured: list) -> object:
     return capture
 
 
+def _own_tokens(state: PositionState, board: int) -> slice | torch.Tensor:
+    """A board's own tokens (``PositionState.board_tokens(frozen=True)``: all of it but register A5's
+    transient destination tokens) as an index - a slice where they are contiguous, as every board's
+    are under A1."""
+    tokens = state.board_tokens(board, frozen=True)
+    if tokens.size and int(tokens[-1]) - int(tokens[0]) + 1 == tokens.size:
+        return slice(int(tokens[0]), int(tokens[-1]) + 1)
+    return torch.from_numpy(tokens)
+
+
 def _history_digest(ident: bytes) -> bytes:
     """The digest of a refreshed history board: its K/V are the epoch's, whatever it reads."""
     return hashlib.blake2b(b"H" + ident, digest_size=16).digest()
 
 
-def _runs(boards: list[int], max_boards: int, tpb: int) -> list[tuple[int, int]]:
-    """Token ranges of runs of consecutive boards, at most ``max_boards`` boards each."""
+def _runs(ranges: list[tuple[int, int]], max_boards: int) -> list[tuple[int, int]]:
+    """Token ranges of runs of consecutive boards - ``ranges``: each board's ``(start, stop)``, in
+    board order - at most ``max_boards`` boards each."""
     runs: list[tuple[int, int]] = []
-    for b in boards:
-        if runs and runs[-1][1] == b * tpb and (runs[-1][1] - runs[-1][0]) < max_boards * tpb:
-            runs[-1] = (runs[-1][0], (b + 1) * tpb)
+    count = 0
+    for start, stop in ranges:
+        if runs and runs[-1][1] == start and count < max_boards:
+            runs[-1] = (runs[-1][0], stop)
+            count += 1
         else:
-            runs.append((b * tpb, (b + 1) * tpb))
+            runs.append((start, stop))
+            count = 1
     return runs
 
 
@@ -999,7 +1060,6 @@ def reference_output(
     rounds every frozen board's K/V - injected ones included - after the injection."""
     cfg = model.cfg
     batch = collate([state])
-    tpb = state.layout.tokens_per_board
     ident = {b: board_ident(state, b) for b in range(state.n_boards)}  # intrinsic, as the cache's history
     by_ident = {v: b for b, v in ident.items()}
     injected: dict[int, int] = {}  # state board -> anchor board
@@ -1024,13 +1084,15 @@ def reference_output(
 
         view = viewed_by(anchor, int(state.acting_player))
         anchor_out = model(collate([view]), scope="dense", kv_hook=capture, return_trunk=True).trunk
+    # A history board's own tokens in the position and in the anchor's view (register A5: its
+    # transient destination tokens are live in both, never injected).
+    spans = {b: (_own_tokens(state, b), _own_tokens(view, a)) for b, a in injected.items()}
 
     def hook(layer, k, v):
         if not injected:
             return k, v
         k, v = k.clone(), v.clone()
-        for b, a in injected.items():
-            sl, src = slice(b * tpb, (b + 1) * tpb), slice(a * tpb, (a + 1) * tpb)
+        for sl, src in spans.values():
             k[:, :, sl], v[:, :, sl] = anchor_kv[layer][0][:, :, src], anchor_kv[layer][1][:, :, src]
         return k, v
 
@@ -1044,8 +1106,8 @@ def reference_output(
     if not injected:
         return out
     h = out.trunk.clone()
-    for b, a in injected.items():
-        h[0, b * tpb : (b + 1) * tpb] = anchor_out[0, a * tpb : (a + 1) * tpb]
+    for sl, src in spans.values():
+        h[0, sl] = anchor_out[0, src]
     return model.heads(h, batch, return_trunk=True)
 
 

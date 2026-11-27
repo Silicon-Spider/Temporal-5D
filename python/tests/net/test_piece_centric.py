@@ -1,5 +1,6 @@
 """Register A5, piece-centric tokenisation (spec section 14.4; a prototype behind
-``NetConfig.piece_centric``, off; dense scope only).
+``NetConfig.piece_centric``, off) - in the dense scope here; under the block-causal scope and the
+cache, ``tests/net/test_cache_a5.py``.
 
 A5's tokens are A1's minus the empty squares no candidate move lands on (``state.to_piece_centric``):
 the pieces, the candidate moves' empty destination cells, the registers. The readings behind that -
@@ -829,25 +830,26 @@ def test_no_quadratic_tensor_is_kept_for_backward_under_a5():
 # --- the refusals (A5.3) and the tokenisation check ------------------------------------------------------------------
 
 
-def test_the_block_causal_scope_and_the_cached_path_are_refused():
-    """A5 is built for the dense scope only (BUILD_LOG issue 252): the configuration, a forward that
-    overrides the scope, the cached evaluator and the cache bench each refuse it, naming the issue; so
-    is D4's reply prototype (issue 251). (The engine's cached evaluator:
+def test_the_block_causal_scope_and_the_cached_path_take_a5():
+    """Decision 7 (the 2026-11-15 review; register C17, settling BUILD_LOG issue 252): the
+    configuration, a forward that overrides the scope (a dense-scope network's, without B16, which
+    it does not have), the cached evaluator and the cache bench take A5 - its destination tokens on
+    superseded boards live, never cached (``tests/net/test_cache_a5.py`` holds section 15.2's cached
+    rows for it). D4's reply prototype is still refused (issue 251). (The engine's cached evaluator:
     ``tests/engine/test_piece_centric_engine.py``.)"""
-    with pytest.raises(NotImplementedError, match="issue 252"):
-        NetConfig(piece_centric=True, attn_scope="block_causal").validate()
+    NetConfig(piece_centric=True, attn_scope="block_causal").validate()
     with pytest.raises(NotImplementedError, match="issue 251"):
         NetConfig(piece_centric=True, opp_reply=True).validate()
     model = build_model(NetConfig(trunk_dtype="fp32", n_layers=1, piece_centric=True), seed=0).eval()
     batch = collate([a5(synthetic_state(1, 4))])
-    with pytest.raises(NotImplementedError, match="issue 252"):
-        model(batch, scope="block_causal")
-    with pytest.raises(NotImplementedError, match="issue 252"):
-        CachedEvaluator(model)
+    with torch.no_grad():
+        model(batch, scope="block_causal", status_bias=False)
+    cached = build_model(NetConfig(trunk_dtype="fp32", n_layers=1, piece_centric=True, attn_scope="block_causal"), seed=0).eval()
+    CachedEvaluator(cached)
     from t5d.net.cache_bench import _setup
 
-    with pytest.raises(NotImplementedError, match="issue 252"):
-        _setup(4, None, "fp32", "dense", 0, piece_centric=True)
+    _, state = _setup(4, None, "fp32", "dense", 0, piece_centric=True, n_layers=1)
+    assert state.piece_centric
 
 
 def test_a_batch_of_the_other_tokenisation_is_refused():

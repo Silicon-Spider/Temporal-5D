@@ -357,8 +357,6 @@ class CachedNetworkEvaluator:
     the causal one, never every past search's (issue 273)."""
 
     def __init__(self, cached: CachedEvaluator, *, policy: str = "normal", max_batch: int = 32) -> None:
-        if cached.model.cfg.piece_centric:
-            raise NotImplementedError("the cached path refuses a piece-centric network (A5; BUILD_LOG issue 252)")
         _check_policy(cached.model, policy)
         _refuse_ladder(cached)
         self.policy = policy
@@ -376,9 +374,15 @@ class CachedNetworkEvaluator:
         return self.cached.model
 
     def _fit(self, state: PositionState) -> PositionState:
+        """The network's input, as ``NetworkEvaluator``'s: re-laid out to the network's register
+        counts, and for a piece-centric network (register A5) its tokens, strictly (engine data drops
+        no edge) - under the cache its destination tokens on superseded boards are live tokens, never
+        cached (register C17; BUILD_LOG issue 252)."""
         cfg = self.model.cfg
         if (state.regs_per_board, state.global_regs) != (cfg.regs_per_board, cfg.global_regs):
-            return relayout(state, cfg.regs_per_board, cfg.global_regs)
+            state = relayout(state, cfg.regs_per_board, cfg.global_regs)
+        if cfg.piece_centric and not state.piece_centric:
+            state = to_piece_centric(state, strict=True)
         return state
 
     def start(self, root: PositionLike) -> Epoch:

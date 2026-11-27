@@ -62,6 +62,10 @@ not legal: no rules engine stands behind the moves.
   issue 269). A board an inner move supersedes is computed when the network next runs - the
   next evaluated node's ``CachedEvaluator.evaluate`` computes every frozen board without an
   entry - once per board (with its past and perspective) and epoch, and shared below.
+* **Register A5** (``NetConfig.piece_centric``): for a piece-centric network the tree hands the
+  cached evaluator each node's A5 view (``SearchTree.view``: ``state.to_piece_centric``, not
+  strict - the fixture's synthetic edges to cells that are no A5 token are dropped, as the tests'
+  synthetic positions are), its destination tokens on superseded boards live (``cache.py``).
 """
 
 from __future__ import annotations
@@ -76,7 +80,7 @@ import torch
 from .cache import CachedEvaluator, Epoch
 from .complexity import ComplexitySignals, complexity_fires, effort_difficulty, structural_signals
 from .model import NetOutput
-from .state import COLOUR_BLACK, COLOUR_NONE, COLOUR_WHITE, PositionState
+from .state import COLOUR_BLACK, COLOUR_NONE, COLOUR_WHITE, PositionState, to_piece_centric
 from .synthetic import _candidate_moves, reach_graph
 
 #: A move: ("physical", p) or ("jump", p, (q, t)).
@@ -403,8 +407,10 @@ class SearchTree:
         #: new node (``universe`` its multiverse): False makes the node inner; anything but a bool
         #: is refused (``TypeError``). None: every node.
         self.evaluates = evaluates
+        #: Register A5: each node's piece-centric view, made once (``view``).
+        self._views: dict[Node, PositionState] = {}
         self.root = Node(root)
-        self.root.epoch = evaluator.root_epoch(root.state())
+        self.root.epoch = evaluator.root_epoch(self.view(self.root))
         self.refreshes = 0
         self.complexity_refreshes = 0  # C24's, counted against its budget
 
@@ -424,6 +430,15 @@ class SearchTree:
             node.children[key] = Node(universe, node, move, node.epoch, branched=node.universe.branches(move), inner=inner)
         return node.children[key]
 
+    def view(self, node: Node) -> PositionState:
+        """The position the network reads at ``node``: its state - for a piece-centric network
+        (register A5) its A5 view, made once (the module docstring)."""
+        if not self.evaluator.model.cfg.piece_centric:
+            return node.state
+        if node not in self._views:
+            self._views[node] = to_piece_centric(node.state, strict=False)
+        return self._views[node]
+
     def path(self, moves: Sequence[Move], start: Node | None = None) -> Node:
         node = self.root if start is None else start
         for move in moves:
@@ -433,7 +448,7 @@ class SearchTree:
     def evaluate(self, node: Node) -> NetOutput:
         if node.inner:
             raise ValueError("an inner node makes no network call (C27: the tree form expands it on inherited priors)")
-        out = self.evaluator.evaluate(node.state, node.epoch)
+        out = self.evaluator.evaluate(self.view(node), node.epoch)
         if self.evaluator.config.complexity_refresh:
             node.effort_logits = out.effort_logits[0].detach().clone()  # C24: the children's parent output
         return out
@@ -489,7 +504,7 @@ class SearchTree:
         if node.inner:
             raise ValueError("an inner node is refreshed nowhere: it makes no network call, so nothing at it is conditioned (C27)")
         old = node.epoch
-        new = self.evaluator.refresh(node.state, old)
+        new = self.evaluator.refresh(self.view(node), old)
         node.epoch = new
         for d in node.descendants():
             if d.epoch is old:

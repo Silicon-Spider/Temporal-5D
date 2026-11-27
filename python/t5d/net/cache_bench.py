@@ -39,7 +39,10 @@ refresh rows; ``analytic_both_perspectives`` beside the spec's one-pass formula)
 weights; PyTorch's default intra-op threads (recorded). Timelines (= live head boards):
 the spec's assumption - 8 at 240 boards, 12 at 600 (section 7.1's "~8 live head boards",
 section 15.6's table) - and the engine corpus's real games, 24 timelines at 240-399 boards
-(the corpus reaches no further, so 24 stands for 600 too).
+(the corpus reaches no further, so 24 stands for 600 too). A job given ``piece_centric=True``
+measures register A5's network on the same positions' A5 views (``_net_state``): its boards differ
+in length, so every token count is exact per board, and a node's live set carries its destination
+tokens on superseded boards, which are live and never cached (register C17; BUILD_LOG issue 252).
 
 **A quiet machine.** Every job runs in a fresh subprocess (its peak working set its own).
 Before a job the benchmark waits (at most ``--max-wait`` s) until the CPU used by other
@@ -52,9 +55,12 @@ runs again (``--retries``); one still flagged keeps its byte counts in the summa
 times are left out.
 
 Run (from ``python/``): ``py -m t5d.net.cache_bench --out DIR`` (``--quick`` for a smoke run
-at 20 boards). Writes one JSON file per job and ``summary.json`` into ``DIR`` - keep it out
-of the repository (``docs/MEASUREMENTS.md`` takes the figures, with their conditions);
-``--skip-existing`` reuses clean job files, ``--summarise`` only rebuilds the summary.
+at 20 boards; ``--piece-centric`` for register A5's jobs, their files named apart). Writes one JSON
+file per job and ``summary.json`` into ``DIR`` - keep it out of the repository
+(``docs/MEASUREMENTS.md`` takes the figures, with their conditions); ``--skip-existing`` reuses
+clean job files, ``--summarise`` only rebuilds the summary. ``--idle-processes`` names executables
+that must not run beside a job - the engine's own, as built today: ``t5d-tests.exe
+t5d-scan6bpp.exe t5d-legality-cost.exe t5d-play.exe t5d-gate.exe t5d-measure.exe t5d-bench.exe``.
 """
 
 from __future__ import annotations
@@ -209,11 +215,34 @@ def _setup(boards: int, timelines: int | None, dtype: str, scope: str, seed: int
     from .model import build_model
     from .synthetic import synthetic_state
 
-    if flags.get("piece_centric"):
-        raise NotImplementedError("the cache bench measures the cached path, which refuses A5's piece-centric tokens (BUILD_LOG issue 252)")
     torch.set_grad_enabled(False)
     model = build_model(NetConfig(trunk_dtype=dtype, attn_scope=scope, **flags), seed=seed).eval()
-    return model, synthetic_state(seed, boards, n_timelines=timelines)
+    return model, _net_state(model, synthetic_state(seed, boards, n_timelines=timelines))
+
+
+def _net_state(model, state):
+    """``state`` as ``model`` reads it: for a piece-centric network (register A5) its A5 view (not
+    strict - synthetic edges to cells that are no A5 token are dropped, as the tests' are); under
+    the cache its destination tokens on superseded boards are live tokens, never cached (register
+    C17; BUILD_LOG issue 252)."""
+    from .state import to_piece_centric
+
+    return to_piece_centric(state, strict=False) if model.cfg.piece_centric else state
+
+
+def _board_tokens(state, boards, frozen: bool = False) -> int:
+    """The tokens of ``boards`` (``frozen``: their own - without register A5's transient tokens,
+    which are live): ``len(boards) * tokens_per_board`` under A1."""
+    return int(sum(state.board_tokens(int(b), frozen=frozen).size for b in boards))
+
+
+def _live_tokens(state, boards=None) -> int:
+    """A node's live set: the tokens of ``boards`` (None: the heads), register A5's transient tokens
+    and the global registers."""
+    import numpy as np
+
+    boards = np.flatnonzero(state.is_head) if boards is None else boards
+    return _board_tokens(state, boards) + int(state.transient.sum()) + state.global_regs
 
 
 def _conditions(model, state) -> dict:
@@ -222,7 +251,11 @@ def _conditions(model, state) -> dict:
     return {
         "boards": state.n_boards,
         "tokens": state.n_tokens,
-        "tokens_per_board": state.layout.tokens_per_board,
+        # A1's per-board length; under register A5 boards differ, and the token counts below are exact.
+        "tokens_per_board": None if state.piece_centric else state.layout.tokens_per_board,
+        "piece_centric": bool(state.piece_centric),
+        "live_tokens": _live_tokens(state),
+        "frozen_tokens": _board_tokens(state, [b for b in range(state.n_boards) if not state.is_head[b]], frozen=True),
         "global_regs": state.global_regs,
         "timelines": len(set(state.timeline.tolist())),
         "heads": int(state.is_head.sum()),
@@ -238,14 +271,15 @@ def _conditions(model, state) -> dict:
     }
 
 
-def job_dense(boards: int, timelines: int | None, dtype: str, repeats: int, seed: int = 0) -> dict:
-    """The dense network (C1): one forward over the whole position."""
+def job_dense(boards: int, timelines: int | None, dtype: str, repeats: int, seed: int = 0, piece_centric: bool = False) -> dict:
+    """The dense network (C1): one forward over the whole position (``piece_centric``: register A5's
+    network on the position's A5 view)."""
     from .state import collate
     from .synthetic import synthetic_state
 
-    model, state = _setup(boards, timelines, dtype, "dense", seed)
+    model, state = _setup(boards, timelines, dtype, "dense", seed, piece_centric=piece_centric)
     batch = collate([state])
-    model(collate([synthetic_state(seed + 1, 2)]))  # warm-up: kernels, thread pool
+    model(collate([_net_state(model, synthetic_state(seed + 1, 2))]))  # warm-up: kernels, thread pool
     before = _peak_bytes()
     seconds, times = _median_time(lambda: model(batch), repeats)
     peak = _peak_bytes()
@@ -261,12 +295,14 @@ def job_dense(boards: int, timelines: int | None, dtype: str, repeats: int, seed
     }
 
 
-def job_dense_flops(boards: int, timelines: int | None, dtype: str, seed: int = 0, attn_impl: str = "block_sparse") -> dict:
+def job_dense_flops(
+    boards: int, timelines: int | None, dtype: str, seed: int = 0, attn_impl: str = "block_sparse", piece_centric: bool = False
+) -> dict:
     """FLOPs of one dense forward: block-sparse (B14, the default) or chunked (every key scored)."""
     from .cost import count_flops
     from .state import collate
 
-    model, state = _setup(boards, timelines, dtype, "dense", seed, attn_impl=attn_impl)
+    model, state = _setup(boards, timelines, dtype, "dense", seed, attn_impl=attn_impl, piece_centric=piece_centric)
     _, flops = count_flops(lambda: model(collate([state])))
     return {"job": "dense_flops", **_conditions(model, state), "flops": flops}
 
@@ -300,17 +336,19 @@ def job_cached(
     seed: int = 0,
     causal_past: str = "lineage",
     frozen_kv_format: str = "match",
+    piece_centric: bool = False,
 ) -> dict:
     """The cached path: the history build, a node (the live pass), the changed-only probe,
     the supersession recompute of a physical move and of two jumps, a root refresh, and the
-    store's bytes - with repeats and kernel times."""
+    store's bytes - with repeats and kernel times (``piece_centric``: register A5's network)."""
     from .cache import CacheConfig, CachedEvaluator, KVStore
     from .state import collate
     from .synthetic import synthetic_state
 
-    model, state = _setup(boards, timelines, dtype, "block_causal", seed, causal_past=causal_past, frozen_kv_format=frozen_kv_format)
+    flags = dict(causal_past=causal_past, frozen_kv_format=frozen_kv_format, piece_centric=piece_centric)
+    model, state = _setup(boards, timelines, dtype, "block_causal", seed, **flags)
     warm = CachedEvaluator(model)
-    small = synthetic_state(seed + 1, 3)
+    small = _net_state(model, synthetic_state(seed + 1, 3))
     warm.evaluate(small, warm.root_epoch(small))
     out = {"job": "cached", **_conditions(model, state), "causal_past": causal_past}
     ev = CachedEvaluator(model)
@@ -331,7 +369,7 @@ def job_cached(
     for name, (universe, move) in _children(state, seed).items():
         # Each child against the root's store alone (a sibling's supersession would be shared).
         cev = CachedEvaluator(model, store=KVStore(dict(root_entries)))
-        child = universe.apply(move).state()
+        child = _net_state(model, universe.apply(move).state())
         cwork = cev.prepare(child, epoch)
         todo = cev.missing(cwork)
         per_board = []
@@ -357,21 +395,21 @@ def job_cached(
         live = lambda cev=cev, cwork=cwork: cev.live_pass(cwork)  # noqa: E731
         probe_s, probe_times = _median_time(probe, repeats)
         live_s, live_times = _median_time(live, repeats)
-        tpb = child.layout.tokens_per_board
         out[f"child_{name}"] = {
             "move": [move[0], *[list(x) if isinstance(x, tuple) else x for x in move[1:]]],
             "superseded": len(todo),
             "supersession_s": statistics.median(totals) if totals else 0.0,
             "supersession_times": [round(t, 4) for t in totals],
             "supersession_kernel_s": sup_kernel,
-            "supersession_key_tokens": [(len(cwork.plan.deps[b]) + 1) * tpb for b in todo],
+            "supersession_key_tokens": [_board_tokens(child, [*cwork.plan.deps[b], b], frozen=True) for b in todo],
+            "supersession_query_tokens": [_board_tokens(child, [b], frozen=True) for b in todo],
             "changed_boards": len(changed),
             "changed_only_live_s": probe_s,
             "changed_only_kernel_s": kernel_seconds(probe),
             "live_pass_s": live_s,
             "live_pass_kernel_s": kernel_seconds(live),
-            "live_tokens": int(child.is_head.sum()) * tpb + child.global_regs,
-            "changed_tokens": len(changed) * tpb + child.global_regs,
+            "live_tokens": _live_tokens(child),
+            "changed_tokens": _live_tokens(child, changed),
             "tokens": child.n_tokens,
         }
         spreads[f"{name}_probe"] = spread(probe_times)
@@ -400,13 +438,15 @@ def job_cached(
     return out
 
 
-def job_cached_flops(boards: int, timelines: int | None, dtype: str, seed: int = 0, causal_past: str = "lineage") -> dict:
+def job_cached_flops(
+    boards: int, timelines: int | None, dtype: str, seed: int = 0, causal_past: str = "lineage", piece_centric: bool = False
+) -> dict:
     """The FLOPs the cached path issues: the live pass, the node's preparation (its embedding),
     the changed-only probe, each supersession, the refresh."""
     from .cache import CacheConfig, CachedEvaluator, KVStore
     from .cost import count_flops
 
-    model, state = _setup(boards, timelines, dtype, "block_causal", seed, causal_past=causal_past)
+    model, state = _setup(boards, timelines, dtype, "block_causal", seed, causal_past=causal_past, piece_centric=piece_centric)
     ev = CachedEvaluator(model)
     epoch = ev.root_epoch(state)
     work = ev.prepare(state, epoch)
@@ -416,7 +456,7 @@ def job_cached_flops(boards: int, timelines: int | None, dtype: str, seed: int =
     root_entries = dict(ev.store.entries)
     for name, (universe, move) in _children(state, seed).items():
         cev = CachedEvaluator(model, store=KVStore(dict(root_entries)))
-        child = universe.apply(move).state()
+        child = _net_state(model, universe.apply(move).state())
         cwork, prep = count_flops(lambda cev=cev, child=child: cev.prepare(child, epoch))
         flops = []
         for b in cev.missing(cwork):
@@ -523,16 +563,17 @@ def summarise(results: list[dict]) -> dict:
             r.get("frozen_kv_format", "match"),
             r.get("causal_past", ""),
             r.get("attn_impl", ""),
+            bool(r.get("piece_centric", False)),  # register A5's jobs apart from A1's
         )
         by[key] = r
     rows = []
-    for (job, boards, timelines, dtype, fmt, reading, _), r in sorted(by.items(), key=lambda kv: [str(x) for x in kv[0]]):
+    for (job, boards, timelines, dtype, fmt, reading, _, a5), r in sorted(by.items(), key=lambda kv: [str(x) for x in kv[0]]):
         if job != "cached" or fmt != "match" or reading != "lineage":
             continue
 
-        def find(name, impl="block_sparse", fmt="match", reading="", dt=dtype, timelines=timelines, boards=boards):
+        def find(name, impl="block_sparse", fmt="match", reading="", dt=dtype, timelines=timelines, boards=boards, a5=a5):
             for key, value in by.items():
-                if key[:6] == (name, boards, timelines, dt, fmt, reading) and (name != "dense_flops" or key[6] == impl):
+                if key[:6] == (name, boards, timelines, dt, fmt, reading) and key[7] == a5 and (name != "dense_flops" or key[6] == impl):
                     return value
             return None
 
@@ -542,11 +583,15 @@ def summarise(results: list[dict]) -> dict:
         fp8 = find("cached", fmt="fp8", reading="lineage")
         creation = find("cached", reading="creation")
         t, tpb, g = r["tokens"], r["tokens_per_board"], r["global_regs"]
-        live_t = r["heads"] * tpb + g
+        # Exact token counts where the job file has them (and under register A5, where boards differ
+        # in length, only those); job files written before them are A1's.
+        live_t = r["live_tokens"] if "live_tokens" in r else r["heads"] * tpb + g
+        frozen_t = r["frozen_tokens"] if "frozen_tokens" in r else r["frozen_boards"] * tpb
         ok, dense_ok = _usable(r), _usable(dense)
         a_dense, a_node = dense_flops(t, cfg)["total"], pass_flops(live_t, t, cfg)["total"]
         row = {
             "boards": boards,
+            "piece_centric": a5,
             "timelines": timelines,
             "timeline_source": "spec" if TIMELINES.get(boards, (None,))[0] == timelines else "corpus",
             "heads": r["heads"],
@@ -589,7 +634,7 @@ def summarise(results: list[dict]) -> dict:
             cf = cflops and cflops.get(f"child_{name}")
             a_live = pass_flops(c["live_tokens"], c["tokens"], cfg)["total"]
             a_changed = pass_flops(c["changed_tokens"], c["tokens"], cfg)["total"]
-            a_sup = sum(pass_flops(tpb, k, cfg)["total"] for k in c["supersession_key_tokens"])
+            a_sup = sum(pass_flops(q, k, cfg)["total"] for q, k in zip(_queries(c, tpb), c["supersession_key_tokens"], strict=True))
             entry = {
                 "superseded": c["superseded"],
                 "changed_boards": c["changed_boards"],
@@ -608,7 +653,7 @@ def summarise(results: list[dict]) -> dict:
             }
             if creation and creation.get(f"child_{name}"):
                 cc = creation[f"child_{name}"]
-                a_sup_c = sum(pass_flops(tpb, k, cfg)["total"] for k in cc["supersession_key_tokens"])
+                a_sup_c = sum(pass_flops(q, k, cfg)["total"] for q, k in zip(_queries(cc, tpb), cc["supersession_key_tokens"], strict=True))
                 entry["supersession_creation"] = {
                     "superseded": cc["superseded"],
                     "analytic": a_sup_c / a_live,
@@ -642,13 +687,32 @@ def summarise(results: list[dict]) -> dict:
             "cache_bytes_fp8_network": fp8 and fp8["kv_bytes"],
             "outputs_bytes": r["out_bytes"],
             "analytic_all_tokens_bf16": kv_bytes(t, cfg, 2),
-            "analytic_frozen_tokens": kv_bytes(r["frozen_boards"] * tpb, cfg, 2 if dtype == "bf16" else 4),
-            "per_superseded_board": kv_bytes(tpb, cfg, 2 if dtype == "bf16" else 4),
+            "analytic_frozen_tokens": kv_bytes(frozen_t, cfg, 2 if dtype == "bf16" else 4),
+            # The mean superseded board's (every board's under A1).
+            "per_superseded_board": kv_bytes(frozen_t / max(1, r["frozen_boards"]), cfg, 2 if dtype == "bf16" else 4),
             "peak_gb_cached": r["peak_gb_cached"],
             "peak_gb_dense": dense and dense["peak_gb"],
         }
         rows.append(row)
     return {"report": REPORT, "rows": rows}
+
+
+def _queries(child: dict, tpb: int | None) -> list[int]:
+    """Each superseded board's query tokens in a child's job record: exact where recorded (register
+    A5's boards differ in length), else A1's per-board length."""
+    if "supersession_query_tokens" in child:
+        return child["supersession_query_tokens"]
+    return [tpb] * len(child["supersession_key_tokens"])
+
+
+def name_of(job: str, kwargs: dict) -> str:
+    """A job's result file name (without ``.json``): its job and every argument that sets its
+    conditions - register A5's jobs marked, so that they never overwrite A1's files and
+    ``--skip-existing`` never takes one for the other."""
+    parts = [job, kwargs["boards"], kwargs["timelines"], kwargs["dtype"]]
+    parts += [kwargs.get("frozen_kv_format", ""), kwargs.get("causal_past", ""), kwargs.get("attn_impl", "")]
+    parts += ["a5" if kwargs.get("piece_centric") else ""]
+    return "-".join(str(x) for x in parts if x != "")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -664,6 +728,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--retries", type=int, default=3, help="runs allowed for a contended or unstable job")
     parser.add_argument("--summarise", action="store_true", help="only rebuild summary.json from the job files in --out")
     parser.add_argument("--skip-existing", action="store_true", help="reuse a job's file in --out when it holds a usable result")
+    parser.add_argument(
+        "--piece-centric", action="store_true", help="register A5's network on the positions' A5 views (its files named apart)"
+    )
     args = parser.parse_args(argv)
     os.makedirs(args.out, exist_ok=True)
 
@@ -689,11 +756,6 @@ def main(argv: list[str] | None = None) -> int:
         idle=tuple(args.idle_processes), max_other_cores=args.max_other_cores, min_free_gb=args.min_free_gb, max_wait=args.max_wait
     )
 
-    def name_of(job: str, kwargs: dict) -> str:
-        parts = [job, kwargs["boards"], kwargs["timelines"], kwargs["dtype"]]
-        parts += [kwargs.get("frozen_kv_format", ""), kwargs.get("causal_past", ""), kwargs.get("attn_impl", "")]
-        return "-".join(str(x) for x in parts if x != "")
-
     def clean(job: str, **kwargs) -> None:
         path = os.path.join(args.out, name_of(job, kwargs) + ".json")
         if args.skip_existing and os.path.exists(path):
@@ -718,6 +780,8 @@ def main(argv: list[str] | None = None) -> int:
                 if boards > 240 and dtype == "bf16" and not spec_count:
                     continue  # BF16 at 600 boards: the spec's timeline count only (run time)
                 common = dict(boards=boards, timelines=timelines, dtype=dtype)
+                if args.piece_centric:
+                    common["piece_centric"] = True
                 clean("dense", repeats=2 if boards > 240 else repeats, **common)
                 clean("cached", repeats=repeats, **common)
                 if dtype == "bf16" and spec_count:

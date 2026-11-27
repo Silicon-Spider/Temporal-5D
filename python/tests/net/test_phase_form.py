@@ -261,13 +261,28 @@ def test_a_tree_rooted_at_n_star_is_the_cached_path(supersession):
         _close(out, reference_output(model, below[0].state, anchor=branched[0].state))
 
 
-def test_a5_is_still_refused_under_the_phase_form():
-    """The phase form leaves A5's refusal first (BUILD_LOG issue 252): the cached path refuses a
-    piece-centric network before anything else, the phase form on or off."""
-    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=1, piece_centric=True), seed=0)
-    for cfg in (CacheConfig(), _phase(50)):
-        with pytest.raises(NotImplementedError, match="issue 252"):
-            CachedEvaluator(model, cfg)
+def test_a5_under_the_phase_form():
+    """A5 under C26 (BUILD_LOG issue 266; decision 7 settled issue 252): the phase form takes a
+    piece-centric network - a root under N* gets the dense epoch, whose evaluation is the network's
+    dense pass over the A5 position; at N* the root refresh, whose root evaluation is that same dense
+    pass (its destination tokens on superseded boards live)."""
+    from t5d.net.state import to_piece_centric
+
+    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=2, piece_centric=True, attn_scope="block_causal"), seed=0).eval()
+    root = to_piece_centric(_root("deep_travel", 0).state(), strict=False)
+    assert root.transient.any()
+    with torch.no_grad():
+        dense = model(collate([root]), scope="dense", return_trunk=True)
+    for n_star, kind in ((root.n_boards + 1, "dense"), (root.n_boards, "root")):
+        ev = CachedEvaluator(model, _phase(n_star))
+        with torch.no_grad():
+            epoch = ev.root_epoch(root)
+            out = ev.evaluate(root, epoch)
+        assert epoch.kind == kind
+        if kind == "dense":
+            assert _bitwise(out, dense)
+        else:
+            _close(out, dense)
 
 
 def test_release_drops_only_a_root_refresh_it_made():

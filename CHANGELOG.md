@@ -10,6 +10,289 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-28 - Build log: the current state at decision 7's merge
+
+`docs/BUILD_LOG.md`:
+- `lane/net`'s line under "Now" says decision 7 (register C17 with A5) merged with its review
+  round's fixes, names the user's questions it leaves (issue 276's readings (a) and (f), issue
+  277), and says the lane's next work - the v1 re-run of section 15.2's network rows - comes before
+  the quiet-machine block, on the main loop's word given at this merge.
+- "Work items, by lane" follows the same change.
+- The merge battery ran no Lazy SMP test and no nightly gate: no engine source changed.
+
+Spec: no part of the spec describes the build log's bookkeeping.
+
+### 2026-11-28 - Decision 7's review round, verified: the survivors re-run and the round's checks (no code)
+
+**The survivors.** The mutation pass's 14 gaps and its three bench mutants were re-run with its
+runner on a fresh `git archive` of 6aeef5d. The engine was this tree's own (E12's layout), with 3
+threads and `T5D_REQUIRE_ENGINE=1`. All 17 are KILLED:
+
+| Mutant | Killed by |
+|---|---|
+| S8 | `test_the_transient_tokens_are_the_destinations_on_superseded_boards` |
+| C9 | `test_the_flex_block_mask_is_lossless_under_a5[2-no-structure]` |
+| E2 | `test_transient_tokens_carry_the_global_inputs_with_no_global_registers` |
+| F3, F5 | `test_the_flex_block_mask_is_lossless_under_a5[2-dense-heads]` |
+| F4, F6 | `test_the_flex_block_mask_is_lossless_under_a5[2-routing-self]` |
+| K13 | `test_runs_cap_each_block_at_attn_block_boards` |
+| V1, V2 | `test_the_engines_cached_evaluator_converts_strictly_after_a_relayout` |
+| B1, B2 | `test_the_bench_counts_every_a5_token_once` |
+| B4, B5, B6, B8, B9 | `test_the_bench_runs_an_a5_job` |
+
+Every test above is in `tests/net/test_cache_a5.py`. B4, B6 and B9 were equivalent while the bench
+could not run A5, and are reachable since NC-1. The pass's 12 equivalents are accepted as it reasoned
+them.
+
+**Checks on 6aeef5d**, the engine built in the worktree, `t5d` and `t5d.dll` loaded from it:
+- ruff: "All checks passed!", "146 files already formatted";
+- `tests/net` whole, in four shards, one at a time (`T5D_REQUIRE_ENGINE=1`, 3 threads, slow
+  included): "448 passed", "447 passed", "444 passed", "447 passed" (1,786);
+- the 14 engine test files that build an evaluator, in two shards: "270 passed", "269 passed";
+- verify: every check ok (its 17 standing `proof-channel-vacuous` notes unchanged).
+
+The engine's C++ is untouched, so no engine build or gate run is owed beyond the rebuild for main's
+layout.
+
+Spec: none. This entry is evidence, and no part of the spec describes it.
+
+### 2026-11-28 - Decision 7's review: the mutation pass's candidate tests adopted (TP-1)
+
+The mutation pass's 77 mutants left 14 real gaps. Its candidate tests kill all 14 and are adopted
+into `tests/net/test_cache_a5.py`, under names that say what they pin:
+- **S8:** test 1's `board_tokens` check compared `board_tokens` with itself (circular). It is now
+  pinned to the layout's board ranges.
+- **F3-F6, C9:** `test_the_flex_block_mask_is_lossless_under_a5`, A5's version of
+  `test_displacement.py`'s check. Every allowed pair's block is computed, at block sizes 2, 8 and 32,
+  with dense heads, with routing heads, and with no structure at all (flex's scope-only branch). Eager
+  flex on the CPU ignores the block mask, so the attention-paths test could not see a lossy one. Its
+  docstring now says it checks flex's mask function only, and points here.
+- **E2:** `test_transient_tokens_carry_the_global_inputs_with_no_global_registers`.
+- **V1, V2:** `test_the_engines_cached_evaluator_converts_strictly_after_a_relayout`. The relayout
+  then the A5 conversion, strict.
+- **B1, B2, B8:** `test_the_bench_counts_every_a5_token_once`. The live and frozen counts partition
+  the tokens, and the frozen count is the pieces and registers.
+- **B5:** `test_the_bench_reads_recorded_query_tokens`.
+- **K13:** `test_runs_cap_each_block_at_attn_block_boards`.
+- `test_the_fp8_forward_rounds_own_tokens_on_their_own_scale` is adopted too. It is a unit pin of
+  the FP8 rounding (M1 and M2, which the end-to-end FP8 test catches only through its tolerance).
+
+The re-run of the 14 gaps and of B4, B6 and B9 is in the next entry.
+
+Spec: §15.2 (the rows' tests); register A5, C17. No spec text changes.
+
+### 2026-11-28 - Decision 7's review: the cache bench runs A5's jobs, an engine test checks what it claims, the cost probe's guard, the bench's process list (NC-1, NC-2)
+
+- **NC-1:** the cache bench now takes `piece_centric` through its four jobs, `run()` and the CLI
+  (`--piece-centric`). Before, only `_setup` took it, so an A5 job could not be started.
+  - `name_of` (now a module function) marks an A5 job's file `-a5`, so A5 files never overwrite A1's
+    and `--skip-existing` never takes one for the other.
+  - `summarise` keys records by the tokenisation too, and each row says which it is.
+  - Test (`test_the_bench_runs_an_a5_job`): `job_cached` with an A5 network (1 layer) on a position
+    whose superseded boards and their pasts carry transient tokens. Each child's supersession query
+    and key tokens are recomputed and found to be the boards' own tokens exactly; the summary reads
+    the record's exact live set; and the file names differ, with A1's unchanged. The mutation pass's
+    B4, B6 and B9 now have a test that reaches them.
+  - The measured A5 run waits for the quiet-machine block (issue 266).
+- **NC-2:** `test_the_engines_cached_evaluator_takes_a5` now asserts what its docstring says: every
+  stored entry of a superseded board holds exactly that board's own-token count (its K/V and
+  outputs), on boards that carried transient tokens among them.
+- **The cost probe's guard:** `live_pass(query_boards=...)` takes each live token once, so a
+  superseded board given as a query board no longer brings its transient tokens twice. The A1
+  path is the same array (`np.unique` of a sorted, duplicate-free list). Tested: with the heads as
+  query boards the probe is the full live pass, bit for bit, and with a carrier board added it is
+  finite and the position's shape.
+- **The bench's process list** (the main loop's addition): `t5d-tests-long.exe` is no longer built.
+  The bench's notes and the BUILD_LOG's quoted N3 command name the engine's executables that exist
+  now: `t5d-tests.exe`, `t5d-scan6bpp.exe`, `t5d-legality-cost.exe`, `t5d-play.exe`, `t5d-gate.exe`,
+  `t5d-measure.exe` and `t5d-bench.exe`.
+
+The decision-7 entry's "the cache bench takes `piece_centric`" is corrected in place.
+
+Spec: §15.3 (the cost figures the bench measures); register A5, C2, C17. No part of the spec
+describes the bench's plumbing or the probe's guard. No edit.
+
+### 2026-11-28 - Decision 7's review: A5's cached rows brought to A1's coverage (SN-2)
+
+The spec pass found that "section 15.2's cached rows run for A5" overstated the coverage against
+`test_cache.py`'s protocol. The main loop decided to bring it to A1's. Added:
+- **The C27 row under A5** (`tests/net/test_turn_refresh.py`, `test_supersession_deferred_under_a5`;
+  review decision 16 makes it required behind the cached flag): T6 with each node's A5 view, on every
+  geometry and epoch. Seed 0 with the lineage reading and both C20 readings run per commit; the rest
+  of T6's matrix is slow, as A1's is. T6's helpers now read the tree's view, which is the node's
+  state itself under A1.
+- **Every engine variant** (`tests/engine/test_cached_variants.py`): the full-pass test gains an `a5`
+  configuration, so all 16 variants under both C20 readings, each state converted strictly.
+  `test_a5_step_api_cached_equals_dense_on_every_variant` runs the step API's test with an A5
+  network on all 16, tree and graph, causal and with the root refresh. 6,840 transient tokens were
+  met; the largest gap is 1.91e-6.
+- **C20 on A1's three geometries and seeds**, and the creation reading on all seven geometries
+  under both C20 readings (`tests/net/test_cache_a5.py`).
+- **G1:** BF16 on seeds 0-2, with A1's refreshed-root check (a refreshed root holding transient
+  tokens against the dense BF16 pass), the entries asserted BF16, and `test_precision.py`'s BF16
+  bounds. The FP8/BF16 case asserts `trunk_max < 1e-1` as A1's does.
+- **B16 below a refreshed anchor with transient tokens** (`test_a5_status_biases_below_a_refreshed_anchor`,
+  root and node refresh): `test_cache.py`'s oracle, with transient tokens at the anchor and at every
+  node.
+
+No tolerance is changed. Run time: the per-commit A5 C27 cases take about 94 s, the A5 variant tests
+about 107 s, and `test_cache_a5.py` about 75 s.
+
+Spec: §15.2 (the C2/C17, C20, C27, C3, C3a, G1 and B16 rows' protocol: "every variant",
+"adversarial constructions"); register C17, C20, C27, A5; review decision 16. No spec text changes.
+
+### 2026-11-28 - Decision 7's review, the records: the refresh's reading logged, the settled readings cited, the stale text, MEASUREMENTS' margins, the default-path tool (SN-1, SN-3 to SN-8; issue 277)
+
+The three-pass review of 218b1a3 found no HIGH. This entry and the ones after it fix every finding as
+the main loop decided.
+
+- **SN-1:** a refresh's dense pass reads the anchor's destination tokens, so a refreshed epoch's
+  history K/V depend on them. §7.3's "read only by live tokens, never by a frozen one" has no refresh
+  exception; C17 and §7.9 allow present-to-frozen flow at refreshes. It is kept as built, and is now
+  issue 276's reading (f), with both readings and their costs: under the strict one the root's
+  evaluation stops being the dense pass, and C3's test reference changes. The decision-7 entry's
+  "no frozen token's K/V depends on a destination token" and issue 252 now say "in the causal epoch
+  and below a refresh's anchor".
+- **SN-3:** issue 276 cites the spec text that settles (b) (§7.9's other perspective), (c) ("never
+  cached"), (d) (register B12 with C17) and (e) (review decision 4, §16's A6 entry). (a) stays open,
+  noting that the build's transient set is narrower than §14.4's "transient per node" with the same
+  behaviour; so does (f).
+- **SN-4:** edit 386 adds §14.4's "Built behind its flag, for the dense scope", §4.1's list of B16's
+  live query rows (destination tokens), and §15.2's A5 row, which holds in the dense scope only. The
+  BUILD_LOG A5 row's "pure input change" is limited to the dense scope.
+- **SN-5:** decisions row 7 is marked built. Issue 256, issue 258 and the for-the-user list no longer
+  describe the refusal as current. The C2 row names A5. `t5d/net/__init__.py` and
+  `tests/net/test_piece_centric.py` drop "dense scope only". MEASUREMENTS quotes §14.4 as the review
+  left it.
+- **SN-6:** MEASUREMENTS' "The cached path under A5" now has:
+  - each row's conditions, the C3 row's among them;
+  - the seeds actually run;
+  - the FP8/BF16 trunk max (3.72e-2) and value (1.20e-3), against their bounds 1e-1 and 6e-3;
+  - every margin beside A1's. The FP8/FP32 value gap is 3.1x A1's, a 3.6x margin against A1's 11x;
+    the bound is not loosened.
+- **SN-8:** the decision-7 entry's Spec: line is corrected in place (§15.2's rows, §4.1, §7.9 and C3).
+- **SN-7:** the default-path comparison is committed as `python -m t5d.net.default_path`
+  (`record OUT.pt`, `compare A B`), its 119 outputs and seeds in its docstring. A commit before it is
+  recorded by running the file against that commit's package (the docstring's command). Re-run:
+  5e77028 against this tree, "compared 119 outputs: bit for bit", the v1 at 22,969,139 parameters.
+- **Issue 277 (new), for the user:** a padded batch moves the largest A5 position's evaluation by
+  7.15e-7 (FP32), which is bitwise under A1. It is the same under the dense scope, so it predates
+  decision 7. C19-C21 read batch composition as bit-exact. Not fixed, by the main loop's decision.
+
+Spec: §7.3, §7.9, §4.1, §14.4, §15.2 and §16; register C17, C3, A5, B12, B16, C19-C21. Issue 276 is
+restated (two readings open, (a) and (f)) and issue 277 is new. Proposed edit 386 is completed with
+three more passages. Nothing of the spec is edited here.
+
+### 2026-11-28 - Merge main (d4327ba) into lane/net, before decision 7's review round
+
+Main's commits since 5e77028 are `lane/search`'s round 3 and register E12 part 1 (the Gumbel root
+search, off) with its review round. E12 changes the engine's `t5d_search_params` (720 bytes), so the
+worktree's engine was rebuilt before any engine-backed test ran.
+
+Two files conflicted, both sides kept:
+- `CHANGELOG.md`, rebuilt by heading: the lane's decision-7 entry above main's.
+- `docs/BUILD_LOG.md`: the session log holds main's two entries, then the lane's.
+
+`docs/design/` and `oracles/` are main's. No number collides: the lane holds issues 276-299 and edits
+386-399; main's new numbers are issues 484-499 and 415, and edits 312, 314 and 347-359.
+
+Checks on the merged tree: the engine rebuilt (E12's layout); ruff "All checks passed!", "145 files
+already formatted"; the A5 tests, the engine's included: "68 passed, 1 deselected".
+
+Spec: no part of the spec describes a merge. The merged entries carry their own Spec lines.
+
+### 2026-11-27 - Decision 7 built: A5's destination tokens are live tokens under the block-causal scope and the cache (register C17; issue 252 settled)
+
+The 2026-11-15 review's decision 7, which the user confirmed as a ruling, is register C17: "piece-centric
+destination tokens are live tokens wherever they sit - read only by live tokens, never cached". It
+settles BUILD_LOG issue 252, whose six points §7.3 and §14.4, as the review edited them in the
+repository, now answer. This change builds it and lifts every refusal that named issue 252.
+
+**What a transient token is.** It is register A5's empty-cell token on a board that is no head: a
+travel's landing square on a history board (`PositionState.transient`, `Batch.transient`). A
+destination on a head board is a head board's token already. A superseded board's own tokens are its
+pieces and its per-board registers (`PositionState.board_tokens(frozen=True)`).
+
+**The network's block-causal forward under A5:**
+- `scope.py`: transient tokens get a scope slot of their own. They read every board, the global
+  registers and each other, and are read by the heads, the global registers and each other. No frozen
+  token reads them, its own board's tokens included.
+- `embed.py`: they carry live inputs - their board's current status (Delta-t, the active flag) under
+  intrinsic frozen features, and with no global registers the acting colour and the turn state (issue
+  225's placeholder).
+- `status.py`: B16 makes no key entry on them.
+- `structure.py`: B12's rows go by token when a batch holds transient tokens (by board, as built,
+  otherwise).
+- `flex.py`: the score function takes the new slot and B12's rows.
+- `model.py`: FP8 frozen K/V round a frozen board's own tokens only, one scale over them.
+- `NetConfig.validate` and `T5DNet.scope_of` no longer refuse A5 with the block-causal scope.
+
+**The cached path under A5:**
+- `cache.py`: a board's entry holds its own tokens, so it is the same at every node whatever moves land
+  on it.
+- `compute_board` reads the frozen tokens of its past.
+- The live pass computes transient tokens with the heads, in blocks of whole boards.
+- A refresh stores the boards' own tokens. The other colour's view has no destination tokens
+  (`viewed_by`).
+- `reference_output` injects history by each board's own tokens.
+- `CachedEvaluator` takes A5. `CachedNetworkEvaluator` converts at the network's edge, strictly, as
+  `NetworkEvaluator` does.
+- The search-tree fixture hands an A5 network each node's A5 view (`SearchTree.view`).
+- The cache bench takes `piece_centric`, with exact per-board token counts. *(Review correction,
+  2026-11-28, NC-1: only `_setup` took it - no job, `run()` or the CLI did; threaded through since.)*
+- `cost.py`'s notes are brought up to date.
+
+**Tests:**
+- `tests/net/test_cache_a5.py`, new, runs section 15.2's cached rows for A5 under `test_cache.py`'s
+  protocol:
+  - C2/C17: cached = the block-causal full pass on all seven geometries under both C20 readings, under
+    the creation reading, under section 6's switches, and at 16 layers (slow);
+  - C20: supersession is path-independent;
+  - C3a: a refresh fork leaves its siblings unchanged, and supersession inside a refreshed subtree
+    follows its anchor;
+  - C3: the root refresh at the root equals the dense pass;
+  - G1: the BF16 cache is at the live precision, and the FP8 cache equals the FP8 network's forward.
+
+  Beside the rows:
+  - no frozen token's K/V depends on a destination token - one multiverse with two move sets gives
+    every superseded board the same entry, bit for bit - in the causal epoch and below a refresh's
+    anchor. *(Review correction, 2026-11-28, SN-1: a refreshed epoch's history K/V are the refresh's
+    dense pass over the anchor, which reads the anchor's destination tokens - issue 276's reading (f),
+    kept as built.)*;
+  - the scope, the inputs, B16 and B12 on transient tokens;
+  - every attention path computes one function.
+- Engine side (`tests/engine/test_piece_centric_engine.py`): the cached evaluator with an A5 network
+  through the step API, causal and with the root refresh.
+- A5 under the phase form, on the fixture and through the step API.
+- The refusal tests are now acceptance tests (`test_piece_centric.py`, `test_model.py`,
+  `test_phase_form.py` in both suites).
+- Six mutants of the rules (scope, FP8 rounding, B16, the inputs, B12's rows, the refresh's tokens):
+  each killed by these tests.
+
+**The default path is unchanged bit for bit.** 119 outputs were compared on 5e77028 and on the change:
+- the default v1 network, dense, one position at a time and batched (22,969,139 parameters, B15's
+  far tables on);
+- the block-causal network's full pass, its causal and root-refresh cached evaluations and the
+  reference, under nine arms: the default, chunked, dense, flex, FP8, B12, C20's second reading,
+  current features, and no global registers;
+- the search-tree fixture with node refreshes;
+- A5 in the dense scope.
+
+*(Review correction, 2026-11-28, SN-7: the comparison is now committed as `python -m
+t5d.net.default_path`, its outputs and seeds listed in its docstring.)*
+
+Issue 266 (A5 under C26) is resolved: they run together. The window under A5 stays refused (issue
+253). MEASUREMENTS has the gaps met ("The cached path under A5").
+
+Spec: §7.3, §14.4 and §16; register C17, A5, C15, B12, B16, C26. Decision 7 is built as ruled. Issue
+276 (new) holds the five readings the ruling leaves to the build, for the user. Proposed edit 386
+brings §7.3's and §16's "dense scope only" lines and register A5 up to the build. Edit 194 is marked
+superseded by decision 7. *(Review correction, 2026-11-28, SN-8: the change also bears on §15.2 - the
+C2/C17, C3, C3a, C20 and G1 rows it runs for A5 - on §4.1, where B16 now biases destination-token
+query rows, and on §7.9 and register C3, the refresh's other perspective and issue 276's reading (f).
+SN-3: issue 276 was restated - four of its points are settled by spec text, and (a) and (f) stay
+open.)*
+
 ### 2026-11-28 - Build log: the current state at the quiet-machine block tools' merge
 
 `docs/BUILD_LOG.md`:

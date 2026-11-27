@@ -10,7 +10,10 @@ token-count tool (``t5d.engine.token_counts``).
   are covered; the window's scope over an A5 layout is refused (BUILD_LOG issue 253).
 * The evaluator (``NetworkEvaluator._fit``) converts: one finite logit per engine move in the engine's
   order (``check_evaluation``), and the logits equal the masked A1 reference of section 15.2's
-  proposed A5 row (``tests/net/test_piece_centric.py``) on engine positions.
+  proposed A5 row (``tests/net/test_piece_centric.py``) on engine positions. The cached evaluator
+  (``CachedNetworkEvaluator._fit``) converts too, and under the cache an A5 network's leaves are its
+  block-causal full pass, destination tokens on superseded boards live (decision 7; BUILD_LOG issue
+  252).
 * Purity (section 15.2's C19-C21 row): two move orders that reach one state give identical A5 inputs
   and evaluations.
 * Section 15.5's "plays legal 5D chess end to end with random weights" with an A5 network: short
@@ -219,15 +222,56 @@ def test_an_a5_network_plays_legal_games(variant, split, mode):
     assert check_replay(res, replay) == [], replay.lines[-3:]
 
 
-def test_the_engines_cached_evaluator_refuses_a5():
-    """The cached path is refused for A5 (BUILD_LOG issue 252) - the engine's wrapper too."""
-    from types import SimpleNamespace
+@pytest.mark.parametrize("refresh", [False, True], ids=["causal", "root-refresh"])
+def test_the_engines_cached_evaluator_takes_a5(refresh):
+    """The cached path with an A5 network through the step API (register C17 as decision 7 rules
+    it, settling BUILD_LOG issue 252): ``CachedNetworkEvaluator`` converts each leaf at the network's
+    edge, strictly, and every leaf of a search - with travel onto superseded boards on offer - is the
+    block-causal full pass over its A5 position (anchored at the root under the root refresh), its
+    destination tokens on superseded boards live; the store never holds one."""
+    from t5d.engine.evaluator import CachedNetworkEvaluator, _split, run_search, state_of
+    from t5d.engine.search import Search, search_params
+    from t5d.net.cache import CacheConfig, CachedEvaluator, reference_output
+    from tests.engine.test_cached_variants import _evals_close, _search_root
 
-    from t5d.engine.evaluator import CachedNetworkEvaluator
+    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=2, attn_scope="block_causal", piece_centric=True), seed=12).eval()
+    seen: list = []
+    started: list = []
 
-    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=1, piece_centric=True), seed=0)
-    with pytest.raises(NotImplementedError, match="issue 252"):
-        CachedNetworkEvaluator(SimpleNamespace(model=model))
+    class Log:
+        def __init__(self, inner):
+            self.inner, self.policy = inner, inner.policy
+
+        def start(self, root):
+            started.append(state_of(root))
+            return self.inner.start(root)
+
+        def __call__(self, positions):
+            evs = self.inner(positions)
+            seen.extend(zip(positions, evs, strict=True))
+            return evs
+
+    ev = CachedNetworkEvaluator(CachedEvaluator(model, CacheConfig(root_refresh=refresh)))
+    with _search_root("Misc - Timeline Battleground") as root, Search(root, params=search_params(seed=3, batch_size=4)) as search:
+        run_search(search, Log(ev), playouts=16, batch_size=4)
+    anchor = to_piece_centric(started[-1], strict=True) if refresh else None
+    transient = checked = 0
+    store, epoch = ev.cached.store, ev.epoch
+    for pos, out in seen:
+        state = to_piece_centric(state_of(pos), strict=True)
+        transient += int(state.transient.sum())
+        _evals_close(out, _split(reference_output(model, state, anchor=anchor), [state])[0], "a5")
+        # Never stored (review NC-2): every superseded board's entry holds exactly its own tokens.
+        plan = ev.cached._plan(state, epoch)
+        for b in plan.frozen:
+            entry = store.entries.get(plan.key(epoch, int(b)))
+            if entry is not None:
+                n = state.board_tokens(int(b), frozen=True).size
+                assert entry.kv.shape[3] == n and entry.out.shape[0] == n, (int(b), entry.kv.shape, n)
+                checked += state.board_tokens(int(b)).size > n  # a board carrying transient tokens
+    assert seen and transient > 0, "no leaf with a destination on a superseded board"
+    assert checked > 0, "an entry of a board that carried transient tokens was checked"
+    assert len({k[0] for k in store.entries}) == 1
 
 
 # --- the token-count tool (A5.5) -----------------------------------------------------------------------------------

@@ -380,7 +380,9 @@ d 256, L 16): the dense evaluation (`4 T^2 d L + 40 T d^2 L`); the cached node -
 against every token, A1's the head boards' tokens and the 16 global registers, A5's the heads'
 pieces and registers, **every destination token** (transient, never cached - BUILD_LOG issue 252's
 reading (f)) and the 16 - and the frozen boards' K/V. A5's cached figures are this model's only: the
-cached path refuses A5 as built (issue 252).
+cached path refuses A5 as built (issue 252). *(2026-11-27: decision 7 built - the cached path now runs
+A5 on exactly these sets, "The cached path under A5" below; its cost is not yet benched, so these
+figures stay the analytic model's.)*
 
 Legal moves - means over the distinct positions of each bucket (ratios A1 / A5 of the means):
 
@@ -414,8 +416,10 @@ dense, at every size) pooled **2.19x**. Under A1 the dense compute falls 58.6% /
 285, 73 / 191 / 403, 127 / 266 / 505, 212 / 502 / 626; tokens 1.93 / 2.16 / 2.40 / 2.32x fewer;
 dense 2.46 / 3.27 / 4.27 / 4.27x; cached node 1.30 / 1.74 / 2.24 / 2.15x; pooled at every size:
 dense 2.75x, node 1.42x, blend 2.07x. About 40% of the destination tokens land on history boards (travel
-moves' landing squares), which bears on issue 252: §14.4 calls only the head boards' destination
-tokens transient.
+moves' landing squares), which bears on issue 252: §14.4 called only the head boards' destination
+tokens transient. *(2026-11-28: the review of 2026-11-15 changed §14.4 - "destination tokens are
+transient per node, which makes them live tokens under the cache (§7.3)" - and §7.3 puts them on
+history boards too; decision 7, built 2026-11-27.)*
 
 **FLOPs, counted** - `py -m t5d.engine.token_counts --flops --flops-record <t0db>/t0db-0002.5dpgn
 --flops-check` and `--flops`: one dense forward of the F1 network (FP32 trunk - counts do not depend
@@ -2289,6 +2293,49 @@ that mixed them per node would be a different search (the per-node-switch mutant
 dense pass is not a function of the position alone in its last bits (about 1e-6 here, with the batch
 or the grad mode), which is why the phase form's dense mode is the dense evaluator itself, batch for
 batch, and why §15.2's row is proposed reworded (edit 380).
+
+### The cached path under A5 (decision 7) - the gaps met (numerics; no threshold, no verdict)
+
+**What it is.** Section 15.2's cached rows run for register A5 once the 2026-11-15 review's decision
+7 was built (BUILD_LOG issues 252 and 276; `python/tests/net/test_cache_a5.py`): how far the cached
+path's evaluations are from their references with A5's destination tokens on superseded boards live.
+
+**Conditions.** 2026-11-27, machine `dev-r` (loaded: the engine lane's and the main loop's jobs ran
+beside it), PyTorch 2.13.0+cpu, Python 3.14.7, NumPy 2.5.2, 3 torch threads, `lane/net` on main
+5e77028 with decision 7's change; 2 layers, the v1 configuration under the block-causal scope with
+`piece_centric=True`, random weights at initialisation scale. Measured by a probe beside the tests,
+not by the tests' own asserts:
+- FP32: `test_cache.py`'s seven geometries under both C20 readings - 14 roots, model seeds 200-213,
+  a random path of 6 moves each (98 nodes, 2,011 transient tokens met);
+- the C3 row: the same 14 roots with the root refresh, each root's cached evaluation against the
+  dense pass;
+- BF16 and FP8: model seeds 0-2, `test_cache.py`'s BF16 trees (6 nodes each). The BF16 test asserted
+  seeds 0-1 until 2026-11-28, and seeds 0-2 since.
+
+*(2026-11-28, decision 7's review, SN-6: the FP8/BF16 trunk max and value were measured and added; the
+margins below replace "hold with their margins"; the figures are the same probe's, re-run.)*
+
+| Quantity | A5, largest | Bound asserted (`test_cache.py`'s) | A5's margin | A1's gap and margin (`test_cache.py`'s docstring) |
+|---|---|---|---|---|
+| FP32 cached against the block-causal full pass: trunk | 1.67e-6 | 2e-5 | 12x | under 2.4e-6 |
+| ... value and policy logits | 1.43e-6 | 1e-4 | 70x | - |
+| FP32 root refresh at the root against the dense pass: trunk | 9.54e-7 | 2e-5 | 21x | - |
+| BF16 cached against the BF16 full pass: trunk RMS | 1.59e-3 | 6e-3 | 3.8x | 1.9e-3, 3.2x |
+| ... trunk max | 1.20e-2 | 4e-2 | 3.3x | 1.3e-2, 3.1x |
+| ... value / policy logits | 7.57e-4 / 6.46e-3 | 5e-3 / 2.5e-2 | 6.6x / 3.9x | 1.2e-3 / 8.4e-3, 4.2x / 3.0x |
+| FP8 frozen K/V, FP32 trunk, cached against the FP8 network's forward: trunk RMS | 2.83e-5 | 4e-4 | 14x | 7.8e-5, 5.1x |
+| ... value | 1.37e-5 | 5e-5 | 3.6x | 4.4e-6, 11x |
+| ... policy | 6.20e-5 | 5e-3 | 81x | 1.0e-4, 50x |
+| FP8 frozen K/V, BF16 trunk: trunk RMS / max | 2.48e-3 / 3.72e-2 | 8e-3 / 1e-1 | 3.2x / 2.7x | 4.3e-3 / 3.3e-2, 1.9x / 3.0x |
+| ... value / policy | 1.20e-3 / 8.37e-3 | 6e-3 / 4e-2 | 5.0x / 4.8x | 1.7e-3 / 1.6e-2, 3.5x / 2.5x |
+
+*Read.* A5's gaps sit where A1's do, and every bound measured for A1 holds for A5 by 2.7x or more.
+One margin is narrower than A1's: the FP8 network's value logit under the FP32 trunk, whose largest
+A5 gap (1.37e-5) is 3.1x A1's (4.4e-6), a margin of 3.6x against A1's 11x. That is the size of one FP8
+rounding flip that an FP32 summation-order difference tips over (`test_cache.py`'s
+`test_fp8_cache_equals_the_fp8_network_at_fp32_resolution`); A5's live pass sums over other key sets
+than A1's, so its flips fall elsewhere. The bound is not loosened. The default path is unchanged bit for bit
+(BUILD_LOG session log, 2026-11-27; `python -m t5d.net.default_path`).
 
 ### Refresh and supersession inside a turn (C27) - the deferral's gaps (numerics; no threshold, no verdict)
 
