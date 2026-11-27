@@ -6,9 +6,12 @@
 // on with an action the engine cannot read or play - from records written
 // here (the engine's tests read no corpus). 6b's and 6b''s own tools
 // (t5d-scan6b, t5d-scan6bp: the build passes their paths) are run here too,
-// for the roots they read.
+// for the roots they read; and 6b'''s (t5d-scan6bpp) for its node rates.
 
+#include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -35,6 +38,9 @@
 #endif
 #if !defined(T5D_SCAN6B_EXE) || !defined(T5D_SCAN6BP_EXE)
 #error "T5D_SCAN6B_EXE, T5D_SCAN6BP_EXE: the paths of 6b's and 6b''s tools"
+#endif
+#if !defined(T5D_SCAN6BPP_EXE)
+#error "T5D_SCAN6BPP_EXE: the path of 6b'''s tool"
 #endif
 
 namespace pp = t5d::tools::sixbpp;
@@ -121,6 +127,14 @@ std::string listed_positions(const std::string& json) {
     at = value;
   }
   return out;
+}
+
+// The number after `key` in `json` at or after `from` and before `end`; NaN
+// if there is none.
+double number_after(const std::string& json, const std::string& key, std::size_t from, std::size_t end) {
+  const std::size_t at = json.find(key, from);
+  if (at == std::string::npos || at >= end) return std::nan("");
+  return std::strtod(json.c_str() + at + key.size(), nullptr);
 }
 
 }  // namespace
@@ -421,4 +435,125 @@ TEST(sixb_tools_read_records_as_6b_read_them) {
              0);
   CHECK_EQ(listed_positions(read_all(json_6bp)), roots);
   CHECK(contains(read_all(dir / "6bp-stdout.txt"), "2 actions read, unreadable at action 3"));
+}
+
+TEST(sixbpp_node_rate_is_the_sum_of_nodes_over_the_sum_of_seconds) {
+  // The quiet-machine block's "Guard's and Hunt's nodes/s": a range's rate is
+  // its roots' nodes over their own wall times, summed - not the mean of the
+  // per-root rates, which would weigh a root Hunt settled at once like one
+  // that spent its whole budget.
+  pp::NodeRate r;
+  CHECK_EQ(r.per_second(), 0.0);  // no root
+  r.add(1000, 0.05);              // a root that spent 50 ms: 20,000 nodes/s
+  r.add(10, 0.0001);              // one settled in 0.1 ms: 100,000 nodes/s
+  CHECK_EQ(r.roots, std::size_t{2});
+  CHECK_EQ(r.nodes, std::uint64_t{1010});
+  CHECK(std::abs(r.seconds - 0.0501) < 1e-12);
+  CHECK(std::abs(r.per_second() - 1010.0 / 0.0501) < 1e-6);  // 20,159.7
+  CHECK(std::abs(r.per_second() - 60000.0) > 1000.0);          // not the mean of the two
+  pp::NodeRate untimed;
+  untimed.add(5, 0.0);
+  CHECK_EQ(untimed.roots, std::size_t{1});
+  CHECK_EQ(untimed.per_second(), 0.0);  // no time spent: no rate, never a division by zero
+}
+
+TEST(sixbpp_tool_times_hunt_per_root_and_its_node_rates_add_up) {
+  // t5d-scan6bpp's JSON carries Hunt's own wall time at each root ("seconds"
+  // in the position's "hunt" object, beside Guard's), and each range's rate -
+  // in the JSON's per-range entries and the summary's NODES PER SECOND rows -
+  // is the sum of its roots' nodes over the sum of their seconds. One thread,
+  // 20 ms budgets, a record written here, no truth: an information run - the
+  // arithmetic, not a speed. Its root 0 is not measured (White's queen sees
+  // the king: a royal capturable), 1 and 2 are; Guard runs at 1 (2 is the
+  // record's end).
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::path(T5D_TEST_SCRATCH) / "sixbpp-rates";
+  fs::create_directories(dir);
+  const std::string record = (dir / "rates.5dpgn").string();
+  write(record, "[Board \"Custom\"]\n[Size \"5x5\"]\n[k4/5/5/5/K3Q:0:1:w]\n\n1. (0T1)Qe1e2 / (0T1)Ka5a4\n");
+  const fs::path json_path = dir / "6bpp.json";
+  const fs::path summary_path = dir / "6bpp.txt";
+  REQUIRE_EQ(run_tool(T5D_SCAN6BPP_EXE,
+                      {"--no-truth", "--threads", "1", "--guard-ms", "20", "--hunt-ms", "20", "--per-position", "--json",
+                       json_path.string(), "--summary", summary_path.string(), record},
+                      dir / "stdout.txt", dir / "stderr.txt"),
+             0);
+  const std::string json = read_all(json_path);
+  const std::string summary = read_all(summary_path);
+
+  // Per position: Hunt's nodes and seconds at each measured root, Guard's where it ran.
+  struct Sum {
+    std::size_t roots = 0;
+    double nodes = 0;
+    double seconds = 0;
+  };
+  Sum guard[pp::kRanges + 1];
+  Sum hunt[pp::kRanges + 1];
+  const std::size_t positions = json.find("\"positions\":[");
+  REQUIRE(positions != std::string::npos);
+  for (std::size_t at = json.find("\"hunt\":{", positions); at != std::string::npos; at = json.find("\"hunt\":{", at + 1)) {
+    const std::size_t end = json.find('}', at);
+    const std::size_t boards_at = json.rfind("\"boards\":", at);
+    REQUIRE(boards_at != std::string::npos && boards_at > positions);
+    const int boards = std::atoi(json.c_str() + boards_at + 9);
+    const double nodes = number_after(json, "\"nodes\":", at, end);
+    const double seconds = number_after(json, "\"seconds\":", at, end);
+    CHECK(!std::isnan(nodes));
+    CHECK(seconds > 0);  // the field is there, and timed
+    for (const int k : {pp::range_of(boards), pp::kRanges}) {
+      ++hunt[k].roots;
+      hunt[k].nodes += nodes;
+      hunt[k].seconds += seconds;
+    }
+    const std::size_t g = json.find("\"guard\":{", boards_at);
+    if (g != std::string::npos && g < at) {
+      const std::size_t g_end = json.find('}', g);
+      const double g_nodes = number_after(json, "\"nodes\":", g, g_end);
+      const double g_seconds = number_after(json, "\"seconds\":", g, g_end);
+      CHECK(!std::isnan(g_nodes) && !std::isnan(g_seconds));
+      for (const int k : {pp::range_of(boards), pp::kRanges}) {
+        ++guard[k].roots;
+        guard[k].nodes += g_nodes;
+        guard[k].seconds += g_seconds;
+      }
+    }
+  }
+  REQUIRE_EQ(hunt[pp::kRanges].roots, std::size_t{2});   // positions 1 and 2
+  REQUIRE_EQ(guard[pp::kRanges].roots, std::size_t{1});  // position 1
+
+  // Per range: the JSON's sums are the positions' and its rate their quotient.
+  // Guard's per-position seconds are printed to 4 decimals, Hunt's and the
+  // ranges' to 6: the comparisons allow the rounding.
+  const auto check_ranges = [&](const char* key, const Sum* sums, double per_root) {
+    std::size_t cursor = json.find(key);
+    REQUIRE(cursor != std::string::npos && cursor < positions);
+    for (int k = 0; k <= pp::kRanges; ++k) {
+      const std::size_t start = json.find('{', cursor);
+      const std::size_t end = json.find('}', start);
+      const double roots = number_after(json, "\"timed_roots\":", start, end);
+      const double nodes = number_after(json, "\"nodes\":", start, end);
+      const double seconds = number_after(json, "\"seconds\":", start, end);
+      const double rate = number_after(json, "\"nodes_per_s\":", start, end);
+      CHECK_EQ(roots, static_cast<double>(sums[k].roots));
+      CHECK_EQ(nodes, sums[k].nodes);
+      CHECK(std::abs(seconds - sums[k].seconds) <= static_cast<double>(sums[k].roots) * per_root + 5e-7);
+      if (sums[k].roots == 0) {
+        CHECK_EQ(rate, 0.0);
+      } else {
+        REQUIRE(seconds > 0);
+        CHECK(rate >= nodes / (seconds + 5e-7) - 0.05);
+        CHECK(rate <= nodes / std::max(seconds - 5e-7, 1e-12) + 0.05);
+      }
+      cursor = end;
+    }
+  };
+  check_ranges("\"guard\":[", guard, 5e-5);
+  check_ranges("\"hunt\":[", hunt, 5e-7);
+
+  // The summary prints the same sums, per range and pooled.
+  CHECK(contains(summary, "NODES PER SECOND"));
+  const auto pooled_nodes = [](const Sum& s) { return std::to_string(static_cast<std::uint64_t>(s.nodes)) + " nodes / "; };
+  CHECK(contains(summary, "Guard " + pooled_nodes(guard[pp::kRanges])));
+  CHECK(contains(summary, "Hunt " + pooled_nodes(hunt[pp::kRanges])));
+  CHECK(contains(summary, " nodes/s (" + std::to_string(hunt[pp::kRanges].roots) + " roots)"));
 }

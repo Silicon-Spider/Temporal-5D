@@ -4122,6 +4122,16 @@ threads, 50 ms each - pre-registered, unchanged:
 - A root Guard does not count says why, truthfully: its record ends there, or goes on
   with an action the engine cannot read (`PgnRecord::unreadable`) or play; the records'
   notes say "ok" only for a record read and played to its end. The roots stay 6b's.
+- **Nodes per second** (information, no verdict; added 2026-11-28 for the quiet-machine
+  block): per range, Guard's and Hunt's sum(nodes) / sum(seconds) over the roots
+  (`tools/sixbpp.hpp`, `NodeRate`: never a mean of per-root rates), each root's search
+  timed from its call to its return - Guard's by `GuardResult::seconds`, Hunt's by the
+  same span around `Hunt::hunt`. Hunt often stops early (a mate proven, its class
+  exhausted), so its nodes over the 50 ms budget would understate it. The summary's
+  "NODES PER SECOND" rows print the sums and the rate; the JSON carries Hunt's
+  `"seconds"` in each position's `"hunt"` object (beside Guard's, 4 decimals; Hunt's 6)
+  and `timed_roots`, `nodes`, `seconds`, `nodes_per_s` in each per-range `guard` and
+  `hunt` entry (every earlier field unchanged).
 
 ### 6b″: preliminary figures (a shared machine - not the verdict)
 
@@ -4215,7 +4225,10 @@ build/engine/t5d-scan6bpp --truth engine/testdata/hunt-truth --record-list build
 (`build/corpus.txt`: the 41 records, one path per line, relative to the root - every
 `[[record]]` of `oracles/corpus/manifest.toml` in order, as "Hunt's ground truth" says;
 the tool refuses a list whose content ids, in order, are not the truth's provenance's.
-About a minute: Guard 38 s, Hunt 19 s, then the cross-checks.)
+About a minute: Guard 38 s, Hunt 19 s, then the cross-checks.) The same run gives
+Guard's and Hunt's nodes/s per range (the summary's "NODES PER SECOND" rows; the
+quiet-machine block's item for §15.3's "Prover nodes/s" row - `docs/MEASUREMENTS.md`,
+"Verification v3: 6b″").
 
 ### As built: the parameters (placeholders, named, with their alternatives)
 

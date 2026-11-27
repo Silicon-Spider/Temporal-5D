@@ -33,6 +33,146 @@ log, for the main loop, unnumbered:
 Spec: none - review findings on a test, a measurement tool and an uncommitted probe. No part of the
 spec describes them, and none proposes a spec edit.
 
+### 2026-11-28 - Build log: the current state at the quiet-machine block tools' merge
+
+`docs/BUILD_LOG.md`:
+- `lane/search`'s line under "Now" says the quiet-machine block's missing commands merged and
+  that the lane is idle. The merge battery ran no Lazy SMP test and no nightly gate: no prover,
+  search or truth source changed (the tool `t5d-scan6bpp` times Hunt's calls; it changes no
+  prover).
+- "Work items, by lane" follows the same change.
+
+Spec: no part of the spec describes the build log's bookkeeping.
+
+### 2026-11-28 - F1's CPU evaluation rate: a reproducible command (`python -m t5d.engine.evalrate`)
+
+§15.6 cites "6.9 evaluations/s for F1", from stage N5's end-to-end run. Its command, games,
+variants and threads were never recorded. It also ran before E10's provers existed. The
+quiet-machine block re-measures it. Nothing was measured here.
+
+- `python/t5d/engine/evalrate.py` (new): plays a fixed number of self-play games with the v1
+  network at random weights through the engine (`netplay.play_game`). The seeds, variants,
+  split and threads are fixed, and the defaults are written out in its docstring.
+  - **The provers are off by default** (the main loop's decision): no Hunt, no settling scans,
+    no asset map, so the figure is the network's own rate within the search. `--provers` turns
+    all three on at their defaults.
+  - The first line is the full configuration: every network field and the parameter count, the
+    game settings, the seeds, PyTorch's threads, the machine, the engine library's file name and
+    the commit. Then one line per game, then the totals.
+  - The totals give decisions/s and evaluations/s over the games' wall time (N5's two figures),
+    the network's forward passes, positions per forward, forwards/s, and the network's own
+    positions/s with its share of the wall time. Every rate is a rate of sums.
+  - `by_range` files the network's calls by board-count range, as §15.6 reads a rate (6b″'s
+    ranges, each call under its largest position). `RangedEvaluator`, a `NetworkEvaluator`,
+    times each call.
+  - Defaults: one game each of Standard and Standard - Two Timelines under the ply split, at
+    netplay's settings (N5's: 16 playouts, batches of 8, caps of 6 turns or 80 boards), seeds
+    1 + 101 g, 4 threads. The games are kept few because the v1's forward is slow on the CPU.
+    On the shared machine a 2-turn F1 game took 70 s (2.5 evaluations/s); a 6-turn one ran
+    past 50 minutes and was stopped.
+- `python/tests/engine/test_evalrate.py` (new):
+  - the provers are off unless asked, and the seeds follow netplay;
+  - the totals are rates of the sums;
+  - each network call is filed under its largest position's range;
+  - one short F1 game runs end to end: the configuration is printed in full and every leaf the
+    search counted reached the network in forwards of at most `--batch`;
+  - `--provers` reaches the games (small network).
+  No timing is read.
+- `docs/MEASUREMENTS.md`: a new section, "F1's CPU evaluation rate", with the command, marked
+  "not yet measured on a quiet machine". `docs/BUILD_LOG.md`: step 5's list, the lane line and
+  the main loop's work item.
+
+Spec: §15.6 ("6.9 evaluations/s for F1") and §15.3's dense evaluations/s (register F1, M19) are
+what the figure will be read against. No spec text describes the tool, so no edit is proposed.
+The edit to §15.6's sentence follows the measurement (the main loop's).
+
+### 2026-11-28 - The forward bench: the embedding's time, and A8's repetitions and medians
+
+A8's table has one usable column, the embedding's time (`T5DNet.embed_tokens`). It was timed by a
+script the repository does not hold: 5 repetitions interleaved, the order reversed every other
+one, medians. The bench ran one pass per configuration. Nothing was measured.
+
+- `python/t5d/net/bench.py`:
+  - `--embed`: each pass also times `T5DNet.embed_tokens` alone on its position. It runs after
+    the forward's time and peak are taken, so neither changes, and in the same process. The
+    row gains `embed_ms`, appended after every earlier field. A training step is refused.
+  - `--repeat R`: runs each (boards, dtype) block R times, the configurations' order reversed
+    every other repetition. Every pass runs in its own process, as before. Each pass row gains
+    `repetition`. Then a `"summary": "median"` line per configuration gives `seconds_median`,
+    `seconds_min` and, with `--embed`, `embed_ms_median` and `embed_ms_min`. A failed pass is
+    counted, never timed. With R = 1 the output is as before.
+  - `--threads T`: sets PyTorch's threads in each pass. The A5 indicative figure used 4.
+  - `CONFIGS` gains "a8-no-ffn" (`board_layout_embedding=True, layout_ffn_ratio=0`), the A8
+    table's third arm, "A8 without FFN".
+- `python/tests/net/test_bench.py`: the embedding is timed beside the forward on the A8 arms,
+  appended, and refused with a training step; the threads reach the pass; a stubbed pass checks
+  the repetitions' order, each pass's arguments and the medians, a failed pass included; one
+  repetition prints the passes alone; the command line runs `--embed --repeat 2 --threads 2` end
+  to end at 2 boards and 1 layer. No timing is read.
+- `docs/MEASUREMENTS.md`: the A8 table's quiet command (`--embed --repeat 5` over its three arms
+  and the 1x arm), and `--repeat 5` added to the FFN and A5 commands (A5's with `--threads 4`).
+  All are marked "not yet measured on a quiet machine". `docs/BUILD_LOG.md`: step 5's list and
+  the lane line.
+
+Spec: §15.3's "Board-layout embedding (A8)" row (register A8, §2.2) is what the embedding's time
+will be read against. No spec text describes the bench, so no edit is proposed. The write-back
+(M4, edit 186's wall time) follows the measurement.
+
+### 2026-11-28 - The forward bench: FFN 2x and 4x arms, and A5's piece-centric arm
+
+The quiet-machine block had no command for two of its network figures: the FFN ratio's wall time
+(§15.3's row "FFN ratio 2× and 4×"; `NetConfig.ffn_ratio` existed, no bench arm did) and A5's
+dense wall time at 44 boards (an indicative figure with no recorded command). Nothing was
+measured.
+
+- `python/t5d/net/bench.py`: `CONFIGS` gains "ffn-2x" and "ffn-4x" (the v1 with the trunk's
+  `ffn_ratio` at 2 and 4; "n2-default" is the 8x baseline) and "a5-piece-centric" (the v1 with
+  `piece_centric=True`, dense scope). A piece-centric arm's passes read
+  `synthetic_state(..., piece_centric=True)`, A5's view of the same position; every other arm's
+  input is unchanged. The docstring gives the block's commands.
+- `python/t5d/net/opcount.py`: `measure` gives a piece-centric network its own tokens, so the
+  operator counter reaches the new arm as it reaches every `bench.CONFIGS` name.
+- `python/tests/net/test_bench.py` (new): each arm is the network its row names; each runs a
+  forward in process; A5's arm reads fewer tokens on the same position; the operator counter
+  counts it; the command line runs all four beside the v1 at 2 boards and 1 layer, each pass in
+  its own subprocess, with no error. No timing is read.
+- `docs/MEASUREMENTS.md`: a new section, "FFN 2x and 4x", with the arms and the command, and
+  A5's command beside its indicative figure. Both are marked "not yet measured on a quiet
+  machine". The A5 arm's position is synthetic: 2.12x fewer tokens at 44 boards, against the
+  human position's 1.96x. `docs/BUILD_LOG.md`: step 5's list and the lane line.
+
+Spec: §15.3's rows "FFN ratio 2× and 4×" and "Piece-centric tokens (A5)", §9.2's FFN ladder and
+§14.4 (register A5, F1) are what the arms' figures will be read against. No spec text describes
+the bench, so no edit is proposed. The write-back (M4) follows the measurement.
+
+### 2026-11-28 - 6b″'s tool: Hunt's wall time per root, and Guard's and Hunt's nodes/s per range
+
+The quiet-machine block is to measure Guard's and Hunt's nodes/s. The 6b″ tool gave Guard's
+`nodes` and `seconds` per root but Hunt's `nodes` only. Hunt often stops early: it proves a mate
+or exhausts its class, with a median of 676 nodes under 50 boards. Its nodes over the 50 ms
+budget would understate its rate. Nothing was measured: the machine was busy.
+
+- `engine/tools/t5d_scan6bpp.cpp`: Hunt is timed at each root as Guard is, from the call to its
+  return (Guard's `GuardResult::seconds`; Hunt's the same span around `Hunt::hunt`). Each
+  position's `"hunt"` object gains `"seconds"` (6 decimals). Each per-range `guard` and `hunt`
+  entry gains `timed_roots`, `nodes`, `seconds` and `nodes_per_s`. Every earlier field keeps
+  its meaning. A new summary block, "NODES PER SECOND", prints both provers' sums and rates per
+  range and pooled. It is information, never a verdict.
+- `engine/tools/sixbpp.hpp`, `sixbpp.cpp`: `NodeRate` sums a range's nodes and seconds. Its
+  rate is the sum of nodes over the sum of seconds, never a mean of per-root rates, and 0 where
+  no time was spent.
+- `engine/tests/test_sixbpp.cpp`: `NodeRate`'s arithmetic, and the tool run end to end on a
+  record written there (one thread, 20 ms, no truth). The test checks Hunt's `seconds` at every
+  measured root and that the per-range sums and rates are the positions' in the JSON and the
+  summary. `engine/CMakeLists.txt` passes the tool's path to the tests.
+- `engine/README.md` (6b″), `docs/MEASUREMENTS.md` ("Verification v3: 6b″": the command, not
+  yet measured on a quiet machine) and `docs/BUILD_LOG.md` (step 5's list of the block's
+  missing commands; `lane/search` under "Now"; the work items).
+
+Spec: §15.3's "Prover nodes/s" row and §15.6's 6b″ (register M17, M13) are what the tool's
+figures will be read against. No spec text describes the tool's output, so no edit is proposed.
+The write-back (M4) follows the measurement.
+
 ### 2026-11-27 - Build log: the current state at register E12's merge
 
 `docs/BUILD_LOG.md`:

@@ -482,7 +482,9 @@ def measure(
     The network is ``bench.CONFIGS[config]`` at precision ``dtype`` with ``layers`` layers (None:
     the configuration's), random weights (``build_model(seed=0)`` - or ``model``, a network the
     caller already built from exactly that configuration, so that several rows share one); the
-    input is ``batch`` positions of ``boards`` boards, ``synthetic_state(seed + i, boards)``.
+    input is ``batch`` positions of ``boards`` boards, ``synthetic_state(seed + i, boards)`` -
+    register A5's tokenisation of it for a piece-centric network (``bench.CONFIGS``'
+    "a5-piece-centric").
 
     Keys: ``config``, ``dtype``, ``layers``, ``boards``, ``batch``, ``seed``, ``tokens`` (the
     batch's padded length), ``torch`` (the PyTorch version: the counts are that build's);
@@ -500,7 +502,8 @@ def measure(
     if model is None:
         overrides = CONFIGS[config] | ({} if layers is None else {"n_layers": layers})
         model = build_model(NetConfig(trunk_dtype=dtype, **overrides), seed=0).eval()
-    inputs = collate([synthetic_state(seed + i, boards) for i in range(batch)])
+    piece_centric = bool(getattr(getattr(model, "cfg", None), "piece_centric", False))  # A5's arm: its own tokens
+    inputs = collate([synthetic_state(seed + i, boards, piece_centric=piece_centric) for i in range(batch)])
     count = count_forward(model, inputs, paths=sites > 0)
     last = count.n_layers - 1
     row = {

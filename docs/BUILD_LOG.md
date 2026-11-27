@@ -816,8 +816,13 @@ pushed after every commit, taking main by merge, never rebase (re-check with `gi
   MT-03's settling-scan part (issue 402's part 5: 6f under TT churn through the ladder's wired
   settling path, with a `long_` twin and a tests-only store hook,
   `VerificationLadder::use_settling_stores_for_tests`) and round 2's two weak tests made strong
-  (L1's charge on a decision with work after its timed run, L8's capped Guard scan). The lane is
-  idle.
+  (L1's charge on a decision with work after its timed run, L8's capped Guard scan). **Since
+  (2026-11-28, from main d4327ba): the quiet-machine block's missing commands** - Hunt's nodes/s
+  in `t5d-scan6bpp`; the forward bench's FFN 2x/4x and A5 arms, and its embedding time with A8's
+  repetitions; F1's CPU evaluation rate, `python -m t5d.engine.evalrate` (step 5, "The
+  quiet-machine block's missing commands"); built and tested, nothing measured. **Merged
+  2026-11-28**, with the main loop's battery on the merged tree (no Lazy SMP run and no nightly:
+  no prover, search or truth source changed). The lane is idle.
 - `lane/audit` (from main 01ebbe5, 2026-11-01) - the done-means audit merged (2026-11-08): section 15.2 row by row, section 15.4 invariant by invariant, the committed-class rows and section 15.5 clause by clause, checked adversarially by a five-agent workflow and corrected (section "Done-means audit"; issues 535-538, edits 364-366).
 - `lane/fix535` (from main d8a54d3, 2026-11-02) - issue 535 resolved by issue 600 and merged (2026-11-09, with its review round: no HIGH; 3 MEDIUM and 14 LOW fixed, all 24 surviving mutants killed, the normal path bit-identical to 03eca7a on the review's three twins): the flat form, a node's creation and a re-root exception-safe under an allocation failure, gather's request list and run's buffer inside their rollbacks, the tree form's inheritance and re-evaluation rolled back, the ladder's verdict take and the asset map's lookup safe under `std::bad_alloc`. Issues 603 (this machine's g++ 16.2 breaks `std::deque`'s exception safety under its default `-fassume-sane-operators-new-delete`) and 604 (a `std::bad_alloc` in a synchronous ladder job reported as a contradiction) are the main loop's, in the quiet-machine block. The lane is idle.
 - `lane/net` - A5 (piece-centric tokens, dense scope only, behind its flag, off) merged with
@@ -2175,6 +2180,37 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 §8.2's paragraph, register M22 and part L, label the mandatory shares as playable ones
 (issue 156; proposed edits 127, 128).
 
+**The quiet-machine block's missing commands (2026-11-28, `lane/search`).** The main loop's
+runbook for the block found items with no documented command; each now has a tool, built and
+tested, not run (the machine was busy). Each command is in `docs/MEASUREMENTS.md` beside the
+row it will fill, marked "command; not yet measured on a quiet machine":
+- **Guard's and Hunt's nodes/s** (§15.3's "Prover nodes/s"; M17's re-run): `t5d-scan6bpp`
+  times Hunt at each root as Guard is timed and prints both rates per range (`tools/sixbpp.hpp`
+  `NodeRate`; `engine/README.md`, 6b″). The command is the 6b″ re-run's, unchanged.
+- **FFN 2x and 4x** (§15.3's FFN row, §9.2): `bench.CONFIGS`' "ffn-4x" and "ffn-2x" - the v1 with
+  the trunk's `ffn_ratio` at 4 and 2 - beside "n2-default" (8x), `python -m t5d.net.bench --config
+  n2-default ffn-4x ffn-2x --boards 44 240`.
+- **A5's dense wall at 44 boards**: `bench.CONFIGS`' "a5-piece-centric" (`piece_centric=True`,
+  dense scope) beside "n2-default" (A1), on the bench's synthetic position - 2.12x fewer tokens at
+  44 boards where the indicative figure's human position has 1.96x; the operator counter reaches
+  the arm too (`opcount.measure` gives a piece-centric network its own tokens).
+- **A8's embedding time** (the A8 table's usable column) and the A8 section's protocol: the bench's
+  `--embed` (`T5DNet.embed_tokens` alone on the pass's position, after the forward, in its
+  process), `--repeat R` (the order reversed every other repetition; per-arm medians and minima)
+  and `--threads T`; "a8-no-ffn" is the table's third arm (`layout_ffn_ratio=0`). The FFN and A5
+  commands run with `--repeat 5` (A5's with `--threads 4`, as its indicative figure).
+- **F1's CPU evaluation rate** (§15.6's "6.9 evaluations/s", N5's unrecorded run):
+  `python -m t5d.engine.evalrate` - self-play games of the v1 network at random weights through
+  the engine (`netplay.play_game`), fixed seeds, variants, split and threads, **the provers off by
+  default** (no Hunt, no settling scans, no asset map: the network's own rate; `--provers` turns
+  them on - the main loop's decision); decisions/s, evaluations/s, forward passes and positions
+  per forward, the network's own positions/s, the network's calls by board-count range; its full
+  configuration printed first. Defaults: one game each of Standard and Two Timelines at netplay's
+  (N5's) caps, 6 turns or 80 boards. Run time unknown: a 6-turn F1 game ran past 50 minutes on
+  the shared machine and was stopped; a 2-turn one took 70 s.
+- **Not given one** (the main loop's decision): the normalisation overhead - §15.3 labels it "to
+  measure (GPU)", so it is named GPU-deferred, not measured on the CPU.
+
 ### 6. Phases 2-3 - in progress (see "Current state")
 
 ## Register status
@@ -3021,6 +3057,8 @@ placeholders consolidated for the user".
   reviewers' survivors re-run) on the main loop's word - all done, with a second review round, and
   merged 2026-11-24; MT-03's settling-scan part, through the ladder, and the second round's two
   weak tests (L1, L8) merged the same day. Nothing left on the lane but the user's questions.
+  Since 2026-11-28: the quiet-machine block's missing commands (step 5), read by the main loop
+  and merged the same day; they run in the block.
 - **Engine**, after the search lane's merge: register E12, the Gumbel root search - part 1 built
   on `lane/engine` (issue 415), its review round's fixes made and merged (2026-11-27); part 2 waits on
   issue 416's two questions; its experiment waits for I21's ranking.
@@ -3038,7 +3076,8 @@ placeholders consolidated for the user".
   - the write-backs (M4);
   - issues 536-538 (538: C25, then the wording points) and the placeholders to the user,
     with 300-306;
-  - the F1 CPU rate (6.9 evaluations/s) recorded in MEASUREMENTS with its conditions.
+  - the F1 CPU rate (6.9 evaluations/s) recorded in MEASUREMENTS with its conditions (its
+    command since 2026-11-28: `python -m t5d.engine.evalrate`, step 5's list).
 
 ## Spec issues (wrong, ambiguous, contradictory, silent)
 
