@@ -983,7 +983,11 @@ struct Search::Impl {
   std::size_t memory_bytes() const noexcept {
     // The MCGS table: a node per entry (key, id, link) and its bucket.
     constexpr std::size_t kTableEntry = sizeof(std::uint64_t) + sizeof(NodeId) + 2 * sizeof(void*) + detail::kHeapBlock;
-    return tree_bytes_ + (nodes_.capacity() - nodes_.size()) * sizeof(Node) + table_.size() * kTableEntry;
+    // Register E12: a Gumbel root's buffers - the halving's four and the
+    // view selection fills (none allocated off: both empty).
+    const std::size_t gumbel = gumbel_.heap_bytes() + gumbel_view_.capacity() * sizeof(gumbel::Action) +
+                               (gumbel_.active() ? 5 * detail::kHeapBlock : 0);
+    return tree_bytes_ + (nodes_.capacity() - nodes_.size()) * sizeof(Node) + table_.size() * kTableEntry + gumbel;
   }
 
   void validate() const {

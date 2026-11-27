@@ -3171,7 +3171,9 @@ the same), the error head read by its pinned `NetOutput` field name.
 
 Register E12 (Gumbel root search; spec §8.4 as the 2026-11-15 review edited it, 6g),
 built as an arm of the main search behind `SearchParams::gumbel_root` - **off by
-default**, and off it changes no code path, allocation or digest. It is self-play's, and
+default**: off, every hook is behind the flag and the arm's state allocates nothing (tested:
+the other four fields inert by digest under all three splits, the root's edges in the
+as-built order and no Gumbel view). It is self-play's, and
 its experiment waits on I21's ranking (the code does not: build-log issue 415). Written
 from Danihelka, Guez, Schrittwieser and Silver, "Policy improvement by planning with
 Gumbel" (ICLR 2022), Karnin, Koren and Somekh, "Almost optimal exploration in
@@ -3212,7 +3214,9 @@ index give `g` again; `mix64` SplitMix64's finaliser.
 
 **Parameters** (`SearchParams`; `t5d_search_params` in front of `expand`): `gumbel_root`
 (false), `gumbel_m` (16, the paper's placeholder), `gumbel_simulations` (0: the driver
-gives it - its playout cap less one, the root's own evaluation being a playout),
+gives it - its playout cap less one, the root's own evaluation being a playout; fewer
+playouts end the search mid-schedule and the choice is among the current survivors,
+where the paper's is among a completed halving's),
 `gumbel_c_visit` (50) and `gumbel_c_scale` (1), placeholders as I21's are. `gumbel_m`
 must be 1 or more and each constant finite and from 0 to 1e6 whether or not the arm is
 on (refusing an absurd value with the flag off is the reading). The caps
@@ -3252,7 +3256,8 @@ the review of 2026-11-27, EC-1, a collision counted as a visit in flight left th
 48 and 50 where the synchronous search gives 49 and 49). Which candidates survive a
 halving can differ between the two: it reads their values, and below the root a
 batch's leaves are chosen under virtual loss, not after each other's values. The halving's own
-buffers are reserved at the draw: selection allocates nothing. The draw is made before
+buffers are reserved at the draw: selection allocates nothing, and `memory_bytes()` (the
+memory budget's measure) counts them with the view. The draw is made before
 `set_priors`' commit point and adopted with it by a nothrow move (issue 535's
 discipline): an expansion that throws leaves the root a leaf and the next one draws the
 same sample. MCGS and the tree form are allowed (the root's statistics are its edges').
@@ -3267,7 +3272,7 @@ stays last; in `t5d_search_layout`), `t5d_search_choose_gumbel` (appended), mirr
 **Not built: the generator's arm** (part 2): its policy target must be I21's
 completed-Q target, not the visit distribution, and what "the root search value" means
 under halving - which the value targets, resignation, deblundering and the effort label
-read - needs a ruling (build-log issue 415, with its design).
+read - needs a ruling (build-log issue 416, with its design).
 
 **Tests** (`tests/test_gumbel.cpp`, `python/tests/engine/test_gumbel_root.py`): the
 variate finite at both ends and Gumbel-distributed (mean 0.5772, variance 1.6449 over
@@ -3308,7 +3313,7 @@ refused - the manager's state the same after the refused call, the game loop bef
 evaluation; the choice refused while a batch waits and an index into `root_children()`
 after an earlier candidate's removal; a refilled candidate instantiated at once; a
 halving's wait releasing the root's virtual visit and ending the batch (a gather of
-SIZE_MAX returns at the phase's end); the C fields, their layout and defaults, each
+SIZE_MAX returns at the phase's end); `memory_bytes()` counting the root's buffers; the C fields, their layout and defaults, each
 reaching the search under the random evaluator (m, c_visit and c_scale each change the
 tree), `gumbel_root` 2 refused like every flag, the C choice the C++ one, and the
 refusals through the C API and Python; the binding's step loop the engine's own run,

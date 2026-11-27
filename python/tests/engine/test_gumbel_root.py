@@ -6,7 +6,7 @@ run, the choice and the refusals - and the numbers the engine pins against the t
 The engine's arm is ``t5d_search_params.gumbel_root`` (``engine/include/t5d/gumbel.hpp``; spec
 section 8.4): at a self-play root, a Gumbel sample of m moves and sequential halving over them;
 the move to play is ``Search.choose_gumbel()``. The training generator's arm is not built (its
-policy target and the root value under halving wait on I21 and a ruling; build-log issue 415).
+policy target and the root value under halving wait on I21 and a ruling; build-log issue 416).
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ GUMBEL = dict(gumbel_root=1, gumbel_simulations=63, asset_map=0, hunt=0, settlin
 
 @requires_engine
 def test_gumbel_parameters_default_off_and_mirror_the_library():
-    """Off by default (the as-built behaviour bit for bit); m 16, c_visit 50, c_scale 1 - the
+    """Off by default; m 16, c_visit 50, c_scale 1 - the
     paper's placeholders; n 0 (the driver gives it); the struct as the library lays it out."""
     with Game.variant("Standard") as g:
         assert layout_mismatches(g.lib) == []

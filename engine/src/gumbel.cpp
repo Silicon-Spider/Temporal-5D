@@ -147,6 +147,11 @@ Root Root::make(std::vector<double> g_by_edge, std::size_t open_count, const Con
   return r;
 }
 
+std::size_t Root::heap_bytes() const noexcept {
+  return g_.capacity() * sizeof(double) + schedule_.capacity() * sizeof(Phase) +
+         considered_.capacity() * sizeof(std::size_t) + scratch_.capacity() * sizeof(std::pair<double, std::size_t>);
+}
+
 void Root::refill(std::span<const Action> actions) noexcept {
   // The first phase's candidates are the sample's first m open edges: a closed
   // one's place goes to the next open edge of the order.

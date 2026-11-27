@@ -1572,6 +1572,27 @@ TEST(mcts_gumbel_timed_refusal_leaves_the_manager_unchanged) {
   CHECK_EQ(tm.scale(), scale);
 }
 
+TEST(mcts_gumbel_memory_budget_counts_the_roots_buffers) {
+  // The correctness pass's minor point (2026-11-27): memory_bytes() - Limits::bytes' measure -
+  // counts a Gumbel root's buffers (the halving's and the view selection fills): after the root's
+  // own evaluation alone the tree is the plain search's, byte for byte, and the difference is at
+  // least the 20 edges' view and g. Off, an inactive Root holds nothing.
+  CHECK_EQ(gumbel::Root{}.heap_bytes(), std::size_t{0});
+  const gumbel::Root made = gumbel::Root::make(std::vector<double>(20, 0.0), 20, gumbel::Config{16, 200, 50.0, 1.0});
+  CHECK(made.heap_bytes() >= 20 * (2 * sizeof(double) + sizeof(std::size_t)));
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
+  mcts::SearchParams on = gumbel_params(200);
+  mcts::SearchParams off = on;
+  off.gumbel_root = false;
+  mcts::Search a(standard(), on);
+  mcts::Search b(standard(), off);
+  a.run(*ev, mcts::Limits{1});
+  b.run(*ev, mcts::Limits{1});
+  REQUIRE(a.gumbel_view().drawn);
+  REQUIRE_EQ(a.node(a.root()).edge_count, std::size_t{20});
+  CHECK(a.memory_bytes() >= b.memory_bytes() + 20 * (sizeof(gumbel::Action) + sizeof(double)));
+}
+
 TEST(mcts_gumbel_game_loop_refuses_before_any_evaluation) {
   // S01: play_game refuses the arm itself, up front - by name, before any evaluation (the loop's
   // later refusals, choose_by_visits' temperature or a re-root, come only after a search's work).

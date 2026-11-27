@@ -61,7 +61,7 @@ rule or a search decision.
   suggestions and the proof channel (and ``gumbel_c_visit`` or ``gumbel_c_scale`` above 1e6,
   with or without the flag), and refuses ``choose``, a ``choose_by_visits`` temperature and the
   re-roots under it. The generator's arm (its policy
-  target, the root value under halving) is not built (build-log issue 415).
+  target, the root value under halving) is not built (build-log issue 416).
 * **Lifetimes.** A leaf's pointers live until the next ``gather``, ``deliver``, ``abandon``
   or ``close``: ``leaf_expansion`` copies at once (``Expansion.from_c``). ``close`` (or the
   context manager, or garbage collection) releases the handle.

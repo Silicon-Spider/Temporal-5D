@@ -153,6 +153,9 @@ class Root {
   double g(std::size_t edge) const noexcept { return edge < g_.size() ? g_[edge] : 0.0; }
   double c_visit() const noexcept { return c_visit_; }
   double c_scale() const noexcept { return c_scale_; }
+  /// The bytes its buffers hold (their capacities; 0 for an inactive Root),
+  /// for the search's memory budget.
+  std::size_t heap_bytes() const noexcept;
 
   /// The edge to visit next, given every root edge's state (by edge) and the
   /// root's own evaluation v_net: the candidate with the fewest visits and

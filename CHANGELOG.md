@@ -10,6 +10,39 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-27 - Register E12's review round: the readings and references put right, the memory budget (SF-2 to SF-7, minor points)
+
+- **SF-2**: reading (a) and readings row 16 quote both texts - §16's "**E10**: Gumbel root search
+  as an arm of the search (§8.4), after I21's ranking" in its list of decisions "with code still
+  to follow", and register E12's Gate column, "6g; after I21's ranking" - and say why the arm is
+  built off (the ranking gates whether the experiment runs; an arm that is off changes nothing).
+- **SF-3**: the flag-off claim now says what is shown - every hook behind the flag and nothing
+  allocated (by reading), the four other fields inert by digest under all three splits, and the
+  as-built root order (TP-1's absolute check) - in the README, issue 415, `mcts.hpp`, the
+  binding's test docstring and the part-1 CHANGELOG entry. `validate`'s range checks on the
+  gumbel fields keep running with the flag off (an absurd value refused either way), and the
+  documents say so.
+- **SF-4**: readings rows 27-29 - reading (j) (`choose_gumbel()`'s refusals), the proof channel's
+  refusal (new reading (n): E9's rules would let a proof decide the move the halving chooses; H23
+  keeps the channel off, so it binds after the sign-off) and the five record-header keys per
+  search arm without a version bump (new reading (o)).
+- **SF-5**: the generator's arm is issue 416 in the README, `search.py` and
+  `test_gumbel_root.py`; the part-1 CHANGELOG entry's "edit 312 names the C fields" corrected
+  (it names the flag only); edit 312's stream wording gains its XOR.
+- **SF-6**: the build log's "Not built, and why" and next-steps lines say part 1 is built (with
+  the "until edit 412" note); issue 415's "Checks" entry is written at the round's end.
+- **SF-7**: reading (b) and row 17 credit Karnin et al. with the ceil-halving and Danihelka et
+  al. with the max(1, ·) floor and the leftover visits to the last two.
+- **The correctness pass's minor points**: `memory_bytes()` (`Limits::bytes`' measure) counts a
+  Gumbel root's buffers - `gumbel::Root::heap_bytes()` (new) and the view; off, nothing (test
+  `mcts_gumbel_memory_budget_counts_the_roots_buffers`, which fails with the term taken out).
+  Reading (d), the README and `mcts.hpp` say that a search cut mid-schedule chooses among the
+  current survivors where the paper's choice is among a completed halving's. (`Root::score` was
+  made private with EC-3.)
+
+Spec: §16 and register E12 - proposed edit 312's stream wording corrected (the XOR); no new edit.
+Readings rows 16, 17 reworded and 27-29 added (issue 415 (a), (b), (j), (n), (o)) for the user.
+
 ### 2026-11-27 - Register E12's review round: the mutation pass's tests adopted (TP-1)
 
 The mutation pass found 35 real gaps among 128 mutants (77 killed, 10 equivalent - accepted). Its
@@ -136,8 +169,10 @@ round trip, the step loop the engine's own run digest for digest under the board
 the tree form, the choice and the refusals as `EngineArgumentError`, and the numbers the engine
 pins against `train.completed_q` and `train.selfplay.mix`).
 
-Spec: register E12; §16 - edit 312 names the C fields. Record headers gain five keys per search
-arm (`params_dict`); the record version stays 2, as for every appended field.
+Spec: register E12; §16 - edit 312 names the flag (`gumbel_root`); the five C fields and
+`t5d_search_choose_gumbel` are the engine ABI's, which no part of the spec lists (corrected by
+the review round of 2026-11-27, SF-5). Record headers gain five keys per search arm
+(`params_dict`); the record version stays 2, as for every appended field.
 
 ### 2026-11-24 - Register E12 (Gumbel root search), part 1: the search's arm, off
 
@@ -153,7 +188,9 @@ a root policy temperature (the draw replaces them), the asset map and Hunt's sug
 steering; `asset_map` is on by default), the proof channel, n 0; under the arm `choose()`, a
 `choose_by_visits` temperature and every re-root; a timed decision at `TimeManager::begin`
 (`src/timeman.cpp`: where `run_timed` and Python's timed loop both begin) and the C++ game loop
-(`src/selfplay.cpp`). Off, no code path, allocation or digest changes. `engine/tests/
+(`src/selfplay.cpp`). Off, every hook is behind the flag and the arm's state allocates nothing;
+the four other fields are inert by digest (worded so by the review round of 2026-11-27, SF-3).
+`engine/tests/
 test_gumbel.cpp` gains twelve search tests (inert off; the refusals; the sample and the
 schedule's visits at the root; the argmax choice and v_mix; a planted move for 20 seeds; one
 simulation a sample of the prior; unknown candidates verified and replaced; batched and

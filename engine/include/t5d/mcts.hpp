@@ -699,7 +699,8 @@ struct SearchParams {
   /// n: the schedule's visits to the root's children - the driver gives it,
   /// its playout cap less one (the root's own evaluation is a playout); more
   /// playouts keep visiting the last survivors equally, fewer end mid-schedule
-  /// (the choice among the current survivors).
+  /// (the choice among the current survivors - the paper's is among a
+  /// completed halving's).
   std::uint64_t gumbel_simulations = 0;
   /// sigma(q) = (c_visit + max_b N(b)) * c_scale * (q + 1) / 2 - the paper's
   /// 50 and 1, PLACEHOLDERS (spec §16, I21's form); each finite, 0 to 1e6
