@@ -313,6 +313,10 @@ endif()
 if(MINGW)
   target_link_options(t5d-scan6bpp PRIVATE -static)
 endif()
+# test_sixbpp.cpp runs 6b''s tool on records written there: its JSON carries
+# Hunt's wall time per root and its node rates add up (the quiet-machine block).
+add_dependencies(t5d-tests t5d-scan6bpp)
+target_compile_definitions(t5d-tests PRIVATE "T5D_SCAN6BPP_EXE=\"$<TARGET_FILE:t5d-scan6bpp>\"")
 
 # Stage E6a: t5d-play, the engine against itself, printing the game's 5dpgn
 # record; test_play_exe.cpp runs it and replays the record with t5d-gate.

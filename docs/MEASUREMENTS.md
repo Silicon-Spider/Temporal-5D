@@ -1272,6 +1272,22 @@ at 100-199: all 20 truth mates there are mates in one that Hunt's own class find
 in the long search; its root expansion does not finish in 50 ms (issue 107; a
 lazily expanded root is the remedy, not built).
 
+**Guard's and Hunt's nodes/s - command; not yet measured on a quiet machine.** The
+run above gave nodes per root, not nodes per second (§15.3's "Prover nodes/s" row
+quotes nodes per root at 50 ms). Hunt often stops early - it proves a mate or
+exhausts its class (median 676 nodes under 50 boards) - so nodes over the 50 ms
+budget would understate it. Since 2026-11-28 (`lane/search`) the tool times Hunt
+at each root as Guard is timed - from the call to its return - and writes it
+(`"seconds"` in each position's `"hunt"` object); its summary prints, per range,
+Guard's and Hunt's sum(nodes) / sum(seconds) ("NODES PER SECOND"), and the JSON's
+per-range `guard` and `hunt` entries carry `timed_roots`, `nodes`, `seconds` and
+`nodes_per_s`. The re-run is the command above (from the repository root, after
+`build/corpus.txt` is rebuilt as `engine/README.md` says):
+`build/engine/t5d-scan6bpp --truth engine/testdata/hunt-truth --record-list
+build/corpus.txt --per-position --json build/6b/6bpp-quiet.json --summary
+build/6b/6bpp-quiet.txt` - about a minute (58.4 s on 2026-10-04). It re-reads
+M17's verdicts too (the lock changed since: build-log issue 147).
+
 **Hunt's ground truth** (ruling 5; `engine/testdata/hunt-truth/`, recorded at
 b1d0ca9, 5,097 s on 6 workers): one long offline search per root - the union of
 the literal class's (every first move, every completion) and the default class's

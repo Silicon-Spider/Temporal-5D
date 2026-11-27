@@ -129,6 +129,20 @@ Verdict hunt_verdict(const Tallies& t, int range, bool have_truth, bool crossche
 /// Hunt's verdict in `range` rests on fewer than kFewTruthMates truth mates.
 bool too_few_to_read(const Tallies& t, int range);
 
+/// A prover's speed over a range's roots (information, never a verdict; the
+/// quiet-machine block's "Guard's and Hunt's nodes/s"): the sum of the roots'
+/// nodes over the sum of their own wall times - each root's search timed from
+/// its call to its return - never a mean of per-root rates, which would weigh
+/// a root Hunt settled in microseconds like one that spent the whole budget.
+struct NodeRate {
+  std::size_t roots = 0;
+  std::uint64_t nodes = 0;  // ProverStats::nodes: every thread's
+  double seconds = 0;
+  void add(std::uint64_t root_nodes, double root_seconds) noexcept;
+  /// nodes / seconds; 0 where no time was spent (no root, or none timed).
+  double per_second() const noexcept;
+};
+
 /// Every option, as name and value: the prover's, Guard's (its prover's
 /// with Guard's overrides applied), Hunt's (likewise) - for the tool's
 /// CONDITIONS and its JSON.

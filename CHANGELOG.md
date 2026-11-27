@@ -10,6 +10,34 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-28 - 6b″'s tool: Hunt's wall time per root, and Guard's and Hunt's nodes/s per range
+
+The quiet-machine block is to measure Guard's and Hunt's nodes/s. The 6b″ tool gave Guard's
+`nodes` and `seconds` per root but Hunt's `nodes` only. Hunt often stops early: it proves a mate
+or exhausts its class, with a median of 676 nodes under 50 boards. Its nodes over the 50 ms
+budget would understate its rate. Nothing was measured: the machine was busy.
+
+- `engine/tools/t5d_scan6bpp.cpp`: Hunt is timed at each root as Guard is, from the call to its
+  return (Guard's `GuardResult::seconds`; Hunt's the same span around `Hunt::hunt`). Each
+  position's `"hunt"` object gains `"seconds"` (6 decimals). Each per-range `guard` and `hunt`
+  entry gains `timed_roots`, `nodes`, `seconds` and `nodes_per_s`. Every earlier field keeps
+  its meaning. A new summary block, "NODES PER SECOND", prints both provers' sums and rates per
+  range and pooled. It is information, never a verdict.
+- `engine/tools/sixbpp.hpp`, `sixbpp.cpp`: `NodeRate` sums a range's nodes and seconds. Its
+  rate is the sum of nodes over the sum of seconds, never a mean of per-root rates, and 0 where
+  no time was spent.
+- `engine/tests/test_sixbpp.cpp`: `NodeRate`'s arithmetic, and the tool run end to end on a
+  record written there (one thread, 20 ms, no truth). The test checks Hunt's `seconds` at every
+  measured root and that the per-range sums and rates are the positions' in the JSON and the
+  summary. `engine/CMakeLists.txt` passes the tool's path to the tests.
+- `engine/README.md` (6b″), `docs/MEASUREMENTS.md` ("Verification v3: 6b″": the command, not
+  yet measured on a quiet machine) and `docs/BUILD_LOG.md` (step 5's list of the block's
+  missing commands; `lane/search` under "Now"; the work items).
+
+Spec: §15.3's "Prover nodes/s" row and §15.6's 6b″ (register M17, M13) are what the tool's
+figures will be read against. No spec text describes the tool's output, so no edit is proposed.
+The write-back (M4) follows the measurement.
+
 ### 2026-11-27 - Build log: the current state at register E12's merge
 
 `docs/BUILD_LOG.md`:

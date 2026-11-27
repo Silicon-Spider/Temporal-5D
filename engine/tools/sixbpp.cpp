@@ -26,6 +26,14 @@ const char* range_name(int range) {
 
 int range_of(int boards) noexcept { return boards < 50 ? 0 : boards < 100 ? 1 : boards < 200 ? 2 : 3; }
 
+void NodeRate::add(std::uint64_t root_nodes, double root_seconds) noexcept {
+  ++roots;
+  nodes += root_nodes;
+  seconds += root_seconds;
+}
+
+double NodeRate::per_second() const noexcept { return seconds > 0 ? static_cast<double>(nodes) / seconds : 0.0; }
+
 bool guard_passes(std::size_t done, std::size_t roots) noexcept { return roots > 0 && 100 * done >= 95 * roots; }
 
 bool hunt_passes(std::size_t found, std::size_t truth_mates) noexcept {
