@@ -362,6 +362,19 @@ typedef struct t5d_search_params {
                                      of the unboosted edges' mass (0.5; [0, 1)) */
   int32_t hunt_with_settling;     /* 1: Hunt asked beside the root's settling scan too; 0 (default):
                                      not where the scan subsumes it (issue 181) */
+  /* Register E12: Gumbel root search (Danihelka et al., ICLR 2022) - a prototype, OFF
+     (SearchParams::gumbel_root; t5d/gumbel.hpp): at the root a Gumbel sample of m moves and
+     sequential halving over them, the move t5d_search_choose_gumbel's. Self-play's; refused
+     with the flat split, root_noise, root_policy_temperature != 1, asset_map, hunt_suggest
+     and the proof channel; t5d_search_choose, a choose_by_visits temperature above 0 and the
+     re-roots are refused under it */
+  int32_t gumbel_root;            /* 1: on; 0 (default): the as-built search, bit for bit */
+  uint32_t gumbel_m;              /* the sample's size m (16: a placeholder); m_eff = min(m, n,
+                                     open moves) */
+  uint64_t gumbel_simulations;    /* n: the schedule's visits to the root's children - the
+                                     driver's playout cap less one; 0 refused with the flag */
+  double gumbel_c_visit;          /* sigma(q) = (c_visit + max N) c_scale (q + 1) / 2: 50 ... */
+  double gumbel_c_scale;          /* ... and 1 (placeholders, I21's form) */
   t5d_expand_options expand;   /* the leaves' network input (k, features, relations); last */
 } t5d_search_params;
 
@@ -934,6 +947,13 @@ T5D_API t5d_status t5d_search_lift_root_listing(t5d_search* search, int32_t lift
 T5D_API t5d_status t5d_search_run_timed(t5d_search* search, int32_t evaluator, uint64_t evaluator_seed,
                                         t5d_timeman* tm, const t5d_time_context* context, int32_t wall_clock,
                                         t5d_time_plan* plan, t5d_time_verdict* verdict, char** error);
+
+/* Register E12 (Gumbel root search; gumbel_root on): the move to play - the open
+ * candidate with the largest g + ln prior + sigma(completed q) - as a root
+ * child's index (Search::choose_gumbel). T5D_ERR_ARGUMENT without gumbel_root,
+ * with no draw (the root unexpanded, terminal, or with no open move), while a
+ * batch waits, or with no candidate left (search again). */
+T5D_API t5d_status t5d_search_choose_gumbel(const t5d_search* search, size_t* index, char** error);
 
 #ifdef __cplusplus
 } /* extern "C" */

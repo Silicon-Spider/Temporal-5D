@@ -405,7 +405,9 @@ struct Pending {
   std::uint64_t candidates = 0;  // its expansion's candidate_digest (H1 of the 2026-11-09 review)
 };
 
-enum class Selected : std::uint8_t { Pending, Done, Collision, DeadEnd };
+// Wait: register E12's halving waits for its phase's pending visits - the
+// batch ends there.
+enum class Selected : std::uint8_t { Pending, Done, Collision, DeadEnd, Wait };
 
 int sign_between(const Node& parent, const Node& child) noexcept {
   return parent.mover == child.mover ? 1 : -1;
@@ -822,6 +824,11 @@ struct Search::Impl {
   std::uint64_t root_generation_ = 1;
   std::uint64_t notified_generation_ = 0;
   bool noise_applied_ = false;
+  // Register E12: the root's Gumbel sample and halving (inactive without a
+  // draw), and its view of the root's edges - reserved at the draw, so
+  // selection fills it without allocating.
+  gumbel::Root gumbel_;
+  std::vector<gumbel::Action> gumbel_view_;
   // I15's root side table: each root edge's prior before the noise (after the
   // temperatures, the unknown-move scale and the submit share), in the root's
   // edge order - filled by the root's own expansion; empty for a carried root
@@ -976,11 +983,50 @@ struct Search::Impl {
   std::size_t memory_bytes() const noexcept {
     // The MCGS table: a node per entry (key, id, link) and its bucket.
     constexpr std::size_t kTableEntry = sizeof(std::uint64_t) + sizeof(NodeId) + 2 * sizeof(void*) + detail::kHeapBlock;
-    return tree_bytes_ + (nodes_.capacity() - nodes_.size()) * sizeof(Node) + table_.size() * kTableEntry;
+    // Register E12: a Gumbel root's buffers - the halving's four and the
+    // view selection fills (none allocated off: both empty).
+    const std::size_t gumbel = gumbel_.heap_bytes() + gumbel_view_.capacity() * sizeof(gumbel::Action) +
+                               (gumbel_.active() ? 5 * detail::kHeapBlock : 0);
+    return tree_bytes_ + (nodes_.capacity() - nodes_.size()) * sizeof(Node) + table_.size() * kTableEntry + gumbel;
   }
 
   void validate() const {
     const SearchParams& p = params_;
+    // Register E12 (Gumbel root search): its parameters - checked whether or
+    // not the arm is on, so an absurd value is refused either way - and what
+    // the arm replaces or cannot take, each refused by name.
+    if (p.gumbel_m < 1) throw std::invalid_argument("SearchParams::gumbel_m: 1 or more (register E12)");
+    if (!(std::isfinite(p.gumbel_c_visit) && p.gumbel_c_visit >= 0 && p.gumbel_c_visit <= gumbel::kMaxCVisit)) {
+      throw std::invalid_argument(
+          "SearchParams::gumbel_c_visit: finite, 0 to 1e6 (register E12; the cap a placeholder - sigma stays finite)");
+    }
+    if (!(std::isfinite(p.gumbel_c_scale) && p.gumbel_c_scale >= 0 && p.gumbel_c_scale <= gumbel::kMaxCScale)) {
+      throw std::invalid_argument(
+          "SearchParams::gumbel_c_scale: finite, 0 to 1e6 (register E12; the cap a placeholder - sigma stays finite)");
+    }
+    if (p.gumbel_root) {
+      const auto refuse = [](const char* why) {
+        throw std::invalid_argument(std::string("SearchParams::gumbel_root (register E12, Gumbel root search): ") + why);
+      };
+      if (p.gumbel_simulations == 0) {
+        refuse("gumbel_simulations is 0 - the schedule's n, the driver's playout cap less one");
+      }
+      if (p.split == TurnSplit::Flat) refuse("not under the flat form - its reading is open (register part K, 6x)");
+      if (p.root_noise) refuse("root_noise - the Gumbel draw replaces the root's Dirichlet noise");
+      if (p.root_policy_temperature != 1.0) refuse("root_policy_temperature must be 1 - the draw replaces it");
+      // The draw's logits are ln of the root prior: with these two at 1 they
+      // are the network's raw logits up to one constant - the logits I21's
+      // target reads (§16), which the halving's improvement is measured by.
+      if (p.policy_temperature != 1.0) {
+        refuse("policy_temperature must be 1 - the root's logits are the network's raw ones, which I21's target reads");
+      }
+      if (p.unknown_prior_scale != 1.0) {
+        refuse("unknown_prior_scale must be 1 - the root's logits are the network's raw ones, which I21's target reads");
+      }
+      if (p.asset_map) refuse("asset_map - root steering; turn asset_map off (it is on by default)");
+      if (p.hunt_suggest) refuse("hunt_suggest - root steering");
+      if (p.proof_channel) refuse("proof_channel - E9's rules are final selection's");
+    }
     if (p.proof_store) {
       throw std::invalid_argument(
           "SearchParams::proof_store: the proof channel is disabled - no proof may enter a "
@@ -2334,6 +2380,10 @@ struct Search::Impl {
       for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
       std::stable_sort(order.begin(), order.end(),
                        [&n](std::size_t a, std::size_t b) { return n.edges[a].prior > n.edges[b].prior; });
+      // Register E12: a Gumbel root's edges are the sample's order (drawn
+      // here, before the commit point; adopted with it).
+      gumbel::Root drawn;
+      if (params_.gumbel_root) drawn = gumbel_draw(n, order);
       std::vector<Edge> sorted;
       sorted.reserve(n.edges.size());
       root_prior_noise_free_.clear();
@@ -2356,6 +2406,7 @@ struct Search::Impl {
       best_edge_ = kNoEdge;
       best_since_ = 0;
       noise_applied_ = noise_applied_ || noise;  // nothing from here to the expansion's end throws
+      if (params_.gumbel_root) gumbel_ = std::move(drawn);  // nothrow
     } else {
       std::stable_sort(n.edges.begin(), n.edges.end(),
                        [](const Edge& a, const Edge& b) { return a.prior > b.prior; });
@@ -2474,6 +2525,10 @@ struct Search::Impl {
   // (D2's flat form: generated first - "progressive widening pulls in the
   // next-best legal turn as visits grow"; with widening off, every turn).
   void widen(Node& n) {
+    if (gumbel_.active() && &n == &nodes_[root_]) {  // register E12: the sample, not k(N)
+      n.instantiated = std::max(n.instantiated, gumbel_.shown());
+      return;
+    }
     if (!params_.widening) {
       if (n.flat) pull_turns(n, std::numeric_limits<std::size_t>::max());
       n.instantiated = n.edges.size();
@@ -2483,6 +2538,78 @@ struct Search::Impl {
     if (n.flat) pull_turns(n, k >= 1e18 ? std::numeric_limits<std::size_t>::max() : static_cast<std::size_t>(k));
     const double capped = std::min(k, static_cast<double>(n.edges.size()));
     n.instantiated = std::max(n.instantiated, static_cast<std::size_t>(capped));
+  }
+
+  // -- register E12: the Gumbel root (t5d/gumbel.hpp) ---------------------------------------
+
+  // The root's draw at its expansion: the Gumbel order of its open edges (an
+  // unpruned edge with a prior; the edges still in the expansion's order: its
+  // moves, then submit), `order` replaced by it. Everything that allocates is
+  // here, before set_priors' commit point: a throw leaves gumbel_ as it was
+  // and the node a leaf, and the expansion made again draws the same sample
+  // (the stream is the seed's and the root key's; issue 535's discipline).
+  gumbel::Root gumbel_draw(const Node& n, std::vector<std::size_t>& order) {
+    std::vector<double> logits(n.edges.size());
+    std::size_t open = 0;
+    for (std::size_t i = 0; i < n.edges.size(); ++i) {
+      const Edge& e = n.edges[i];
+      const bool takeable = !e.pruned && e.prior > 0;
+      logits[i] = takeable ? std::log(e.prior) : -std::numeric_limits<double>::infinity();
+      if (takeable) ++open;
+    }
+    gumbel::Sample sample = gumbel::sample_order(logits, gumbel::stream_seed(params_.seed, n.key));
+    std::vector<double> g;
+    g.reserve(n.edges.size());
+    for (const std::size_t i : sample.order) g.push_back(sample.g[i]);
+    gumbel_view_.reserve(n.edges.size());
+    gumbel::Root made = gumbel::Root::make(
+        std::move(g), open,
+        gumbel::Config{params_.gumbel_m, params_.gumbel_simulations, params_.gumbel_c_visit, params_.gumbel_c_scale});
+    order = std::move(sample.order);
+    return made;
+  }
+
+  // The root's edges as the halving reads them, by edge: the prior, the
+  // completed and the pending visits, the backed-up value (the root player's
+  // view), and whether the edge may be taken.
+  void fill_gumbel(std::vector<gumbel::Action>& out) const {
+    const Node& r = nodes_[root_];
+    out.resize(r.edges.size());
+    for (std::size_t i = 0; i < r.edges.size(); ++i) {
+      const Edge& e = r.edges[i];
+      gumbel::Action& a = out[i];
+      a.prior = e.prior;
+      a.visits = e.visits;
+      a.pending = e.vl;
+      a.q = edge_q(r, e);
+      a.open = !e.pruned && e.prior > 0 && !(e.child != kNoNode && nodes_[e.child].dead_end);
+    }
+  }
+
+  // v_net: the root's own evaluation, W - L.
+  double gumbel_v_net() const {
+    const Node& r = nodes_[root_];
+    return valued(r) ? r.eval_mean : 0.0;
+  }
+
+  // Selection's step at a Gumbel root: the halving's next edge (or kWait,
+  // kNone), the root's instantiated prefix grown with the edges shown.
+  std::size_t gumbel_next() {
+    fill_gumbel(gumbel_view_);  // reserved at the draw: no allocation
+    const std::size_t e = gumbel_.next(gumbel_view_, gumbel_v_net());
+    Node& r = nodes_[root_];
+    r.instantiated = std::max(r.instantiated, gumbel_.shown());
+    return e;
+  }
+
+  // Register E12: a Gumbel root search is one decision's (C14: self-play runs
+  // fresh searches per move): no re-root, refused before anything changes.
+  void refuse_gumbel_reroot() const {
+    if (params_.gumbel_root) {
+      throw std::invalid_argument(
+          "search: a Gumbel root search (SearchParams::gumbel_root, register E12) is one decision's - no re-root "
+          "(C14: self-play's searches are fresh per move)");
+    }
   }
 
   // -- D2's tree form: the interaction gates and inherited expansions ----------------
@@ -2771,6 +2898,11 @@ struct Search::Impl {
       }
       Node& p = nodes_[pid];
       widen(p);
+      if (pid == root_ && gumbel_.active()) {  // register E12: the root's halving chooses
+        last_root_steered_ = false;
+        const std::size_t e = gumbel_next();
+        return e == gumbel::kNone ? kNoEdge : e;  // kWait passes through
+      }
       const double vlw_parent = static_cast<double>(p.vl) * params_.virtual_loss;
       const double sqrt_n = std::sqrt(std::max(static_cast<double>(p.visits) + vlw_parent, 1.0));
       const double c = params_.cpuct * cpuct_scale(p);
@@ -3074,6 +3206,10 @@ struct Search::Impl {
         return leaf(cur);
       }
       const std::size_t ei = select_child(cur);
+      if (ei == gumbel::kWait) {  // register E12: the phase's pending visits decide the halving
+        release(path_);
+        return Selected::Wait;
+      }
       if (cur == root_) path_steered_ = ei != kNoEdge && last_root_steered_;
       if (ei == kNoEdge) {
         // No child left: every one is a dead end.
@@ -3212,7 +3348,19 @@ struct Search::Impl {
         if (s == Selected::Done) {
           ++done;
         } else if (s == Selected::Collision) {
+          // Register E12: under a Gumbel root a collision ends the batch. The
+          // root's pick counts an edge's virtual loss as its visits in flight;
+          // a collision's never becomes a visit, so no collision path may be
+          // in flight when the root picks (the review of 2026-11-27, EC-1).
+          // The colliding candidate was the pick - the fewest visits - and
+          // would be the pick again: until this batch's evaluations return,
+          // nothing could go to it, and while the pick takes the fewest (as
+          // the synchronous search does) nothing goes to another. A Wait's
+          // reason (the halving's) and this one each end the batch at once.
+          if (gumbel_.active()) break;
           if (++collisions >= max_leaves) break;
+        } else if (s == Selected::Wait) {
+          break;  // register E12: the halving waits for this batch's visits
         }
       }
       // The requests too (review finding M1: their list grows here, so a
@@ -4303,6 +4451,10 @@ MoveLegality Search::verify(std::size_t index, const LegalityOptions& options) {
 }
 
 Choice Search::choose() const {
+  if (impl_->params_.gumbel_root) {
+    throw std::invalid_argument(
+        "choose: a Gumbel root search (register E12) is self-play's - choose_gumbel(); match play keeps PUCT and LCB");
+  }
   const std::vector<std::size_t> edges = impl_->root_edges();
   const std::vector<FinalCandidate> c = impl_->root_candidates(edges);
   bool any = false;
@@ -4314,6 +4466,11 @@ Choice Search::choose() const {
 std::size_t Search::choose_by_visits(double temperature, double random) const {
   if (!std::isfinite(temperature)) throw std::invalid_argument("choose_by_visits: the temperature is not finite");
   if (!(random >= 0 && random <= 1)) throw std::invalid_argument("choose_by_visits: random must be in [0, 1]");
+  if (impl_->params_.gumbel_root && temperature > 0) {
+    throw std::invalid_argument(
+        "choose_by_visits: under a Gumbel root (register E12) the draw replaces the move temperature - choose_gumbel(), "
+        "or temperature 0");
+  }
   const std::vector<std::size_t> edges = impl_->root_edges();
   const std::vector<FinalCandidate> c = impl_->root_candidates(edges);
   // A proven win is played; children proven lost are left out unless all are.
@@ -4353,8 +4510,59 @@ std::size_t Search::choose_by_visits(double temperature, double random) const {
   return best;
 }
 
+std::size_t Search::choose_gumbel() const {
+  const Impl& s = *impl_;
+  if (!s.params_.gumbel_root) {
+    throw std::invalid_argument("choose_gumbel: the search has no Gumbel root (SearchParams::gumbel_root, register E12)");
+  }
+  if (!s.pending_.empty() || !s.collided_.empty()) {
+    throw std::invalid_argument("search: cannot choose while a batch is waiting");
+  }
+  if (!s.gumbel_.active() || s.nodes_[s.root_].terminal != Terminal::None) {
+    throw std::invalid_argument("choose_gumbel: no Gumbel draw at the root (unexpanded, terminal, or no open edge)");
+  }
+  std::vector<gumbel::Action> view;
+  s.fill_gumbel(view);
+  const std::size_t e = s.gumbel_.best(view, s.gumbel_v_net());
+  const std::vector<std::size_t> edges = s.root_edges();
+  const auto at = std::find(edges.begin(), edges.end(), e);
+  if (e == gumbel::kNone || at == edges.end()) {
+    throw std::invalid_argument("choose_gumbel: no Gumbel candidate left - search again");
+  }
+  return static_cast<std::size_t>(at - edges.begin());
+}
+
+gumbel::RootView Search::gumbel_view() const {
+  const Impl& s = *impl_;
+  gumbel::RootView v;
+  if (!s.gumbel_.active()) return v;
+  v.drawn = true;
+  v.m = s.gumbel_.m();
+  v.phase = s.gumbel_.phase();
+  v.schedule = s.gumbel_.schedule();
+  std::vector<gumbel::Action> view;
+  s.fill_gumbel(view);
+  v.v_mix = gumbel::mixed_value(view, s.gumbel_v_net());
+  for (const gumbel::Action& a : view) {
+    if (a.open) v.max_visits = std::max(v.max_visits, a.visits);
+  }
+  const std::vector<std::size_t>& considered = s.gumbel_.considered();
+  for (const std::size_t i : s.root_edges()) {
+    const gumbel::Action& a = view[i];
+    gumbel::Row row;
+    row.g = s.gumbel_.g(i);
+    row.logit = a.prior > 0 ? std::log(a.prior) : -std::numeric_limits<double>::infinity();
+    row.completed_q = a.visits > 0 ? a.q : v.v_mix;
+    row.score = row.g + row.logit + gumbel::sigma(row.completed_q, v.max_visits, s.gumbel_.c_visit(), s.gumbel_.c_scale());
+    row.considered = std::find(considered.begin(), considered.end(), i) != considered.end();
+    v.rows.push_back(row);
+  }
+  return v;
+}
+
 void Search::advance(std::size_t index) {
   Impl& s = *impl_;
+  s.refuse_gumbel_reroot();
   if (!s.pending_.empty()) throw std::invalid_argument("search: cannot advance while a batch is waiting");
   const std::vector<std::size_t> edges = s.root_edges();
   if (index >= edges.size()) {
@@ -4368,6 +4576,7 @@ void Search::advance(std::size_t index) {
 
 void Search::advance_to(const GameState& target, int moves_made) {
   Impl& s = *impl_;
+  s.refuse_gumbel_reroot();
   if (!s.pending_.empty()) throw std::invalid_argument("search: cannot advance while a batch is waiting");
   s.check_moves_made(target, moves_made);
   const std::size_t count = s.nodes_[s.root_].edges.size();
@@ -4419,6 +4628,7 @@ void Search::advance_to(const GameState& target, int moves_made) {
 
 void Search::advance_moves(std::span<const Move> moves) {
   const Impl& s = *impl_;
+  s.refuse_gumbel_reroot();
   GameState target = root_state();
   MoveList scratch;
   const auto play = [&](const Move& m) {
@@ -4451,6 +4661,7 @@ void Search::advance_moves(std::span<const Move> moves) {
 
 void Search::advance_action(std::span<const Move> moves) {
   const Impl& s = *impl_;
+  s.refuse_gumbel_reroot();
   if (!s.pending_.empty()) throw std::invalid_argument("search: cannot advance while a batch is waiting");
   if (moves.empty() && root_turn_start()) {
     throw std::invalid_argument("advance_action: an action from a turn start has at least one move (T5)");

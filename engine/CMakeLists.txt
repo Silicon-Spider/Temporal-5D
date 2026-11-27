@@ -372,6 +372,12 @@ target_sources(t5d-tests PRIVATE tests/test_timeman.cpp)
 # raises nothing before the sign-off, and the carried root's limit.
 target_sources(t5d-tests PRIVATE tests/test_steering_switches.cpp)
 
+# Register E12: Gumbel root search (a prototype, off) - the Gumbel sample, the
+# halving schedule and its state (t5d/gumbel.hpp); the search's arm is in
+# mcts.cpp. Not one of the truth's sources.
+target_sources(t5d_core PRIVATE src/gumbel.cpp)
+target_sources(t5d-tests PRIVATE tests/test_gumbel.cpp)
+
 # D2's tree form against the ply split on recorded games' turn starts:
 # evaluation counts (docs/MEASUREMENTS.md). Not one of the truth's sources.
 add_executable(t5d-tree-count tools/t5d_tree_count.cpp)

@@ -139,6 +139,14 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
     throw std::invalid_argument(
         "PlayParams::terminal_nodes: 1 or more (UINT64_MAX: exact) - the game loop's node budget (H22)");
   }
+  if (sp.gumbel_root) {
+    // Register E12: this loop chooses by visits or by E5/E9 and carries its
+    // tree; a Gumbel root's choice is choose_gumbel and its search one
+    // decision's, and its record (the generator's arm) is not built.
+    throw std::invalid_argument(
+        "PlayParams::search.gumbel_root: the game loop does not drive a Gumbel root (register E12) - its choice is "
+        "Search::choose_gumbel, and the generator's arm (its record) is not built");
+  }
   if (params.guard_final && !sp.proof_channel) {
     throw std::invalid_argument(
         "PlayParams::guard_final: Guard's refutation is a proof, and no proof may change play until the proof "

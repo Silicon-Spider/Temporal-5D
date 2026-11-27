@@ -51,6 +51,17 @@ rule or a search decision.
   given to ``begin`` as the effort head's 16 probabilities
   (``effort``; none: inert). ``Search.set_deadline`` gives the rules engine's calls inside
   a batch the hard bound; ``Search.run_timed`` is a timed decision with a built-in evaluator.
+* **Gumbel root search (register E12; a prototype, off).** ``gumbel_root=1`` with
+  ``gumbel_simulations`` (the playout cap less one) gives a self-play search's root a Gumbel
+  sample of ``gumbel_m`` moves and sequential halving over them (Danihelka et al., ICLR 2022;
+  ``t5d/gumbel.hpp``); the move to play is ``Search.choose_gumbel()``. The engine refuses it
+  with the flat split, root noise, a root policy temperature, a policy temperature or unknown
+  prior scale other than 1 (the root's logits are then the network's raw ones up to a constant,
+  as I21's target reads them), the asset map (on by default: pass ``asset_map=0``), Hunt's
+  suggestions and the proof channel (and ``gumbel_c_visit`` or ``gumbel_c_scale`` above 1e6,
+  with or without the flag), and refuses ``choose``, a ``choose_by_visits`` temperature and the
+  re-roots under it. The generator's arm (its policy
+  target, the root value under halving) is not built (build-log issue 416).
 * **Lifetimes.** A leaf's pointers live until the next ``gather``, ``deliver``, ``abandon``
   or ``close``: ``leaf_expansion`` copies at once (``Expansion.from_c``). ``close`` (or the
   context manager, or garbage collection) releases the handle.
@@ -510,6 +521,15 @@ class Search:
             raise ValueError("random must be in [0, 1)")
         index = c_size_t()
         self._lib.call("t5d_search_choose_by_visits", self._live(), c_double(temperature), c_double(random), byref(index), error=True)
+        return int(index.value)
+
+    def choose_gumbel(self) -> int:
+        """Register E12 (Gumbel root search; ``gumbel_root`` on): the move to play - the open
+        candidate with the largest ``g + ln prior + sigma(completed q)`` - as a root child's index
+        (``t5d_search_choose_gumbel``). Refused without the flag, before a draw, on a terminal root,
+        while a batch waits, or with no candidate left."""
+        index = c_size_t()
+        self._lib.call("t5d_search_choose_gumbel", self._live(), byref(index), error=True)
         return int(index.value)
 
     def verify(self, index: int, seconds: float = 0.0, *, checks: int = T5D_NO_LIMIT, nodes: int = T5D_NO_LIMIT) -> int:
