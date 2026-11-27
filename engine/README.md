@@ -3242,8 +3242,16 @@ place to the next open edge of the order - still an exact sample without replace
 and in a later phase is only dropped; with every survivor lost, the open edges already
 sampled are searched. A phase's scores need its visits' values, so when every survivor's
 visits for the phase are out but some are not back, selection waits: the batch ends
-short there (`Selected::Wait`, no collision counted) - at most once a phase, and the
-allocation is exactly the schedule's whether batched or synchronous. The halving's own
+short there (`Selected::Wait`, no collision counted) - at most once a phase. The root's
+pick counts an edge's virtual loss as its visits in flight, and a collision's never
+becomes a visit, so a collision under a Gumbel root ends the batch too (at most one a
+batch): the colliding candidate was the pick, with the fewest visits, and nothing can go
+to it until the batch's evaluations return. So the allocation is exactly the
+synchronous search's - each candidate's visits, ranked, the last two's included (before
+the review of 2026-11-27, EC-1, a collision counted as a visit in flight left them
+48 and 50 where the synchronous search gives 49 and 49). Which candidates survive a
+halving can differ between the two: it reads their values, and below the root a
+batch's leaves are chosen under virtual loss, not after each other's values. The halving's own
 buffers are reserved at the draw: selection allocates nothing. The draw is made before
 `set_priors`' commit point and adopted with it by a nothrow move (issue 535's
 discipline): an expansion that throws leaves the root a leaf and the next one draws the
@@ -3282,7 +3290,10 @@ the sample in its order with the schedule's visits (and edges outside it unvisit
 choice the argmax of the scores recomputed from `root_children()`, `v_mix` recomputed
 from them on a search cut mid-phase; a planted move found for 20 seeds; one simulation a
 sample of the prior (400 seeds, within 5 standard errors); unknown candidates verified
-at their first visit and an illegal one replaced; batched and synchronous alike; the
+at their first visit and an illegal one replaced; batched and synchronous alike (each
+candidate's visits, ranked, over 240 pairs - both splits, batches of 8, 32 and 128, 20
+seeds, the Random and the uniform evaluators; edge by edge under the uniform one) and
+at most one wait a phase and one collision a batch, every short batch ending at one; the
 tree form and MCGS, interior nodes still widening; a one-move root and a mated one;
 every allocation of the root's first delivery failing in turn, each surfaced, the
 invariants held and the same sample and visits after; a timed decision and the game loop

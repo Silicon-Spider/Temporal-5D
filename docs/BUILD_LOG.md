@@ -90,7 +90,7 @@ where the spec is silent; each has its spec issue below.
 | 17 | Sequential halving's rounding (Karnin et al.): ceil(log2 m) phases, max(1, floor(n / (phases x survivors))) visits each a phase, the visits left over and any past n to the last two | 415 (b) |
 | 18 | The root's logit is ln of the search's root prior, held to the network's raw logit less one constant: a root policy temperature, a policy temperature or an unknown-move scale other than 1 is refused; a legal submit the network gives no logit takes `submit_share`, as I21's target reads the record's | 415 (c) |
 | 19 | n is a parameter the driver sets - its playout cap less one; 0 refused | 415 (d) |
-| 20 | Under batching a phase waits for its pending visits: the batch ends short, at most once a phase | 415 (e) |
+| 20 | Under batching a phase waits for its pending visits: the batch ends short, at most once a phase; a collision under the root ends the batch too, so the allocation is exactly the synchronous search's (which candidates survive can differ: the halving reads values, and a batch's leaves below the root are chosen under virtual loss) | 415 (e) |
 | 21 | A candidate lost in the first phase is replaced by the next of the sample's order; in later phases only dropped | 415 (f) |
 | 22 | Re-roots refused under the arm; MCGS and the tree form allowed | 415 (g) |
 | 23 | A timed decision is refused at `TimeManager::begin` (every timed decision's start, Python's timed loop included), not in `validate` or `run_timed` alone; the C++ game loop refuses the arm | 415 (h), (i) |
@@ -787,7 +787,7 @@ pushed after every commit, taking main by merge, never rebase (re-check with `gi
   search, part 1 - the engine arm, off (issue 415; edits 312-315; the generator's arm designed
   and waiting on two questions, issue 416) - built: the pure parts, the search's arm, the C API
   and the binding. Its three-pass review's fix round (2026-11-27; issue 415's review round): main
-  c2f9013 merged first; SF-1 and EC-3 fixed; EC-1/EC-2, the tests (TP-1), SF-2 to SF-7 and the
+  c2f9013 merged first; SF-1, EC-3, EC-1 and EC-2 fixed; the tests (TP-1), SF-2 to SF-7 and the
   minor points, the checks and the survivors' re-run next.
 - `lane/search` (from main 2b752ba, 2026-10-23) - E10 redone and merged (Hunt under 100
   boards, the settling scans under 50, the asset map - off in self-play until I2's steered
@@ -6904,7 +6904,23 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     batch ends short (`Selected::Wait`) - the halving needs those values, and waiting keeps the
     allocation exactly the schedule's, batched or synchronous. At most once a phase. (The plan
     returned a collision there; a wait of its own ends the batch at once instead of selecting up
-    to `max_leaves` times more for nothing, and counts no collision.)
+    to `max_leaves` times more for nothing, and counts no collision.) The root's pick counts an
+    edge's virtual loss as visits in flight, and a collision's never becomes a visit: since the
+    review of 2026-11-27 (EC-1, EC-2) a collision under a Gumbel root ends the batch as well.
+    Counted as in flight, it had left the last two 48 and 50 where the synchronous search gives
+    49 and 49 (10 of 20 seeds unequal at batches of 128) and had made a phase wait twice (phase 0
+    in all 12 runs at gathers of 24). The colliding candidate was the pick - the fewest visits -
+    and would be the pick again, so nothing could go to it before the batch's evaluations
+    return; ending the batch there, rather than adding a counter to tell a collision's virtual
+    loss from a leaf's, keeps every pick's count to the leaves actually pending. So each
+    candidate's visits, ranked, are the synchronous search's (240 pairs: both splits, batches of
+    8, 32 and 128, seeds 0-19, the Random and the uniform evaluators), a phase waits at most once,
+    and every short batch ends at a wait or at its one collision. Which candidates survive a
+    halving can still differ from the synchronous search's (83 of the 120 Random pairs): the
+    halving reads the candidates' values, and below the root a batch's leaves are chosen under
+    virtual loss, not after each other's values - batched search itself, not the allocation;
+    under the uniform evaluator (equal values) every candidate's visits and the choice are the
+    synchronous search's.
     (f) A candidate found illegal at its first visit, or a dead end, gives its place in the first
     phase to the next open edge of the order - still an exact sample without replacement - and in
     a later phase is only dropped; with every survivor lost, the open edges already sampled are
@@ -6981,6 +6997,18 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
       refusals - the search's and `Root::make`'s - and sigma finite at both caps),
       `gumbel_nan_scores_order_last_in_the_choice_and_the_halving`. `Root::score` is private (only
       `best` and `halve` call it, with open edges; the correctness pass's minor point).
+    - **EC-1** (MEDIUM; under batching the last two did not split their visits equally) and
+      **EC-2** (LOW; "at most once a phase" was false with collisions): a collision under a Gumbel
+      root ends the batch (reading (e)), so no pick counts a collision's virtual loss. Tests:
+      `mcts_gumbel_batched_allocation_is_the_synchronous_one` (the review's
+      `rv_batched_vs_sync_random` and `rv_last_phase_imbalance`: 240 pairs, every one equal;
+      before the fix 24 unequal) and `mcts_gumbel_waits_at_most_once_a_phase` (the review's
+      `rv_search_waits_per_phase`, its bound tightened: at most one wait a phase, at most one
+      collision a batch, every short batch ending at one or the other; 48 runs, 122 waits, 64
+      batches ended by a collision); `mcts_gumbel_batched_and_synchronous_allocate_alike`'s bound
+      tightened to the three halvings' waits. Each fails with the fix taken out. The claim kept
+      ("at most once a phase") is now true; the README's, row 20's and reading (e)'s text say what
+      ends a batch and what may still differ (the survivors, not the visits).
 
 416. **Register E12 (Gumbel root search), part 2 - the training generator's arm: designed, not built;
     two questions for the user** (register E12, I21, D3, D4, I13, I15, I18; §8.4, §12.2, §12.8;
@@ -10787,7 +10815,8 @@ repository's copies, which upstream has still to take:
     50, c_scale 1, q mapped onto [0, 1], each constant at most 1e6 (a placeholder cap, so that σ
     stays finite); an unvisited candidate's completed q is v_mix. A candidate
     lost in the first phase gives its place to the next of the order; later ones are only dropped.
-    A batch waits for its phase's pending visits. Refused with the flat form, root noise, a root
+    A batch waits for its phase's pending visits (at most once a phase), and a collision under the
+    root ends the batch, so the allocation is the synchronous search's. Refused with the flat form, root noise, a root
     policy temperature, a policy temperature or unknown-move scale other than 1, the asset map's
     and Hunt's root steering, the proof channel, re-roots,
     match play's choice, a move temperature, a timed decision and the C++ game loop. MCGS and the
@@ -10804,7 +10833,8 @@ repository's copies, which upstream has still to take:
     after the second: "One found illegal (or a dead end) in the first phase gives its place to the
     next move of the sample's order - still a sample without replacement - and later is only
     dropped. A phase's scores wait for its visits' values: under batching, selection waits rather
-    than spending visits the schedule has not given. The logit is that of the root's prior, with
+    than spending visits the schedule has not given, and a collision ends the batch, so the visits
+    are exactly the synchronous search's. The logit is that of the root's prior, with
     the policy temperature and the unknown-move scale held at 1 (refused otherwise), so it is the
     network's raw logit up to one constant - I21's; the root policy temperature is replaced, not
     compounded. The schedule's rounding, the simulation

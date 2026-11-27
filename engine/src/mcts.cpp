@@ -3344,6 +3344,16 @@ struct Search::Impl {
         if (s == Selected::Done) {
           ++done;
         } else if (s == Selected::Collision) {
+          // Register E12: under a Gumbel root a collision ends the batch. The
+          // root's pick counts an edge's virtual loss as its visits in flight;
+          // a collision's never becomes a visit, so no collision path may be
+          // in flight when the root picks (the review of 2026-11-27, EC-1).
+          // The colliding candidate was the pick - the fewest visits - and
+          // would be the pick again: until this batch's evaluations return,
+          // nothing could go to it, and while the pick takes the fewest (as
+          // the synchronous search does) nothing goes to another. A Wait's
+          // reason (the halving's) and this one each end the batch at once.
+          if (gumbel_.active()) break;
           if (++collisions >= max_leaves) break;
         } else if (s == Selected::Wait) {
           break;  // register E12: the halving waits for this batch's visits

@@ -923,7 +923,9 @@ TEST(mcts_gumbel_verifies_unknown_candidates_at_their_first_visit) {
 
 TEST(mcts_gumbel_batched_and_synchronous_allocate_alike) {
   // The schedule is exact either way: the halving waits for its phase's pending visits, ending
-  // the batch short (at most once a phase) - the uniform evaluator, so the choice is the same too.
+  // the batch short (at most once a phase; a collision ends one too) - the uniform evaluator, so
+  // the choice is the same too. Batches of 8 divide this search's phases (48, 48, 48): it never
+  // waits, and no selection under the root collides.
   const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
   mcts::SearchParams batched = gumbel_params(200);
   batched.batch_size = 8;
@@ -943,7 +945,144 @@ TEST(mcts_gumbel_batched_and_synchronous_allocate_alike) {
                static_cast<unsigned long long>(st.batches), static_cast<unsigned long long>(st.evaluations),
                static_cast<unsigned long long>(st.collisions));
   CHECK(st.batches >= full);
-  CHECK(st.batches <= full + 4 + st.collisions + 1);  // four phases' waits
+  CHECK(st.batches <= full + 3);  // at most the three halvings' waits (the review of 2026-11-27, EC-2)
+}
+
+TEST(mcts_gumbel_waits_at_most_once_a_phase) {
+  // EC-2 (the review of 2026-11-27; the correctness pass's rv_search_waits_per_phase, adopted,
+  // its bound tightened): a phase's batch ends at a halving's wait at most once - before EC-1's
+  // fix a collision counted as a visit in flight made a phase wait again (twice in phase 0 in all
+  // 12 runs at gathers of 24). A collision under a Gumbel root now ends its batch (at most one a
+  // batch), and every short batch ends at one or the other. Through the step API: gathers of 5,
+  // 7, 24 and 32, the Random evaluator, seeds 1-6, both splits.
+  int runs = 0, waits = 0;
+  std::uint64_t collision_ends = 0;
+  for (const mcts::TurnSplit split : {mcts::TurnSplit::BoardMove, mcts::TurnSplit::Tree}) {
+    for (std::uint64_t seed = 1; seed <= 6; ++seed) {
+      for (const std::size_t k : {std::size_t{5}, std::size_t{7}, std::size_t{24}, std::size_t{32}}) {
+        const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Random, seed);
+        mcts::SearchParams p = gumbel_params(200, 16, seed);
+        p.split = split;
+        mcts::Search s(standard(), p);
+        std::map<std::size_t, int> per_phase;
+        constexpr std::uint64_t kCap = 201;
+        for (int b = 0; b < 1000 && s.stats().playouts < kCap; ++b) {
+          const bool drawn = s.gumbel_view().drawn;
+          const std::uint64_t p0 = s.stats().playouts;
+          const std::uint64_t c0 = s.stats().collisions;
+          const std::size_t n = s.gather(k, kCap - p0);
+          const std::uint64_t done = s.stats().playouts - p0;
+          const std::uint64_t coll = s.stats().collisions - c0;
+          const bool cut = n + done >= k || n + done >= kCap - p0;  // full, or the cap's
+          if (drawn) {
+            CHECK(coll <= 1);
+            const gumbel::RootView v = s.gumbel_view();
+            // A halving's wait, read after the gather: every considered candidate's visits and
+            // visits in flight at the target, one's visits below it, the phase not the last.
+            bool wait = false;
+            if (!cut && coll == 0 && v.phase + 1 < v.schedule.size()) {
+              std::uint64_t target = 0;
+              for (std::size_t r = 0; r <= v.phase; ++r) target += v.schedule[r].visits;
+              bool all_out = true, some_back = false;
+              for (std::size_t i = 0; i < v.rows.size(); ++i) {
+                if (!v.rows[i].considered) continue;
+                const mcts::EdgeView e = s.edge(s.root(), i);
+                all_out = all_out && e.visits + e.virtual_loss >= target;
+                some_back = some_back || e.visits < target;
+              }
+              wait = all_out && some_back;
+            }
+            if (wait) ++per_phase[v.phase];
+            waits += wait ? 1 : 0;
+            collision_ends += coll;
+            CHECK(cut || wait || coll == 1);  // a short batch ends at a wait or a collision
+          }
+          if (n == 0) {
+            REQUIRE(done > 0);  // a gather with no leaf completed visits: never stuck
+            continue;
+          }
+          std::vector<mcts::Evaluation> out(n);
+          ev->evaluate(s.requests(), out);
+          s.deliver(out);
+        }
+        ++runs;
+        CHECK_EQ(s.stats().playouts, kCap);
+        CHECK(root_visits(s) == multiset({{3, 8}, {9, 4}, {21, 2}, {49, 2}}));
+        for (const auto& [phase, w] : per_phase) CHECK(w <= 1);
+        CHECK_NOTHROW(s.check_invariants());
+      }
+    }
+  }
+  std::fprintf(stderr, "  %d runs: %d halving waits, %llu batches ended by a collision\n", runs, waits,
+               static_cast<unsigned long long>(collision_ends));
+  CHECK_EQ(runs, 48);
+  CHECK(waits > 0);
+  CHECK(collision_ends > 0);
+}
+
+TEST(mcts_gumbel_batched_allocation_is_the_synchronous_one) {
+  // EC-1 (the review of 2026-11-27; the correctness pass's rv_batched_vs_sync_random and
+  // rv_last_phase_imbalance, adopted): batched, the visits are the synchronous search's. The
+  // root's pick counts an edge's virtual loss as visits in flight, and a collision's never
+  // becomes one - before the fix the last two split 48 and 50 where the synchronous search
+  // gives 49 and 49 (seed 6, batches of 32; 10 of 20 seeds unequal at batches of 128); a
+  // collision under a Gumbel root now ends the batch. Seeds 0-19, batches of 8, 32 and 128,
+  // both splits:
+  // - the Random evaluator (keyed by position): each candidate's visits, ranked, are the
+  //   synchronous search's and the schedule's - the last two 49 and 49. Which candidates
+  //   survive a halving may differ: it reads their values, and below the root a batch's leaves
+  //   are chosen under virtual loss, not after each other's values (counted, not checked);
+  // - the uniform evaluator (every value 0, so the halving keeps the same candidates): each
+  //   candidate's visits, edge by edge, and the choice are the synchronous search's.
+  int compared = 0, unequal = 0, other_survivors = 0;
+  for (const bool uniform : {false, true}) {
+    for (const mcts::TurnSplit split : {mcts::TurnSplit::BoardMove, mcts::TurnSplit::Tree}) {
+      for (const std::size_t batch : {std::size_t{8}, std::size_t{32}, std::size_t{128}}) {
+        for (std::uint64_t seed = 0; seed < 20; ++seed) {
+          const std::unique_ptr<mcts::Evaluator> ev =
+              mcts::make_evaluator(uniform ? mcts::BuiltinEvaluator::Uniform : mcts::BuiltinEvaluator::Random, seed);
+          mcts::SearchParams b = gumbel_params(200, 16, seed);
+          b.split = split;
+          b.batch_size = batch;
+          mcts::SearchParams y = b;
+          y.synchronous = true;
+          mcts::Search x(standard(), b);
+          mcts::Search z(standard(), y);
+          x.run(*ev, mcts::Limits{201});
+          z.run(*ev, mcts::Limits{201});
+          ++compared;
+          const std::vector<mcts::RootChild> cx = x.root_children();
+          const std::vector<mcts::RootChild> cz = z.root_children();
+          REQUIRE_EQ(cx.size(), cz.size());
+          bool same_ranked = root_visits(x) == root_visits(z);
+          CHECK(root_visits(x) == multiset({{3, 8}, {9, 4}, {21, 2}, {49, 2}}));
+          bool same_by_edge = true;
+          for (std::size_t i = 0; i < cx.size(); ++i) {
+            CHECK(cx[i].moves == cz[i].moves);  // one sample, one order
+            same_by_edge = same_by_edge && cx[i].visits == cz[i].visits;
+          }
+          if (uniform) {
+            same_ranked = same_ranked && same_by_edge && x.choose_gumbel() == z.choose_gumbel();
+          } else {
+            other_survivors += same_by_edge ? 0 : 1;
+          }
+          if (!same_ranked) {
+            ++unequal;
+            std::string d;
+            for (std::size_t i = 0; i < cx.size(); ++i) d += std::to_string(cx[i].visits) + "/" + std::to_string(cz[i].visits) + " ";
+            std::fprintf(stderr, "  %s %s batch %zu seed %llu: batched/sync %s\n", uniform ? "uniform" : "random",
+                         split == mcts::TurnSplit::Tree ? "tree" : "board-move", batch,
+                         static_cast<unsigned long long>(seed), d.c_str());
+          }
+          CHECK_NOTHROW(x.check_invariants());
+        }
+      }
+    }
+  }
+  std::fprintf(stderr, "  %d pairs, %d unequal; under the random evaluator %d of 120 kept other survivors\n", compared,
+               unequal, other_survivors);
+  CHECK_EQ(compared, 240);
+  CHECK_EQ(unequal, 0);
 }
 
 TEST(mcts_gumbel_under_the_tree_form_and_the_graph) {

@@ -93,7 +93,11 @@ std::vector<Phase> halving_schedule(std::size_t m, std::uint64_t n);
 struct Action {
   double prior = 0;         ///< the root's prior (its logit: ln prior)
   std::uint32_t visits = 0;  ///< completed visits
-  std::uint32_t pending = 0;  ///< visits in flight (virtual loss)
+  /// Visits in flight: the search passes the edge's virtual loss, which at
+  /// a pick is its leaves awaiting evaluation alone - a collision under a
+  /// Gumbel root ends the batch, so no collision path (whose virtual loss
+  /// never becomes a visit) is counted.
+  std::uint32_t pending = 0;
   double q = 0;             ///< backed-up W - L, the root player's view; read only where visits > 0
   bool open = false;        ///< may be taken: not pruned, not a dead end, prior > 0
 };

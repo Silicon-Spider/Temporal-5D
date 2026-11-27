@@ -203,7 +203,10 @@
 // A candidate of unknown legality is verified at its first visit, as under
 // PUCT; one found illegal in the first phase gives its place to the next of
 // the sample. A phase's scores wait for its pending visits: the batch ends
-// short there. Not under the flat form (register part K: open until 6x).
+// short there; a collision under the root ends it too (a collision's virtual
+// loss never becomes a visit, and the root's pick counts virtual loss as
+// visits in flight), so the allocation is the synchronous search's. Not
+// under the flat form (register part K: open until 6x).
 //
 // VIRTUAL LOSS (§15.4): leaves are gathered in batches; each path carries one
 // virtual visit, counted as a loss, on every node and edge it crosses, and the

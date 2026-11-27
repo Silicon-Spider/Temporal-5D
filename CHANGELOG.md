@@ -10,6 +10,37 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-27 - Register E12's review round: batched allocation exactly the synchronous one (EC-1, EC-2)
+
+- **EC-1 (MEDIUM): under batching the last two survivors did not split their visits equally.**
+  The root's pick counts an edge's virtual loss as its visits in flight, and a collision's
+  virtual loss is released at the batch's end without becoming a visit: the last two ended 48
+  and 50 where the synchronous search gives 49 and 49 (seed 6, batches of 32; 10 of 20 seeds
+  unequal at batches of 128). Under a Gumbel root a collision now ends the batch (`gather`,
+  `mcts.cpp`): the colliding candidate was the pick, with the fewest visits, and would be the
+  pick again, so nothing could go to it before the batch's evaluations return - and no pick ever
+  counts a collision path. No counter was needed. New test
+  `mcts_gumbel_batched_allocation_is_the_synchronous_one` (the correctness pass's
+  `rv_batched_vs_sync_random` and `rv_last_phase_imbalance`, adopted): 240 pairs - both splits,
+  batches of 8, 32 and 128, seeds 0-19, the Random and the uniform evaluators - each candidate's
+  visits, ranked, the synchronous search's and the schedule's; under the uniform evaluator edge by
+  edge and the choice too. Under the Random one the halving keeps other survivors in 83 of 120
+  pairs: it reads the candidates' values, and below the root a batch's leaves are chosen under
+  virtual loss - batched search itself, not the allocation (counted, not checked).
+- **EC-2 (LOW): "at most once a phase" was false with collisions.** With EC-1's fix a phase
+  waits at most once; the claim stands, now pinned by `mcts_gumbel_waits_at_most_once_a_phase`
+  (the correctness pass's `rv_search_waits_per_phase`, its bound tightened: at most one wait a
+  phase, at most one collision a batch, every short batch ending at one or the other; gathers of
+  5, 7, 24 and 32, seeds 1-6, both splits). `mcts_gumbel_batched_and_synchronous_allocate_alike`'s
+  bound drops its `+ collisions`. Both new tests fail with the fix taken out.
+- Documents: `gumbel.hpp`'s `Action::pending`, `mcts.hpp`'s header note, the README's "Selection
+  and batches" and tests; the build log's readings row 20 and issue 415 (e), its review block,
+  the lane's line.
+
+Spec: §8.4 (sequential halving's equal visits), register E12 - proposed edits 312 and 314 gain the
+collision rule (a batch ends at a halving's wait or a collision under the root; the allocation the
+synchronous search's). No new edit; no measured figure for MEASUREMENTS (test counts only).
+
 ### 2026-11-27 - Register E12's review round: the root's logits held to I21's, sigma's constants capped (SF-1, EC-3)
 
 The fix round of register E12 part 1's three-pass review (spec, correctness, mutation; the main
