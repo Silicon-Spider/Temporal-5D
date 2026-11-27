@@ -266,6 +266,23 @@ The embedding runs in FP32 under either trunk (it precedes the trunk's autocast)
 not follow the trunk's precision. Lc0's "5% latency" is a GPU figure for a different network and is
 not compared.
 
+**The table, quiet - command; not yet measured on a quiet machine.** The table above was timed by
+a script the repository does not hold. Since 2026-11-28 (`lane/search`) the bench does it:
+`--embed` times `T5DNet.embed_tokens` alone on the pass's position (`embed_ms`, beside the
+forward's `seconds`), and `--repeat 5` runs the block five times, the arms' order reversed every
+other repetition, then prints each arm's medians and minima (`"summary": "median"` lines). The
+table's arms are "n2-default" (off), "6p-layout-ff8" (A8) and "a8-no-ffn" (A8 without FFN,
+`layout_ffn_ratio = 0`); "6p-layout-ff1" (the next section) goes beside them. From `python/`:
+
+```
+python -m t5d.net.bench --config n2-default 6p-layout-ff8 a8-no-ffn 6p-layout-ff1 --boards 44 240 --dtype bf16 fp32 --embed --repeat 5
+```
+
+One difference from the table's protocol: each pass runs in a fresh process, which builds its
+arm, warms it on a 2-board position, times one forward, then times the embedding of the same
+position (warm: the forward has just embedded it). The table built each arm once and timed it
+five times in one process. PyTorch's default threads (12), as the table used.
+
 ### A8's FFN at 1x - ablation 6p's second arm, counted (2026-11-22; no threshold, no verdict)
 
 **What it is.** §2.2 since the 2026-11-15 review: "the FFN's width is part of the arm: 6p tests it
@@ -311,6 +328,27 @@ this arm is the figure it named.
 
 **Wall time: not measured** - the machine was loaded. For the quiet-machine block: `python -m
 t5d.net.bench --config n2-default 6p-layout-ff8 6p-layout-ff1 --boards 44 240` (from `python/`).
+The A8 section's quiet command (above, 2026-11-28) runs this arm too, with the embedding's time
+and five repetitions.
+
+### FFN 2x and 4x - wall time against the v1's 8x (command; not yet measured on a quiet machine)
+
+**What it will measure.** Section 15.3's row "FFN ratio 2× and 4× | 1.39× and 1.23× evals/s at 44
+boards | 9.2 | estimated → to measure". Section 9.2's table prices the trunk's FFN ratio against the
+v1's 8x at 44 boards - cost 0.81 (4x) and 0.72 (2x), evaluations/s 1.23x and 1.39x - from the
+analytic FLOP model; ablation 5's arm (2x against 8x at matched compute) is a trained comparison and
+not this row. The arms (2026-11-28, `lane/search`): `bench.CONFIGS`' "ffn-4x" and "ffn-2x", the v1
+default with `ffn_ratio` 4 and 2 (`d_ffn` 1,024 and 512 against 2,048), every other setting the
+v1's - "n2-default" is the baseline. The figure is the forward's wall-time ratio, n2-default's over
+the arm's, per board count and precision: CPU-labelled (the row's evaluations/s are a GPU
+figure's).
+
+**Command** (from `python/`; one pass per subprocess, the A8 section's protocol - five
+repetitions, the order reversed every other one, medians and minima printed per arm):
+
+```
+python -m t5d.net.bench --config n2-default ffn-4x ffn-2x --boards 44 240 --dtype fp32 bf16 --repeat 5
+```
 
 ### A5 - piece-centric tokens: token counts on the human games, counted FLOPs (2026-10-23)
 
@@ -409,6 +447,15 @@ of 44 boards the linear terms are about half the cost, so a 1.96x token cut buys
 44-board human position, 4 torch threads, one warm-up then five forwards each: A1 5.65 s, A5 1.90 s
 (medians; **3.0x**). The machine was loaded (other lanes' jobs; Windows' processor load 96%): for
 the quiet-machine block. GPU figures, varlen kernels among them, are deferred (M19).
+
+**A5's dense wall at 44 boards - command; not yet measured on a quiet machine.** The figure above
+had no recorded command. The bench's arm "a5-piece-centric" (2026-11-28, `lane/search`): the v1
+default with `piece_centric=True`, dense scope, beside "n2-default" (A1). From `python/`: `python -m
+t5d.net.bench --config n2-default a5-piece-centric --boards 44 --dtype bf16 --threads 4 --repeat 5`
+(the F1 network as shipped, BF16; the figure above's 4 threads and five forwards, as medians). Its
+position is the bench's synthetic one, not the human position above: `synthetic_state(0, 44)` has
+2,920 A1 tokens and 1,378 A5 tokens (2.12x fewer, against the human position's 1.96x), so its ratio
+is not the figure above re-measured.
 
 **Against §14.4's estimates (the 2x rule) - re-stated under CHECKPOINT 9's C26, on the
 legal-destination set §14.4 speaks of** ("only head boards carry the full legal-destination set";
@@ -938,6 +985,50 @@ varlen kernels), which stay deferred to NVIDIA time (M19). The head-width findin
 on the sdpa path at 44 boards, 1.2-2.2x on block_sparse) is device-neutral in form and is the
 network lane's to take or leave (issue 521).
 
+### F1's CPU evaluation rate - self-play through the engine (command; not yet measured on a quiet machine)
+
+**What it will measure.** §15.6 cites "the only rate today is the CPU's, 6.9 evaluations/s for
+F1". The figure comes from stage N5's end-to-end run (CHANGELOG, 2026-10-04, machine `dev`: 20
+games, F1 at 21,359,370 parameters in BF16, 0.60 decisions/s and 6.9 evaluations/s). Its
+command, games, variants and threads were not recorded, and it predates E10's provers and the
+flat form. Since 2026-11-28 (`lane/search`) `python -m t5d.engine.evalrate` gives the figure a
+command. It plays a fixed number of self-play games with the v1 network at random weights
+through the engine (`netplay.play_game`: the engine's search through the C step API). Seeds,
+variants, splits and threads are fixed.
+
+The provers are off by default: no Hunt, no settling scans, no asset map. The figure is the
+network's own rate within the search. `--provers` turns all three on. The game loop's exact
+questions (H22's turn-start verdict and move verification) stay on; they are the game's.
+
+Its first output line is the full configuration: the network's every field and parameter count,
+the game settings, the seeds, PyTorch's threads, the machine, the engine library's file name and
+the commit. Then one line per game, then the totals:
+- `decisions_per_s` and `evaluations_per_s` over the games' wall time, as N5 reported them;
+- the network's forward passes (`forwards`) and the positions they evaluated, with
+  `positions_per_forward` and `forwards_per_s`;
+- `network_positions_per_s`, positions over the network's own seconds, with `network_share`;
+- `by_range`: the network's calls by board-count range (6b″'s ranges), each call filed under its
+  largest position, with forwards, positions, seconds and positions/s. §15.6 reads a rate per
+  board-count range; the pooled figure is the games' mix of sizes.
+
+**Command** (from `python/`; the defaults written out):
+
+```
+python -m t5d.engine.evalrate --net F1 --games 1 --variant Standard --variant "Standard - Two Timelines" --split ply --threads 4 --seed 1
+```
+
+That is 2 games: Standard and Standard - Two Timelines, the ply split, 16 playouts and batches of
+8 per decision, I11's caps at 6 turns or 80 boards (netplay's settings, as at N5), seeds 1 + 101
+g, and 4 PyTorch threads (netplay's default and the runbook's candidate).
+
+**Run time: not known.** On the shared machine (2026-11-28, load about 50% beside it), a 2-turn
+Standard game (`--cap-turns 2`) took 70 s: 16 decisions, 178 evaluations at 2.5/s, 99.9% of the
+time in the network, 15 boards at its end. A default 6-turn Standard game ran past 50 minutes
+and was stopped. Today's v1 forward costs far more on the CPU than N5's network did: B15's bias
+and M20's register rows came after N5. Budget an hour or more for the two default games, or
+bound the run with `--cap-turns`. The figure is CPU-labelled and informational. §15.6's Phase-3
+re-check stays deferred until a GPU rate exists.
+
 ## §15.6 verdicts
 
 ### Movegen throughput (M9) - pseudo-legal: PASS; with fast legality: inside the STOP band at 240 boards on one core
@@ -1271,6 +1362,22 @@ every opponent action, a product over their boards (spec issue 99). Why Hunt fai
 at 100-199: all 20 truth mates there are mates in one that Hunt's own class finds
 in the long search; its root expansion does not finish in 50 ms (issue 107; a
 lazily expanded root is the remedy, not built).
+
+**Guard's and Hunt's nodes/s - command; not yet measured on a quiet machine.** The
+run above gave nodes per root, not nodes per second (§15.3's "Prover nodes/s" row
+quotes nodes per root at 50 ms). Hunt often stops early - it proves a mate or
+exhausts its class (median 676 nodes under 50 boards) - so nodes over the 50 ms
+budget would understate it. Since 2026-11-28 (`lane/search`) the tool times Hunt
+at each root as Guard is timed - from the call to its return - and writes it
+(`"seconds"` in each position's `"hunt"` object); its summary prints, per range,
+Guard's and Hunt's sum(nodes) / sum(seconds) ("NODES PER SECOND"), and the JSON's
+per-range `guard` and `hunt` entries carry `timed_roots`, `nodes`, `seconds` and
+`nodes_per_s`. The re-run is the command above (from the repository root, after
+`build/corpus.txt` is rebuilt as `engine/README.md` says):
+`build/engine/t5d-scan6bpp --truth engine/testdata/hunt-truth --record-list
+build/corpus.txt --per-position --json build/6b/6bpp-quiet.json --summary
+build/6b/6bpp-quiet.txt` - about a minute (58.4 s on 2026-10-04). It re-reads
+M17's verdicts too (the lock changed since: build-log issue 147).
 
 **Hunt's ground truth** (ruling 5; `engine/testdata/hunt-truth/`, recorded at
 b1d0ca9, 5,097 s on 6 workers): one long offline search per root - the union of

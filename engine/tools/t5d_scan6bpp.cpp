@@ -53,6 +53,14 @@
 // Output: a summary on standard output (or --summary FILE); --json FILE with
 // every condition and figure (--per-position: every root's too).
 //
+// NODES PER SECOND (information, no verdict; the quiet-machine block): per
+// range, Guard's and Hunt's sum(nodes) / sum(seconds), each root's search
+// timed from its call to its return - Guard's by GuardResult::seconds, Hunt's
+// by the same span around Hunt::hunt (per position: "seconds" in its "hunt"
+// object; per range: "timed_roots", "nodes", "seconds", "nodes_per_s" in each
+// "guard" and "hunt" entry). Hunt often stops early, so nodes over the budget
+// would understate it.
+//
 // The tool never names a corpus or anything under the oracle harness: the
 // records come on the command line.
 
@@ -368,6 +376,9 @@ struct Result {
   std::optional<t5d::GuardResult> guard;
   // Hunt
   std::optional<t5d::HuntResult> hunt;
+  // Hunt's own wall time at this root: from the call to its return, the span
+  // GuardResult::seconds covers for Guard (its node rate's denominator).
+  double hunt_seconds = 0;
   // The cross-checks (t5d/certificate.hpp), outside the timed runs.
   std::optional<t5d::CertificateCheck> guard_check;
   std::optional<t5d::CertificateCheck> hunt_check;
@@ -532,7 +543,9 @@ int main(int argc, char** argv) {
   for (std::size_t i = 0; i < n; ++i) {
     if (!results[i].measured) continue;
     t5d::Hunt hunt(ho);
+    const Clock::time_point start = Clock::now();
     results[i].hunt = hunt.hunt(roots.roots[i].state, budget(o.hunt_ms, o.hunt_nodes));
+    results[i].hunt_seconds = std::chrono::duration<double>(Clock::now() - start).count();
     if (++done % 100 == 0) std::fprintf(stderr, "t5d-scan6bpp: Hunt %zu roots\n", done);
   }
   const double h_wall = std::chrono::duration<double>(Clock::now() - h_wall0).count();
@@ -729,6 +742,33 @@ int main(int argc, char** argv) {
   }
   line("");
 
+  // The provers' node rates (information, never a verdict): Hunt often stops
+  // early (it proves a mate or exhausts its class), so its rate is its nodes
+  // over the time it ran, not over the budget.
+  pp::NodeRate guard_rate[pp::kRanges + 1];
+  pp::NodeRate hunt_rate[pp::kRanges + 1];
+  for (std::size_t i = 0; i < n; ++i) {
+    const Result& r = results[i];
+    for (const int k : {pp::range_of(r.boards), pp::kRanges}) {
+      if (r.guard) guard_rate[k].add(r.guard->nodes, r.guard->seconds);
+      if (r.hunt) hunt_rate[k].add(r.hunt->stats.nodes, r.hunt_seconds);
+    }
+  }
+  const auto rate_text = [](const pp::NodeRate& r) {
+    if (r.roots == 0) return std::string("no roots");
+    return std::to_string(r.nodes) + " nodes / " + fmt(r.seconds, 6) + " s = " + fmt(r.per_second(), 0) +
+           " nodes/s (" + std::to_string(r.roots) + " roots)";
+  };
+  line("NODES PER SECOND - information, not a verdict: per range, sum(nodes) / sum(seconds) over the roots, each "
+       "root's nodes (every thread's) over its own wall time from the call to the return (Guard: GuardResult::seconds; "
+       "Hunt: the same span around Hunt::hunt), at " + std::to_string(o.threads) + " threads");
+  for (int k = 0; k <= pp::kRanges; ++k) {
+    if (guard_rate[k].roots == 0 && hunt_rate[k].roots == 0) continue;
+    line(std::string("  ") + (k == pp::kRanges ? pooled : pp::range_name(k)) + ": Guard " + rate_text(guard_rate[k]) +
+         "; Hunt " + rate_text(hunt_rate[k]));
+  }
+  line("");
+
   if (o.crosscheck) {
     std::map<std::string, std::size_t> gc;
     std::map<std::string, std::size_t> hc;
@@ -808,6 +848,12 @@ int main(int argc, char** argv) {
   std::fwrite(out.data(), 1, out.size(), stdout);
 
   if (!o.json.empty()) {
+    // A range's node rate, appended to its Guard or Hunt object: the sums the
+    // summary's NODES PER SECOND line divides.
+    const auto rate_json = [](const pp::NodeRate& r) {
+      return ",\"timed_roots\":" + std::to_string(r.roots) + ",\"nodes\":" + std::to_string(r.nodes) +
+             ",\"seconds\":" + fmt(r.seconds, 6) + ",\"nodes_per_s\":" + fmt(r.per_second(), 1);
+    };
     std::string j = "{\"tool\":\"t5d-scan6bpp\",\"version\":\"" T5D_VERSION_STRING "\",\"code\":\"" T5D_CODE_SIGNATURE "\"";
     j += ",\"machine\":{\"cpu\":" + json_string(cpu) + ",\"logical_processors\":" + std::to_string(logical) +
          ",\"busy_guard\":" + fmt(g_busy, 4) + ",\"busy_hunt\":" + fmt(h_busy, 4) + "}";
@@ -832,7 +878,8 @@ int main(int argc, char** argv) {
       j += std::string(k ? "," : "") + "{\"n\":" + std::to_string(g.roots) + ",\"depth_one\":" +
            std::to_string(g.depth_one) + ",\"unconfirmed\":" + std::to_string(g.unconfirmed) + ",\"refuted\":" +
            std::to_string(g.refuted) + ",\"refuted_one\":" + std::to_string(g.refuted_one) + ",\"verdict\":" +
-           json_string(k < pp::kRanges ? pp::verdict_name(pp::guard_verdict(tallies, k, o.crosscheck)) : "pooled") + "}";
+           json_string(k < pp::kRanges ? pp::verdict_name(pp::guard_verdict(tallies, k, o.crosscheck)) : "pooled") +
+           rate_json(guard_rate[k]) + "}";
     }
     j += "],\"hunt\":[";
     for (int k = 0; k <= pp::kRanges; ++k) {
@@ -844,7 +891,7 @@ int main(int argc, char** argv) {
            (k < pp::kRanges && pp::too_few_to_read(tallies, k) ? "true" : "false") + ",\"verdict\":" +
            json_string(k < pp::kRanges ? pp::verdict_name(pp::hunt_verdict(tallies, k, truth.has_value(), o.crosscheck))
                                        : "pooled") +
-           "}";
+           rate_json(hunt_rate[k]) + "}";
     }
     j += "]";
     if (o.per_position) {
@@ -870,7 +917,8 @@ int main(int argc, char** argv) {
           j += ",\"hunt\":{\"mate\":" + std::string(r.hunt->mate ? "true" : "false") + ",\"proof\":" +
                json_string(r.hunt->mate ? t5d::to_string(r.hunt->proof) : std::string()) + ",\"nodes\":" +
                std::to_string(r.hunt->stats.nodes) + ",\"check\":" +
-               json_string(r.hunt_check ? t5d::certificate_verdict_name(r.hunt_check->verdict) : "-") + "}";
+               json_string(r.hunt_check ? t5d::certificate_verdict_name(r.hunt_check->verdict) : "-") +
+               ",\"seconds\":" + fmt(r.hunt_seconds, 6) + "}";
         }
         if (truth && r.truth_row >= 0) {
           j += ",\"truth\":" + json_string(truth->roots[static_cast<std::size_t>(r.truth_row)].verdict);
