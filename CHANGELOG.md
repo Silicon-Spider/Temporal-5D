@@ -10,6 +10,25 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-28 - The network job: C27's full matrix in files of its own, shards weighed by cost, six shards (issue 605)
+
+CI's network job timed out on decision 7's merge (d470681): shard 1 of 4 passed its 90 minutes
+while the other three finished in 26-52. The split weighed every test alike, and
+`tests/net/test_turn_refresh.py` alone - section 15.2's C27 row, T6's whole matrix, with A5's
+rows since decision 7 - took 3,041 s on the development machine, about 1.9x that on a runner.
+- `python/tests/net/test_turn_refresh_matrix.py` and `test_turn_refresh_matrix_a5.py` (new): the
+  two slow full-matrix tests, moved unchanged (A1's and A5's), importing T6 and its helpers from
+  `test_turn_refresh.py`, which keeps the per-commit cases and says where the rest went. 54 + 21 +
+  21 = the 96 tests the file had.
+- `python/tests/conftest.py`: the shard split weighs each file by estimated cost - measured seconds
+  for the seven heaviest files met (`_FILE_SECONDS`, 2026-11-28), 1.5 s per test for the rest -
+  still whole files, still the same split on every job.
+- `.github/workflows/network.yml`: six shards; each prints its 40 slowest tests (`--durations=40`).
+- Checked: collection over the six shards gives 2,793 tests, disjoint, their union the whole, each
+  estimated at about 1,216 s locally; one case of each new file passes locally.
+
+Spec: no part of the spec describes the CI job.
+
 ### 2026-11-28 - Build log: the current state at step 2's network re-run merge
 
 `docs/BUILD_LOG.md`: `lane/net`'s line under "Now" says the v1 re-run of section 15.2's network

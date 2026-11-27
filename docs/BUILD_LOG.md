@@ -9385,6 +9385,22 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     a job's prover risks the deque corruption). The fix, when it can be tested: let
     `std::bad_alloc` through uncounted and unreported. No spec text describes the ladder's
     counters.
+605. **The network job's shard 1 of 4 passed its 90 minutes after decision 7's merge** (CI:
+    `.github/workflows/network.yml`, `python/tests/conftest.py`; the main loop, 2026-11-28; run
+    46052141668 on d470681, cancelled at the limit while the other three shards passed in 26-52
+    minutes). The split weighed every test alike (issue 601), and `tests/net/test_turn_refresh.py`
+    - section 15.2's C27 row, T6's whole matrix, with A5's rows since decision 7 - took 3,041 s
+    alone on the development machine (one process; CI's runners took about 1.9x), more than a
+    shard's limit by itself: its four T6 tests were 2,903 s of it, and A5's two added 940 s.
+    Fixed, nothing given up: the two slow full-matrix tests moved unchanged into files of their
+    own (`test_turn_refresh_matrix.py`, A1's, 1,203 s; `test_turn_refresh_matrix_a5.py`, A5's,
+    812 s; they import T6 and its helpers from `test_turn_refresh.py`, which keeps the per-commit
+    cases - 54 + 21 + 21 = the 96 tests it had); the split weighs files by estimated cost -
+    measured seconds for the seven heaviest files met (`_FILE_SECONDS`), 1.5 s per test for the
+    rest; the job runs six shards, and each prints its 40 slowest tests (`--durations=40`) so that
+    the weights can be re-measured when a shard nears the limit. Checked by collection at the fix:
+    2,793 tests in six disjoint shards whose union is the whole, each estimated at about 1,216 s
+    on the development machine (about 39 minutes on a runner). No spec text describes the CI job.
 
 <!-- A new list, so that the numbers from 700 render as written. -->
 

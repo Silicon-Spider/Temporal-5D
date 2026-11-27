@@ -21,7 +21,9 @@ per board (with its past and its perspective, register A7) and epoch, and shared
   Every geometry of ``test_cache.py``, both C20 readings, three epochs - causal, a root refresh, and
   a node refresh at the first evaluated node below the root (supersession inside a refreshed
   subtree) - and three markings of the inner nodes, rotated; per commit seed 0 under the lineage
-  reading and seed 1 under the two-parent one, the rest of seeds 0-2 x both readings slow.
+  reading and seed 1 under the two-parent one, the rest of seeds 0-2 x both readings slow - in
+  ``test_turn_refresh_matrix.py`` (and A5's in ``test_turn_refresh_matrix_a5.py``), files of their
+  own so that CI's shards, which never split a file, can spread the row's cost.
   Evaluations alone (no deferral asserted) under the creation reading and
   ``frozen_features="current"``, whose entries are not shared across the present's moves.
 * T7: once per board and epoch - two evaluated siblings below an inner node share the entry the
@@ -251,14 +253,6 @@ def test_supersession_deferred_to_the_next_evaluated_node_is_exact(geometry, epo
     _t6(geometry, epoch, T6_CASES)
 
 
-@pytest.mark.slow
-@pytest.mark.parametrize("epoch", EPOCHS)
-@pytest.mark.parametrize("geometry", list(GEOMETRIES))
-def test_supersession_deferred_to_the_next_evaluated_node_is_exact_full_matrix(geometry, epoch):
-    """The rest of T6's matrix: seeds 0 and 1 under their other reading, seed 2 under both."""
-    _t6(geometry, epoch, T6_SLOW_CASES)
-
-
 @pytest.mark.parametrize("epoch", EPOCHS)
 @pytest.mark.parametrize("geometry", list(GEOMETRIES))
 def test_supersession_deferred_under_a5(geometry, epoch):
@@ -268,14 +262,6 @@ def test_supersession_deferred_under_a5(geometry, epoch):
     epoch, seed 0 under the lineage reading, both C20 readings; the deferred and the eager arms bit
     for bit, every evaluated node the reference, the deferral real."""
     _t6(geometry, epoch, T6_CASES[:1], piece_centric=True)
-
-
-@pytest.mark.slow
-@pytest.mark.parametrize("epoch", EPOCHS)
-@pytest.mark.parametrize("geometry", list(GEOMETRIES))
-def test_supersession_deferred_under_a5_full_matrix(geometry, epoch):
-    """The rest of T6's matrix under A5: seed 1 under the two-parent reading, and the slow cases."""
-    _t6(geometry, epoch, T6_CASES[1:] + T6_SLOW_CASES, piece_centric=True)
 
 
 @pytest.mark.parametrize("flags", [dict(causal_past="creation"), dict(frozen_features="current")], ids=["creation", "current-features"])
