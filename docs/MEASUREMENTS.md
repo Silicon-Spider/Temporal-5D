@@ -342,7 +342,9 @@ d 256, L 16): the dense evaluation (`4 T^2 d L + 40 T d^2 L`); the cached node -
 against every token, A1's the head boards' tokens and the 16 global registers, A5's the heads'
 pieces and registers, **every destination token** (transient, never cached - BUILD_LOG issue 252's
 reading (f)) and the 16 - and the frozen boards' K/V. A5's cached figures are this model's only: the
-cached path refuses A5 as built (issue 252).
+cached path refuses A5 as built (issue 252). *(2026-11-27: decision 7 built - the cached path now runs
+A5 on exactly these sets, "The cached path under A5" below; its cost is not yet benched, so these
+figures stay the analytic model's.)*
 
 Legal moves - means over the distinct positions of each bucket (ratios A1 / A5 of the means):
 
@@ -2182,6 +2184,34 @@ that mixed them per node would be a different search (the per-node-switch mutant
 dense pass is not a function of the position alone in its last bits (about 1e-6 here, with the batch
 or the grad mode), which is why the phase form's dense mode is the dense evaluator itself, batch for
 batch, and why §15.2's row is proposed reworded (edit 380).
+
+### The cached path under A5 (decision 7) - the gaps met (numerics; no threshold, no verdict)
+
+**What it is.** Section 15.2's cached rows run for register A5 once the 2026-11-15 review's decision
+7 was built (BUILD_LOG issues 252 and 276; `python/tests/net/test_cache_a5.py`): how far the cached
+path's evaluations are from their references with A5's destination tokens on superseded boards live.
+
+**Conditions.** 2026-11-27, machine `dev-r` (loaded: the engine lane's and the main loop's jobs ran
+beside it), PyTorch 2.13.0+cpu, Python 3.14.7, NumPy 2.5.2, 3 torch threads, `lane/net` on main
+5e77028 with decision 7's change; 2 layers, the v1 configuration under the block-causal scope with
+`piece_centric=True`, random weights at initialisation scale. FP32: `test_cache.py`'s seven
+geometries under both C20 readings, a random path of 6 moves each (98 nodes, 2,011 transient tokens
+met), model seeds 200-213; BF16 and FP8: seeds 0-2, `test_cache.py`'s BF16 trees (6 nodes each).
+
+| Quantity | Largest | Bound asserted (`test_cache.py`'s, measured there for A1) |
+|---|---|---|
+| FP32 cached against the block-causal full pass: trunk | 1.67e-6 | 2e-5 |
+| ... value and policy logits | 1.43e-6 | 1e-4 |
+| FP32 root refresh at the root against the dense pass: trunk | 9.54e-7 | 2e-5 |
+| BF16 cached against the BF16 full pass: trunk RMS / max | 1.59e-3 / 1.20e-2 | 6e-3 / 4e-2 |
+| ... value / policy logits | 7.57e-4 / 6.46e-3 | 5e-3 / 2.5e-2 |
+| FP8 frozen K/V, FP32 trunk, cached against the FP8 network's forward: trunk RMS / value / policy | 2.83e-5 / 1.37e-5 / 6.20e-5 | 4e-4 / 5e-5 / 5e-3 |
+| ... BF16 trunk: trunk RMS / policy | 2.48e-3 / 8.37e-3 | 8e-3 / 4e-2 |
+
+*Read.* A5's gaps are A1's (the section 15.2 rows' figures in `test_cache.py`'s docstring): the
+transient tokens computed live change no arithmetic the references do not share, so the bounds
+measured for A1 hold with their margins. The default path is unchanged bit for bit (BUILD_LOG
+session log, 2026-11-27).
 
 ### Refresh and supersession inside a turn (C27) - the deferral's gaps (numerics; no threshold, no verdict)
 

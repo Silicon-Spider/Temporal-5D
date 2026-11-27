@@ -61,6 +61,7 @@ from t5d.engine.evaluator import (
 )
 from t5d.net import NetConfig, build_model, synthetic_state
 from t5d.net.cache import CacheConfig, CachedEvaluator, KVStore, reference_output, state_digest
+from t5d.net.state import to_piece_centric
 from tests.engine.helpers import ENGINE_VARIANTS, requires_engine
 from tests.engine.test_cached_variants import ROOT_DENSE_BOUND, THREE_VARIANTS, _evals_close, _logit_gap, _search_root
 
@@ -845,14 +846,24 @@ def test_the_dense_dispatch_checks_the_networks_format():
         model.set_trunk_quant("none")
 
 
-def test_a5_is_refused_first_under_the_phase_form():
-    """The engine's wrapper keeps A5's refusal first (BUILD_LOG issue 252), the phase form on: an
-    object with only ``.model`` is refused before anything reads its configuration."""
-    from types import SimpleNamespace
-
-    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=1, piece_centric=True), seed=0)
-    with pytest.raises(NotImplementedError, match="issue 252"):
-        CachedNetworkEvaluator(SimpleNamespace(model=model))
+@requires_engine
+def test_a5_under_the_phase_form_through_the_step_api():
+    """A5 under C26 through the engine's search (decision 7 settled issue 252; issue 266): rooted
+    under N* the phase form's search with a piece-centric network is the dense search node for node
+    (its dense mode converts at the network's edge, as ``NetworkEvaluator`` does); rooted at N* every
+    leaf - converted to A5 strictly - is the two-level reference anchored at the root."""
+    model = build_model(NetConfig(trunk_dtype="fp32", n_layers=2, attn_scope="block_causal", piece_centric=True), seed=11).eval()
+    with _search_root("Standard - Two Timelines") as root:
+        n = root.info().boards
+        _check_dense(root, model, n + 1, ARMS["ply-tree"], ("a5", "n + 1"), mutant=False, playouts=12)
+        ev = _phase(model, n)
+        p, _, _ = _search(root, ev, playouts=12)
+        anchor = to_piece_centric(p.started[-1], strict=True)
+        assert ev.epoch.kind == "root"
+        for pos, out in zip(p.positions, p.evals, strict=True):
+            state = to_piece_centric(state_of(pos), strict=True)
+            ref = _split(reference_output(model, state, anchor=anchor), [state])[0]
+            _evals_close(out, ref, "a5")
 
 
 def test_the_store_keeps_only_the_live_search():

@@ -45,10 +45,11 @@ The build rules (spec section 15.1) decide what else appears here:
   14.4; ``state.to_piece_centric``) are behind their flag, off: ``piece_centric`` reads each
   position as its pieces and the candidate moves' destination squares - A1's tokens minus the
   empty squares no candidate move lands on - a pure input change (no parameter, the same draws).
-  Built for the dense scope only (C1): the block-causal scope and the cached path are refused
-  (a destination token on a frozen board breaks C17's "all of a board's tokens are created
-  together"; BUILD_LOG issue 252), and so is D4's opponent-reply prototype (``opp_reply``: a
-  quiet reply's destination has no token; issue 251). Its readings - captures point at the
+  Under the block-causal scope and the cached path a destination token on a superseded board is
+  a live token wherever it sits - read only by live tokens, never cached (register C17, the
+  2026-11-15 review's decision 7, settling BUILD_LOG issue 252; ``scope.py``, ``cache.py``). D4's
+  opponent-reply prototype is refused with it (``opp_reply``: a quiet reply's destination has no
+  token; issue 251). Its readings - captures point at the
   captured piece's token, a destination token is an empty-square token, cell order within a
   board, destinations from the candidate moves - are placeholders (issues 244-247).
 * **G2's 8-bit trunk** (provisional, decided by 6w; section 10.2) is behind its flag, off:
@@ -943,9 +944,9 @@ class NetConfig:
     #: network reads piece-centric positions (``PositionState.token_cells``) and refuses
     #: square-centric ones (and the reverse when off); the engine's evaluator converts at the
     #: network's edge (``engine.evaluator.NetworkEvaluator``). No parameter changes: the network
-    #: is A1's, bit for bit, on a different token set. Dense scope only - the block-causal scope
-    #: (and with it the cached path) and the opponent-reply prototype are refused (BUILD_LOG issues
-    #: 251, 252).
+    #: is A1's, bit for bit, on a different token set. Under the block-causal scope (and the cached
+    #: path) its destination tokens on superseded boards are live tokens, never cached (register
+    #: C17; BUILD_LOG issue 252, ruled); the opponent-reply prototype is refused (issue 251).
     piece_centric: bool = False
 
     # --- later stages: named here, built there (enabling raises NotImplementedError) ---
@@ -1145,12 +1146,6 @@ class NetConfig:
         ):
             if getattr(self, name) not in options:
                 raise ValueError(f"{name} must be one of {options}")
-        if self.piece_centric and self.attn_scope == "block_causal":
-            raise NotImplementedError(
-                "piece_centric (A5) is built for the dense scope only: under the block-causal scope a destination token on a "
-                "frozen board appears and vanishes from node to node, which C17's within-board bidirectionality and the "
-                "cached path's frozen K/V do not allow (BUILD_LOG issue 252)"
-            )
         if self.piece_centric and self.opp_reply:
             raise NotImplementedError(
                 "piece_centric (A5) with D4's opponent-reply prototype: a quiet reply's destination has no token, and "

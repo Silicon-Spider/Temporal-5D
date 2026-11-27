@@ -30,7 +30,11 @@ so that a frozen board's input depends on the board alone - and, under A7, on wh
 encoded in (the acting player: below); head boards keep both ("Live tokens
 keep A3's features as inputs", section 4.1). The frozen boards' current values reach the live
 tokens that read them as B16's score-time key biases instead (``status.py``). The model passes
-``frozen_intrinsic`` for that scope only.
+``frozen_intrinsic`` for that scope only. Register A5's destination tokens on superseded boards
+(``Batch.transient``) are live tokens wherever they sit, so they keep A3's features - their
+board's current status - as head boards' tokens do (section 7.3: a destination token "carries a
+live token's input features, its board's current status among them, since it is rebuilt at
+every node").
 
 **The acting player (stage N5, register D8: "a global acting-player input"; A6, A7: "acting
 colour kept as a global input").** One learned embedding per colour - whose action this is,
@@ -153,10 +157,12 @@ class InputEmbedding(nn.Module):
             + self.stm_flag(batch.stm)
             + self.dt_out(torch.nn.functional.gelu(self.dt_in(self.dt_features(batch.dt))))
         )
+        # Live board tokens: the heads', and register A5's transient tokens (live wherever they sit).
+        live = (batch.is_head == 1) | batch.transient
         if frozen_intrinsic:
             # Superseded boards: the flags that cannot change once a board is frozen only.
             frozen = self.head_flag(batch.is_head) + self.stm_flag(batch.stm)
-            board = torch.where((batch.is_head == 1).unsqueeze(-1), board, frozen)
+            board = torch.where(live.unsqueeze(-1), board, frozen)
         slots = batch.reg_index.clamp(min=0)
         breg = self.board_register(slots.clamp(max=self.board_register.num_embeddings - 1)) + self.not_square
         greg = self.global_register(slots.clamp(max=self.global_register.num_embeddings - 1)) + self.not_square
@@ -172,7 +178,7 @@ class InputEmbedding(nn.Module):
         if batch.global_regs == 0:
             # None to carry them (an ablation-3 arm): on the board tokens - the live boards' only
             # under the block-causal scope (a placeholder, spec issue 225).
-            carry = on_board & (batch.is_head == 1).unsqueeze(-1) if block_causal else on_board
+            carry = on_board & live.unsqueeze(-1) if block_causal else on_board
             x = x + torch.where(carry, glob, zero)
         if self.layout is not None:  # A8: each square's board layout, then the embedding's FFN
             x = self.layout(batch, x)

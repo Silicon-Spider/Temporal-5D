@@ -10,6 +10,87 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-27 - Decision 7 built: A5's destination tokens are live tokens under the block-causal scope and the cache (register C17; issue 252 settled)
+
+The 2026-11-15 review's decision 7, which the user confirmed as a ruling, is register C17: "piece-centric
+destination tokens are live tokens wherever they sit - read only by live tokens, never cached". It
+settles BUILD_LOG issue 252, whose six points §7.3 and §14.4, as the review edited them in the
+repository, now answer. This change builds it and lifts every refusal that named issue 252.
+
+**What a transient token is.** It is register A5's empty-cell token on a board that is no head: a
+travel's landing square on a history board (`PositionState.transient`, `Batch.transient`). A
+destination on a head board is a head board's token already. A superseded board's own tokens are its
+pieces and its per-board registers (`PositionState.board_tokens(frozen=True)`).
+
+**The network's block-causal forward under A5:**
+- `scope.py`: transient tokens get a scope slot of their own. They read every board, the global
+  registers and each other, and are read by the heads, the global registers and each other. No frozen
+  token reads them, its own board's tokens included.
+- `embed.py`: they carry live inputs - their board's current status (Delta-t, the active flag) under
+  intrinsic frozen features, and with no global registers the acting colour and the turn state (issue
+  225's placeholder).
+- `status.py`: B16 makes no key entry on them.
+- `structure.py`: B12's rows go by token when a batch holds transient tokens (by board, as built,
+  otherwise).
+- `flex.py`: the score function takes the new slot and B12's rows.
+- `model.py`: FP8 frozen K/V round a frozen board's own tokens only, one scale over them.
+- `NetConfig.validate` and `T5DNet.scope_of` no longer refuse A5 with the block-causal scope.
+
+**The cached path under A5:**
+- `cache.py`: a board's entry holds its own tokens, so it is the same at every node whatever moves land
+  on it.
+- `compute_board` reads the frozen tokens of its past.
+- The live pass computes transient tokens with the heads, in blocks of whole boards.
+- A refresh stores the boards' own tokens. The other colour's view has no destination tokens
+  (`viewed_by`).
+- `reference_output` injects history by each board's own tokens.
+- `CachedEvaluator` takes A5. `CachedNetworkEvaluator` converts at the network's edge, strictly, as
+  `NetworkEvaluator` does.
+- The search-tree fixture hands an A5 network each node's A5 view (`SearchTree.view`).
+- The cache bench takes `piece_centric`, with exact per-board token counts.
+- `cost.py`'s notes are brought up to date.
+
+**Tests:**
+- `tests/net/test_cache_a5.py`, new, runs section 15.2's cached rows for A5 under `test_cache.py`'s
+  protocol:
+  - C2/C17: cached = the block-causal full pass on all seven geometries under both C20 readings, under
+    the creation reading, under section 6's switches, and at 16 layers (slow);
+  - C20: supersession is path-independent;
+  - C3a: a refresh fork leaves its siblings unchanged, and supersession inside a refreshed subtree
+    follows its anchor;
+  - C3: the root refresh at the root equals the dense pass;
+  - G1: the BF16 cache is at the live precision, and the FP8 cache equals the FP8 network's forward.
+
+  Beside the rows:
+  - no frozen token's K/V depends on a destination token - one multiverse with two move sets gives
+    every superseded board the same entry, bit for bit;
+  - the scope, the inputs, B16 and B12 on transient tokens;
+  - every attention path computes one function.
+- Engine side (`tests/engine/test_piece_centric_engine.py`): the cached evaluator with an A5 network
+  through the step API, causal and with the root refresh.
+- A5 under the phase form, on the fixture and through the step API.
+- The refusal tests are now acceptance tests (`test_piece_centric.py`, `test_model.py`,
+  `test_phase_form.py` in both suites).
+- Six mutants of the rules (scope, FP8 rounding, B16, the inputs, B12's rows, the refresh's tokens):
+  each killed by these tests.
+
+**The default path is unchanged bit for bit.** 119 outputs were compared on 5e77028 and on the change:
+- the default v1 network, dense, one position at a time and batched (22,969,139 parameters, B15's
+  far tables on);
+- the block-causal network's full pass, its causal and root-refresh cached evaluations and the
+  reference, under nine arms: the default, chunked, dense, flex, FP8, B12, C20's second reading,
+  current features, and no global registers;
+- the search-tree fixture with node refreshes;
+- A5 in the dense scope.
+
+Issue 266 (A5 under C26) is resolved: they run together. The window under A5 stays refused (issue
+253). MEASUREMENTS has the gaps met ("The cached path under A5").
+
+Spec: §7.3, §14.4 and §16; register C17, A5, C15, B12, B16, C26. Decision 7 is built as ruled. Issue
+276 (new) holds the five readings the ruling leaves to the build, for the user. Proposed edit 386
+brings §7.3's and §16's "dense scope only" lines and register A5 up to the build. Edit 194 is marked
+superseded by decision 7.
+
 ### 2026-11-24 - Build log: the current state at the search lane's merge
 
 `docs/BUILD_LOG.md`:

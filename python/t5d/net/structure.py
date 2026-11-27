@@ -297,6 +297,10 @@ class AttnStructure:
     #: (B, Nb) bool: the query boards whose rows carry B12's biases (None: every board) -
     #: the live boards under the block-causal scope.
     smolgen_rows: torch.Tensor | None = None
+    #: (B, L) bool: the query tokens whose rows carry B12's biases, where that is no whole board's
+    #: rows - a batch with register A5's transient tokens (``Batch.transient``: live rows on
+    #: superseded boards) under the block-causal scope; ``smolgen_rows`` is then None.
+    smolgen_tokens: torch.Tensor | None = None
     disp: DisplacementBias | None = None  # B15
     disp_index: DisplacementIndex | None = None  # B15's per-batch slots, codes and tiles
     disp_table: torch.Tensor | None = None  # (H, entries + 1): this layer's B15 table (set by ``for_layer``)
@@ -383,7 +387,14 @@ class AttnStructure:
         """This structure with B12 and B16 left out - what a frozen board's rows carry under the
         block-causal scope (``cache.py``), where both bias live rows only."""
         return self._carrying_memo(
-            smolgen=None, smolgen_in=None, pair_table=None, smolgen_rows=None, status=None, status_index=None, status_table=None
+            smolgen=None,
+            smolgen_in=None,
+            pair_table=None,
+            smolgen_rows=None,
+            smolgen_tokens=None,
+            status=None,
+            status_index=None,
+            status_table=None,
         )
 
     # -- which queries a masked role's relation covers --
@@ -594,6 +605,8 @@ class AttnStructure:
             q_board = self.board_idx.gather(1, rows)
             picked = table.gather(2, q_board[:, None, :, None].expand(bsz, n_heads, n_rows, slots))
             bias = picked.gather(3, key_board[:, None, None, :].expand(bsz, n_heads, n_rows, lk))
+            if self.smolgen_tokens is not None:  # rows by token (A5's transient tokens are live rows)
+                bias = bias * self.smolgen_tokens.gather(1, rows)[:, None, :, None].to(bias.dtype)
         if self.disp is not None:
             disp = self.disp_rows(rows, cols, heads, key=key, span=span if rows is None else None)
             kept = bias is None and key is not None and ("disp", key) in self.memo
@@ -798,6 +811,14 @@ def build_structure(
         typed = typed_pairs(batch, cfg.typed_edge_directed).live_queries(live)
         table = typed_edges.table
     ph = board_coordinates(batch, coords).round() if smolgen is not None else None
+    # B12 biases the live rows: whole boards' (the heads') - or, with register A5's transient
+    # tokens (live rows on superseded boards, ``Batch.transient``), row by row.
+    smolgen_rows = smolgen_tokens = None
+    if smolgen is not None and live_boards is not None:
+        if live is not None and bool(batch.transient.any()):
+            smolgen_tokens = live & batch.valid & (batch.board >= 0)
+        else:
+            smolgen_rows = live_boards
     disp_index = None if displacement is None else displacement_index(batch, displacement.geom, displacement.far)
     # Ablation 2's layer-shared arm: B15's tables are every layer's, so they are set here, once
     # (as B16's shared table is, below), and the structure needs no ``for_layer`` for B15.
@@ -816,7 +837,8 @@ def build_structure(
         typed_table=table,
         smolgen=smolgen,
         smolgen_in=None if smolgen is None else smolgen_inputs(batch, cfg, ph),
-        smolgen_rows=live_boards if smolgen is not None else None,
+        smolgen_rows=smolgen_rows,
+        smolgen_tokens=smolgen_tokens,
         disp=displacement,
         disp_index=disp_index,
         **shared,

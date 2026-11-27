@@ -127,8 +127,10 @@ input change: no parameter and no draw changes, and every module reads per-token
 network is A1's on a smaller token set - its forward equals A1's with the dropped squares removed
 as keys (section 15.2's proposed A5 row; ``tests/net/test_piece_centric.py``). The per-board and
 global square pools and the per-square head cover the square tokens there are (pieces and
-destinations; BUILD_LOG issue 250). A forward refuses a batch of the other tokenisation, and a
-piece-centric network refuses the block-causal scope (issue 252).
+destinations; BUILD_LOG issue 250). A forward refuses a batch of the other tokenisation. Under the
+block-causal scope a destination token on a superseded board is a live token wherever it sits -
+read only by live tokens, never part of its board's frozen K/V (register C17, ruled by the
+2026-11-15 review's decision 7, settling issue 252; ``state.Batch.transient``, ``scope.py``).
 """
 
 from __future__ import annotations
@@ -486,17 +488,10 @@ class T5DNet(nn.Module):
         return torch.where(is_global, torch.zeros_like(coords), coords)
 
     def scope_of(self, scope: str | None) -> str:
-        """The attention scope of a forward: ``scope``, or the config's when None. A piece-centric
-        network (A5) refuses the block-causal scope (BUILD_LOG issue 252: its destination tokens on
-        frozen boards have no reading under C17)."""
+        """The attention scope of a forward: ``scope``, or the config's when None."""
         scope = self.cfg.attn_scope if scope is None else scope
         if scope not in ("dense", "block_causal"):
             raise ValueError(f"unknown attention scope {scope!r}")
-        if scope == "block_causal" and self.cfg.piece_centric:
-            raise NotImplementedError(
-                "a piece-centric network (A5) runs in the dense scope only: a block-causal forward is refused (a destination "
-                "token on a frozen board breaks C17's within-board bidirectionality - BUILD_LOG issue 252)"
-            )
         return scope
 
     def check_tokenisation(self, batch: Batch) -> None:
@@ -736,9 +731,28 @@ def _then(first, second):
 
 def _frozen_kv_rounding(batch: Batch, kv_format: str):
     """A K/V hook that passes every frozen board's K and V through ``kv_format`` - one scale
-    per position, board and head, as the cache stores them (``kvformat.py``)."""
+    per position, board and head, as the cache stores them (``kvformat.py``). Under register A5 a
+    frozen board's K/V are its own tokens' - its pieces and registers; its transient destination
+    tokens are live and never cached (``state.Batch.transient``), so they are not rounded, and the
+    board's scale is its own tokens' alone."""
     layouts = batch.layouts
     frozen = batch.board_valid & ~batch.board_head  # (B, Nmax)
+    if batch.piece_centric:
+        transient = batch.transient
+
+        def rounded_a5(t: torch.Tensor) -> torch.Tensor:
+            out = t.clone()
+            for i, lay in enumerate(layouts):
+                for b in torch.nonzero(frozen[i]).flatten().tolist():
+                    start, stop = int(lay.board_offsets[b]), int(lay.board_offsets[b + 1])
+                    own = torch.arange(start, stop, device=t.device)[~transient[i, start:stop].to(t.device)]
+                    out[i : i + 1, :, own] = fake_quantise(t[i : i + 1, :, own], kv_format)
+            return out
+
+        def hook_a5(layer, k, v):
+            return rounded_a5(k), rounded_a5(v)
+
+        return hook_a5
     tpbs = {lay.tokens_per_board for lay in layouts}
 
     def rounded(t: torch.Tensor) -> torch.Tensor:
