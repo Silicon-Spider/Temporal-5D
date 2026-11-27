@@ -799,7 +799,8 @@ pushed after every commit, taking main by merge, never rebase (re-check with `gi
   cached path to a carried dense-made node (probed: 3 of 6 searches), against section 7.10's
   "transpositions never mix a dense and a cached evaluation of one state": (a) section 8.7's
   carry covers it, or (b) the strict reading, and the engine drops or re-evaluates the carried
-  nodes' table entries at the crossing. Issue 269 stays the user's question. Next: the v1
+  nodes' table entries at the crossing. Issue 269 stays the user's question. Three LOW findings
+  of another review of 6754794 are open (session log, 2026-11-27). Next: the v1
   re-run of §15.2's network rows (the audit's list).
 - G9, the bounded AMD attempt - done (`lane/gate`, merged 2026-10-23): it partly works -
   the network on the RX 9070 XT (ROCm 10.1.0, torch 2.14.0, `build/venv-rocm`) matches the
@@ -12111,3 +12112,29 @@ entry changes in the same edit as its code, which the standing rule defers to up
     **For the main loop:** the clocked no-child order (S7: the clock's search before decision 13's
     witness) to confirm; issue 481 (the proof channel's solved root, and the unclocked loop's
     throw with no visited child) open; issues 480 and 482 are placeholders.
+- **2026-11-27 - three open findings from a review of `lane/net` at 6754794** (on the user's
+  instruction; documents only). A session reviewed the commit by reading on 2026-11-23, beside the
+  main loop's three review passes of it. It found no HIGH or MEDIUM finding and four LOW. LOW-1,
+  `CachedNetworkEvaluator.start`'s shortcut comparing `state_digest` (no moves or edges), is the
+  main loop's L15 (issue 274), fixed in 52889cb. The other three hold on main 5e77028. For the main
+  loop; unnumbered, since the main loop assigns issue numbers:
+  - **The default path's evidence cannot be re-run.** C26/C27's "93 cases bit for bit" (2fc9d59;
+    CHANGELOG, "C26/C27: the default path, bit for bit - evidence") rests on a scratch probe that
+    was not committed. So neither CI nor a reviewer can re-run it, and nothing guards against a
+    later regression of that kind. Commit the probe, or a reduced form of it, as a test: per-case
+    hashes recorded at a reference tree.
+  - **A test that cannot fail for the claim its name makes.**
+    `python/tests/net/test_turn_refresh.py::test_with_every_node_evaluated_the_fixture_is_what_it_was`
+    compares `evaluates=None` with `evaluates` always true. Those are two runs of the same new code,
+    so it cannot see a change from the fixture before C27. Its per-node asserts
+    (`segment_branched(node) == node.branched`, `evaluated_ancestor(node) is node.parent`) hold on
+    their own; "C24's simulation unchanged" is backed by the unchanged `test_complexity` and
+    `test_cache`. Name it for what it checks, or compare against values recorded before C27.
+  - **A second copy of the dense/cached predicate.** `python/t5d/engine/token_counts.py`'s
+    `phase_form` splits at `n < n_star`, with its own `N_STAR = 50` and `--n-star` option, beside
+    `CacheConfig.mode`, "the one predicate". The two agree today, but its test pins the two
+    defaults, not the comparison. Route it through `CacheConfig.mode`, or test the two against each
+    other at N\*-1, N\* and N\*+1.
+  - That session's pull request, Silicon-Spider/Temporal-5D#2 (its merges of `lane/fix535` and
+    `lane/net`, superseded by main's), is closed unmerged. `lane/audit` (7f79f9b) and `lane/gate`
+    (65c14a4) hold no commit main lacks; deleting them on GitHub is the user's to do.

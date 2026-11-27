@@ -10,6 +10,29 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-27 - Three open findings from a review of `lane/net`'s C26/C27 (6754794), recorded
+
+On 2026-11-23, while merging the lanes with new work at the user's request, a session reviewed
+`lane/net` at 6754794 by reading. That was before the main loop's own review round of the same
+commit. Its pull request, Silicon-Spider/Temporal-5D#2, is closed unmerged: main merged the lane
+itself (98f68c1).
+
+Of the review's four LOW findings, LOW-1 is the main loop's L15 (issue 274), already fixed. That
+was `CachedNetworkEvaluator.start`'s shortcut comparing a digest without the moves. The other three
+still hold on main 5e77028. At the user's request they are recorded in `docs/BUILD_LOG.md`'s session
+log, for the main loop, unnumbered:
+
+- **C26/C27's "93 cases bit for bit" evidence cannot be re-run:** the probe was not committed.
+- **One test cannot fail for the claim its name makes:**
+  `test_with_every_node_evaluated_the_fixture_is_what_it_was` compares two runs of the new code.
+- **`token_counts.phase_form` is a second copy of the dense/cached predicate** beside
+  `CacheConfig.mode`.
+
+`lane/net`'s line in the build log now points to them. Documents only: no code, no test.
+
+Spec: none - review findings on a test, a measurement tool and an uncommitted probe. No part of the
+spec describes them, and none proposes a spec edit.
+
 ### 2026-11-24 - Build log: the current state at the search lane's merge
 
 `docs/BUILD_LOG.md`:
