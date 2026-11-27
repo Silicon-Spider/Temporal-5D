@@ -10,6 +10,33 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-28 - The forward bench: FFN 2x and 4x arms, and A5's piece-centric arm
+
+The quiet-machine block had no command for two of its network figures: the FFN ratio's wall time
+(§15.3's row "FFN ratio 2× and 4×"; `NetConfig.ffn_ratio` existed, no bench arm did) and A5's
+dense wall time at 44 boards (an indicative figure with no recorded command). Nothing was
+measured.
+
+- `python/t5d/net/bench.py`: `CONFIGS` gains "ffn-2x" and "ffn-4x" (the v1 with the trunk's
+  `ffn_ratio` at 2 and 4; "n2-default" is the 8x baseline) and "a5-piece-centric" (the v1 with
+  `piece_centric=True`, dense scope). A piece-centric arm's passes read
+  `synthetic_state(..., piece_centric=True)`, A5's view of the same position; every other arm's
+  input is unchanged. The docstring gives the block's commands.
+- `python/t5d/net/opcount.py`: `measure` gives a piece-centric network its own tokens, so the
+  operator counter reaches the new arm as it reaches every `bench.CONFIGS` name.
+- `python/tests/net/test_bench.py` (new): each arm is the network its row names; each runs a
+  forward in process; A5's arm reads fewer tokens on the same position; the operator counter
+  counts it; the command line runs all four beside the v1 at 2 boards and 1 layer, each pass in
+  its own subprocess, with no error. No timing is read.
+- `docs/MEASUREMENTS.md`: a new section, "FFN 2x and 4x", with the arms and the command, and
+  A5's command beside its indicative figure. Both are marked "not yet measured on a quiet
+  machine". The A5 arm's position is synthetic: 2.12x fewer tokens at 44 boards, against the
+  human position's 1.96x. `docs/BUILD_LOG.md`: step 5's list and the lane line.
+
+Spec: §15.3's rows "FFN ratio 2× and 4×" and "Piece-centric tokens (A5)", §9.2's FFN ladder and
+§14.4 (register A5, F1) are what the arms' figures will be read against. No spec text describes
+the bench, so no edit is proposed. The write-back (M4) follows the measurement.
+
 ### 2026-11-28 - 6b″'s tool: Hunt's wall time per root, and Guard's and Hunt's nodes/s per range
 
 The quiet-machine block is to measure Guard's and Hunt's nodes/s. The 6b″ tool gave Guard's

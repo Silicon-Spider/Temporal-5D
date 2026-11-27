@@ -312,6 +312,24 @@ this arm is the figure it named.
 **Wall time: not measured** - the machine was loaded. For the quiet-machine block: `python -m
 t5d.net.bench --config n2-default 6p-layout-ff8 6p-layout-ff1 --boards 44 240` (from `python/`).
 
+### FFN 2x and 4x - wall time against the v1's 8x (command; not yet measured on a quiet machine)
+
+**What it will measure.** Section 15.3's row "FFN ratio 2× and 4× | 1.39× and 1.23× evals/s at 44
+boards | 9.2 | estimated → to measure". Section 9.2's table prices the trunk's FFN ratio against the
+v1's 8x at 44 boards - cost 0.81 (4x) and 0.72 (2x), evaluations/s 1.23x and 1.39x - from the
+analytic FLOP model; ablation 5's arm (2x against 8x at matched compute) is a trained comparison and
+not this row. The arms (2026-11-28, `lane/search`): `bench.CONFIGS`' "ffn-4x" and "ffn-2x", the v1
+default with `ffn_ratio` 4 and 2 (`d_ffn` 1,024 and 512 against 2,048), every other setting the
+v1's - "n2-default" is the baseline. The figure is the forward's wall-time ratio, n2-default's over
+the arm's, per board count and precision: CPU-labelled (the row's evaluations/s are a GPU
+figure's).
+
+**Command** (from `python/`; one pass per subprocess):
+
+```
+python -m t5d.net.bench --config n2-default ffn-4x ffn-2x --boards 44 240 --dtype fp32 bf16
+```
+
 ### A5 - piece-centric tokens: token counts on the human games, counted FLOPs (2026-10-23)
 
 **What it is.** Section 14.4's figures for register A5 (piece-centric tokenisation, a prototype
@@ -409,6 +427,15 @@ of 44 boards the linear terms are about half the cost, so a 1.96x token cut buys
 44-board human position, 4 torch threads, one warm-up then five forwards each: A1 5.65 s, A5 1.90 s
 (medians; **3.0x**). The machine was loaded (other lanes' jobs; Windows' processor load 96%): for
 the quiet-machine block. GPU figures, varlen kernels among them, are deferred (M19).
+
+**A5's dense wall at 44 boards - command; not yet measured on a quiet machine.** The figure above
+had no recorded command. The bench's arm "a5-piece-centric" (2026-11-28, `lane/search`): the v1
+default with `piece_centric=True`, dense scope, beside "n2-default" (A1). From `python/`: `python -m
+t5d.net.bench --config n2-default a5-piece-centric --boards 44 --dtype bf16` (the F1 network as
+shipped, BF16). Its position is the bench's synthetic one, not the human position above:
+`synthetic_state(0, 44)` has 2,920 A1 tokens and 1,378 A5 tokens (2.12x fewer, against the human
+position's 1.96x), so its ratio is not the figure above re-measured; the bench's threads are
+PyTorch's default, not the 4 above.
 
 **Against §14.4's estimates (the 2x rule) - re-stated under CHECKPOINT 9's C26, on the
 legal-destination set §14.4 speaks of** ("only head boards carry the full legal-destination set";

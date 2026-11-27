@@ -15,6 +15,13 @@ figures with their conditions recorded in docs/MEASUREMENTS.md).
 Run: ``python -m t5d.net.bench --boards 60 240 --dtype fp32 bf16`` (from ``python/``);
 ``--train --layers 2`` for a training step of a 2-layer trunk.
 
+The quiet-machine block's arms (2026-11-28; ``CONFIGS``, below; commands in docs/MEASUREMENTS.md
+beside the rows they fill): section 15.3's FFN row - ``--config n2-default ffn-4x ffn-2x --boards
+44 240`` (the trunk's FFN at 8x, 4x, 2x) - and A5's dense wall time beside A1's - ``--config
+n2-default a5-piece-centric --boards 44``. A5's arm reads ``synthetic_state(0, N,
+piece_centric=True)``: at 44 boards 1,378 tokens against A1's 2,920 (2.12x fewer), where the human
+position of the A5 section's indicative figure has 1,491 (1.96x).
+
 Measured 2026-10-01 (AMD Ryzen 9 9900X, 12 PyTorch threads, Windows 11, PyTorch
 2.13.0+cpu; one position, ``synthetic_state(0, N)``: 3,976 tokens at 60 boards, 15,856 at
 240; each figure one run on an otherwise idle machine, except * - one other single-threaded
@@ -87,7 +94,13 @@ import time
 #: same through the one-block path, and "b15-no-far" B15 without B6's two per-axis far tables
 #: (``disp_far_axis=False``: the network as built before the review). "g11-pad8*" are the v1
 #: default with the kernel's widths padded to a multiple of 8 (register G11, section 10.2;
-#: ``attn_pad_multiple``). The operator counter's command line reaches all of them
+#: ``attn_pad_multiple``). "ffn-2x" and "ffn-4x" are the v1 default with the trunk's FFN at 2x and
+#: 4x of d (``ffn_ratio``; F1's is 8x - "n2-default"), all else equal: section 15.3's row "FFN ratio
+#: 2x and 4x" (section 9.2's estimate, 1.39x and 1.23x evaluations/s at 44 boards - their wall
+#: time beside "n2-default"'s). "a5-piece-centric" is the v1 default reading register A5's
+#: piece-centric tokens (``piece_centric``, the dense scope; ``synthetic_state(...,
+#: piece_centric=True)``, the same draws as A1's position): A5's dense wall time beside A1's
+#: ("n2-default"). The operator counter's command line reaches all of them
 #: (``python -m t5d.net.opcount --config b15-layer-shared``).
 _ALL = dict(routing_table=True, typed_edge_bias=True, board_pair_smolgen=True)
 CONFIGS: dict[str, dict] = {
@@ -114,6 +127,9 @@ CONFIGS: dict[str, dict] = {
     "b15-no-far": dict(disp_far_axis=False),
     "g11-pad8": dict(attn_pad_multiple=8),
     "g11-pad8-sdpa": dict(attn_pad_multiple=8, attn_impl="sdpa"),
+    "ffn-2x": dict(ffn_ratio=2),
+    "ffn-4x": dict(ffn_ratio=4),
+    "a5-piece-centric": dict(piece_centric=True),
 }
 
 
@@ -162,8 +178,9 @@ def measure(config: str, boards: int, dtype: str, seed: int = 0, train: bool = F
     overrides = CONFIGS[config] | ({} if layers is None else {"n_layers": layers})
     cfg = NetConfig(trunk_dtype=dtype, **overrides)
     model = build_model(cfg, seed=seed).eval()
-    batch = collate([synthetic_state(seed, boards)])
-    small = collate([synthetic_state(seed + 1, 2)])
+    # Register A5's arm reads its own tokenisation of the same position (the network refuses A1's).
+    batch = collate([synthetic_state(seed, boards, piece_centric=cfg.piece_centric)])
+    small = collate([synthetic_state(seed + 1, 2, piece_centric=cfg.piece_centric)])
 
     def step(b):
         if not train:
