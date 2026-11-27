@@ -102,6 +102,13 @@ bool is_open(std::span<const Action> actions, std::size_t edge) noexcept {
   return edge < actions.size() && actions[edge].open;
 }
 
+// A score as the halving and the choice order it: a NaN (a NaN q or prior from
+// the caller) below every number, so that their comparisons are strict weak
+// orders (sigma itself cannot overflow within the caps Root::make checks).
+double ordered(double score) noexcept {
+  return std::isnan(score) ? -std::numeric_limits<double>::infinity() : score;
+}
+
 std::uint32_t max_open_visits(std::span<const Action> actions) noexcept {
   std::uint32_t most = 0;
   for (const Action& a : actions) {
@@ -113,6 +120,12 @@ std::uint32_t max_open_visits(std::span<const Action> actions) noexcept {
 }  // namespace
 
 Root Root::make(std::vector<double> g_by_edge, std::size_t open_count, const Config& config) {
+  if (!(std::isfinite(config.c_visit) && config.c_visit >= 0 && config.c_visit <= kMaxCVisit)) {
+    throw std::invalid_argument("gumbel: c_visit must be finite, 0 or more and at most kMaxCVisit (1e6)");
+  }
+  if (!(std::isfinite(config.c_scale) && config.c_scale >= 0 && config.c_scale <= kMaxCScale)) {
+    throw std::invalid_argument("gumbel: c_scale must be finite, 0 or more and at most kMaxCScale (1e6)");
+  }
   Root r;
   const std::size_t open = std::min(open_count, g_by_edge.size());
   const std::size_t by_n = config.simulations < open ? static_cast<std::size_t>(config.simulations) : open;
@@ -154,7 +167,7 @@ void Root::halve(std::span<const Action> actions, double v_net) noexcept {
   const double v_mix = mixed_value(actions, v_net);
   const std::uint32_t most = max_open_visits(actions);
   scratch_.clear();
-  for (const std::size_t e : considered_) scratch_.emplace_back(score(actions, e, v_mix, most), e);
+  for (const std::size_t e : considered_) scratch_.emplace_back(ordered(score(actions, e, v_mix, most)), e);
   const std::size_t keep = std::min(schedule_[phase_ + 1].considered, considered_.size());
   std::sort(scratch_.begin(), scratch_.end(),
             [](const auto& a, const auto& b) { return a.first != b.first ? a.first > b.first : a.second < b.second; });
@@ -204,7 +217,7 @@ std::size_t Root::best(std::span<const Action> actions, double v_net) const noex
   double top = 0;
   const auto consider = [&](std::size_t e) {
     if (!is_open(actions, e)) return;
-    const double s = score(actions, e, v_mix, most);
+    const double s = ordered(score(actions, e, v_mix, most));
     if (found == kNone || s > top) {
       found = e;
       top = s;

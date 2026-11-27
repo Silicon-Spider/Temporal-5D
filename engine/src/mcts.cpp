@@ -988,12 +988,17 @@ struct Search::Impl {
 
   void validate() const {
     const SearchParams& p = params_;
-    // Register E12 (Gumbel root search): its parameters, and what the arm
-    // replaces or cannot take - each refused by name.
+    // Register E12 (Gumbel root search): its parameters - checked whether or
+    // not the arm is on, so an absurd value is refused either way - and what
+    // the arm replaces or cannot take, each refused by name.
     if (p.gumbel_m < 1) throw std::invalid_argument("SearchParams::gumbel_m: 1 or more (register E12)");
-    if (!(std::isfinite(p.gumbel_c_visit) && p.gumbel_c_visit >= 0) ||
-        !(std::isfinite(p.gumbel_c_scale) && p.gumbel_c_scale >= 0)) {
-      throw std::invalid_argument("SearchParams::gumbel_c_visit and gumbel_c_scale: finite, 0 or more (register E12)");
+    if (!(std::isfinite(p.gumbel_c_visit) && p.gumbel_c_visit >= 0 && p.gumbel_c_visit <= gumbel::kMaxCVisit)) {
+      throw std::invalid_argument(
+          "SearchParams::gumbel_c_visit: finite, 0 to 1e6 (register E12; the cap a placeholder - sigma stays finite)");
+    }
+    if (!(std::isfinite(p.gumbel_c_scale) && p.gumbel_c_scale >= 0 && p.gumbel_c_scale <= gumbel::kMaxCScale)) {
+      throw std::invalid_argument(
+          "SearchParams::gumbel_c_scale: finite, 0 to 1e6 (register E12; the cap a placeholder - sigma stays finite)");
     }
     if (p.gumbel_root) {
       const auto refuse = [](const char* why) {
@@ -1005,6 +1010,15 @@ struct Search::Impl {
       if (p.split == TurnSplit::Flat) refuse("not under the flat form - its reading is open (register part K, 6x)");
       if (p.root_noise) refuse("root_noise - the Gumbel draw replaces the root's Dirichlet noise");
       if (p.root_policy_temperature != 1.0) refuse("root_policy_temperature must be 1 - the draw replaces it");
+      // The draw's logits are ln of the root prior: with these two at 1 they
+      // are the network's raw logits up to one constant - the logits I21's
+      // target reads (§16), which the halving's improvement is measured by.
+      if (p.policy_temperature != 1.0) {
+        refuse("policy_temperature must be 1 - the root's logits are the network's raw ones, which I21's target reads");
+      }
+      if (p.unknown_prior_scale != 1.0) {
+        refuse("unknown_prior_scale must be 1 - the root's logits are the network's raw ones, which I21's target reads");
+      }
       if (p.asset_map) refuse("asset_map - root steering; turn asset_map off (it is on by default)");
       if (p.hunt_suggest) refuse("hunt_suggest - root steering");
       if (p.proof_channel) refuse("proof_channel - E9's rules are final selection's");

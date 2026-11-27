@@ -196,7 +196,9 @@
 // visits on them by sequential halving on g + ln prior + sigma(q); the move
 // to play is choose_gumbel(). It replaces the root's Dirichlet noise and
 // policy temperature (refused with it) and the move temperature (choose_by_
-// visits with one is refused); interior nodes keep PUCT and widening; match
+// visits with one is refused) and takes the policy temperature and the
+// unknown-move scale at 1 (the root's logits I21's raw ones, up to a
+// constant); interior nodes keep PUCT and widening; match
 // play keeps PUCT and LCB (choose() and the re-roots are refused under it).
 // A candidate of unknown legality is verified at its first visit, as under
 // PUCT; one found illegal in the first phase gives its place to the next of
@@ -679,11 +681,14 @@ struct SearchParams {
   // ---- Register E12: Gumbel root search (Danihelka et al., ICLR 2022) - a prototype, OFF ----
   /// The root's Gumbel sample and sequential halving (header comment's GUMBEL
   /// ROOT; t5d/gumbel.hpp). Self-play's, after I21's ranking (§8.4, 6g); off,
-  /// no code path, allocation or digest changes. On, the search refuses: the
+  /// every hook is behind it and the arm's state allocates nothing (the other
+  /// four fields' ranges are checked either way). On, the search refuses: the
   /// flat form (part K), root_noise and root_policy_temperature != 1 (the draw
-  /// replaces them), asset_map and hunt_suggest (root steering - asset_map is
-  /// on by default: a Gumbel caller turns it off), the proof channel (E9's
-  /// rules are final selection's), gumbel_simulations 0.
+  /// replaces them), policy_temperature and unknown_prior_scale != 1 (the
+  /// root's logits are then the network's raw ones up to a constant - I21's),
+  /// asset_map and hunt_suggest (root steering - asset_map is on by default: a
+  /// Gumbel caller turns it off), the proof channel (E9's rules are final
+  /// selection's), gumbel_simulations 0.
   bool gumbel_root = false;
   /// m: the sample's size, m_eff = min(m, n, open edges) - the paper's
   /// min(n, 16): a PLACEHOLDER.
@@ -694,7 +699,9 @@ struct SearchParams {
   /// (the choice among the current survivors).
   std::uint64_t gumbel_simulations = 0;
   /// sigma(q) = (c_visit + max_b N(b)) * c_scale * (q + 1) / 2 - the paper's
-  /// 50 and 1, PLACEHOLDERS (spec §16, I21's form).
+  /// 50 and 1, PLACEHOLDERS (spec §16, I21's form); each finite, 0 to 1e6
+  /// (gumbel::kMaxCVisit, kMaxCScale - placeholder caps that keep sigma
+  /// finite).
   double gumbel_c_visit = 50.0;
   double gumbel_c_scale = 1.0;
 

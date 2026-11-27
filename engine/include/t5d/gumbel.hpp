@@ -107,6 +107,15 @@ double sigma(double q, std::uint32_t max_visits, double c_visit, double c_scale)
 /// sum_{visited} prior) / (1 + N), N the visits in all.
 double mixed_value(std::span<const Action> actions, double v_net) noexcept;
 
+/// The largest c_visit and c_scale Root::make (and the search's validate)
+/// accepts - PLACEHOLDERS, far above the paper's 50 and 1, chosen so that
+/// sigma's (c_visit + max visits) x c_scale stays finite and far from overflow
+/// for any visit count a search can reach (a child's visits are 32-bit:
+/// (1e6 + 2^32) x 1e6 < 5e15). Unbounded, the product overflows to +infinity
+/// and a lost candidate's sigma (q = -1: infinity x 0) is NaN.
+inline constexpr double kMaxCVisit = 1e6;
+inline constexpr double kMaxCScale = 1e6;
+
 /// Root's parameters.
 struct Config {
   std::size_t m = 16;
@@ -123,7 +132,9 @@ class Root {
   /// open_count: the order's open prefix (the edges open at the draw; the
   /// rest never open). m_eff = min(m, simulations, open_count) candidates,
   /// edges 0..m_eff-1; m_eff 0: an inactive Root. Refills and the fallbacks
-  /// look no further than the open prefix.
+  /// look no further than the open prefix. Throws std::invalid_argument for a
+  /// c_visit or c_scale that is not finite, is negative or is above its cap
+  /// (kMaxCVisit, kMaxCScale).
   static Root make(std::vector<double> g_by_edge, std::size_t open_count, const Config& config);
 
   bool active() const noexcept { return active_; }
@@ -147,12 +158,16 @@ class Root {
   /// score kept) and the next one begins. kNone: no open edge at all.
   std::size_t next(std::span<const Action> actions, double v_net) noexcept;
   /// The move to play: the open candidate with the largest score (ties: the
-  /// first); with none, the open shown edge with the largest; kNone.
+  /// first); with none, the open shown edge with the largest; kNone. A NaN
+  /// score (a NaN q or prior in `actions`) orders below every other, here and
+  /// in the halving, so their orders stay strict weak orders.
   std::size_t best(std::span<const Action> actions, double v_net) const noexcept;
-  /// g + ln prior + sigma(completed q), max visits and v_mix over `actions`.
-  double score(std::span<const Action> actions, std::size_t edge, double v_mix, std::uint32_t max_visits) const noexcept;
 
  private:
+  /// g + ln prior + sigma(completed q), max visits and v_mix over `actions`;
+  /// `edge` an open edge of `actions` (its callers, best and halve, pass only
+  /// those).
+  double score(std::span<const Action> actions, std::size_t edge, double v_mix, std::uint32_t max_visits) const noexcept;
   void refill(std::span<const Action> actions) noexcept;
   void halve(std::span<const Action> actions, double v_net) noexcept;
 

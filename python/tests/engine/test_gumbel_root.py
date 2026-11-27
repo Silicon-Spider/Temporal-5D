@@ -76,6 +76,9 @@ def test_gumbel_choice_and_refusals_reach_python():
             ({"asset_map": 1}, "asset_map"),
             ({"root_noise": 1}, "root_noise"),
             ({"root_policy_temperature": 1.25}, "root_policy_temperature"),
+            ({"policy_temperature": 1.25}, ": policy_temperature must be 1"),
+            ({"unknown_prior_scale": 0.5}, "unknown_prior_scale must be 1"),
+            ({"gumbel_c_visit": 2e6}, "gumbel_c_visit"),
             ({"split": T5D_SPLIT_FLAT}, "flat"),
             ({"gumbel_simulations": 0}, "gumbel_simulations"),
         ):

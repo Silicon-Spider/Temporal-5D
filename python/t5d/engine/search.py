@@ -55,9 +55,12 @@ rule or a search decision.
   ``gumbel_simulations`` (the playout cap less one) gives a self-play search's root a Gumbel
   sample of ``gumbel_m`` moves and sequential halving over them (Danihelka et al., ICLR 2022;
   ``t5d/gumbel.hpp``); the move to play is ``Search.choose_gumbel()``. The engine refuses it
-  with the flat split, root noise, a root policy temperature, the asset map (on by default:
-  pass ``asset_map=0``), Hunt's suggestions and the proof channel, and refuses ``choose``, a
-  ``choose_by_visits`` temperature and the re-roots under it. The generator's arm (its policy
+  with the flat split, root noise, a root policy temperature, a policy temperature or unknown
+  prior scale other than 1 (the root's logits are then the network's raw ones up to a constant,
+  as I21's target reads them), the asset map (on by default: pass ``asset_map=0``), Hunt's
+  suggestions and the proof channel (and ``gumbel_c_visit`` or ``gumbel_c_scale`` above 1e6,
+  with or without the flag), and refuses ``choose``, a ``choose_by_visits`` temperature and the
+  re-roots under it. The generator's arm (its policy
   target, the root value under halving) is not built (build-log issue 415).
 * **Lifetimes.** A leaf's pointers live until the next ``gather``, ``deliver``, ``abandon``
   or ``close``: ``leaf_expansion`` copies at once (``Expansion.from_c``). ``close`` (or the

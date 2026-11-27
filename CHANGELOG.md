@@ -10,6 +10,42 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-27 - Register E12's review round: the root's logits held to I21's, sigma's constants capped (SF-1, EC-3)
+
+The fix round of register E12 part 1's three-pass review (spec, correctness, mutation; the main
+loop's decisions binding), on `lane/engine` after main c2f9013 was merged (M23).
+
+- **SF-1 (MEDIUM): the root's logits could drift from I21's raw logits.** The draw, the halving
+  and the choice read ln of the root prior, which `policy_temperature` and `unknown_prior_scale`
+  still shaped under the arm (only `root_policy_temperature` was refused); at
+  `unknown_prior_scale` 0 unknown moves could never be candidates. `validate` now refuses both
+  away from 1 under `gumbel_root`, each named. With the refusals each candidate's logit is the
+  network's raw logit less one constant. The submit was checked: a legal submit the network gives
+  no logit takes `submit_share`, and `train.targets.raw_prior` (which `train.completed_q` reads)
+  gives it the same share from the record's full-search parameters, which the generator's
+  overrides set for the cheap searches too - the two agree exactly, so nothing changed there.
+  New test `mcts_gumbel_root_logits_are_the_raw_logits_i21_reads`; the refusals added to
+  `mcts_gumbel_refusals_name_their_parameter` and the binding's
+  `test_gumbel_choice_and_refusals_reach_python`.
+- **EC-3 (LOW): sigma overflowed to NaN with parameters `validate` accepted** (c_visit 1e308 and
+  c_scale 10: a lost candidate's sigma infinity x 0, and `best()` played it). `gumbel_c_visit`
+  and `gumbel_c_scale` are each capped at 1e6 (`gumbel::kMaxCVisit`, `kMaxCScale`,
+  placeholders), refused above it by `validate` (with the flag on or off) and by
+  `gumbel::Root::make`; each refusal names its own field (one message named both). `best()` and
+  `halve()` order a NaN score below every other, so their orders stay strict weak orders. Tests
+  `mcts_gumbel_constants_are_capped_so_sigma_stays_finite` (the review's two probes turned into
+  refusals) and `gumbel_nan_scores_order_last_in_the_choice_and_the_halving`.
+- **The correctness pass's minor point on `Root::score`**: it is private (only `best` and
+  `halve` call it, with open edges).
+- Documents: `mcts.hpp`'s parameter comments, the README's "Gumbel root search", `search.py`'s
+  docstring; the build log's readings row 18 reworded and row 26 added (issue 415 (c), (m)),
+  issue 415's review-round block, the E12 row and the lane's line.
+
+Spec: §8.4, §16 (I21's "the network's raw" logits), register E12 and I21 - proposed edits 312 and
+314 reworded (the logit the raw one up to a constant, the two refusals, the caps; edit 314's
+"replaced, not compounded" is true now that a policy temperature other than 1 is refused). No new
+edit; the caps are placeholders the spec does not give (issue 415 (m), readings row 26).
+
 ### 2026-11-24 - Register E12 (Gumbel root search), part 1: the C API and the binding
 
 The five `t5d_search_params` fields in front of `expand` (still last), in `params_from`, the

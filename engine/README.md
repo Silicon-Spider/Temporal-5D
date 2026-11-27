@@ -3195,8 +3195,12 @@ visited candidate and `v_mix` - the root's own evaluation blended with the visit
 candidates' prior-weighted values (Danihelka et al.'s form) - for an unvisited one.
 `Search::choose_gumbel()` is the move to play: the open survivor with the largest score.
 Interior nodes keep PUCT (E1) and widening. The root's logit is `ln` of the search's
-root prior (after the policy temperature, the unknown-move scale and the submit share)
-- with the defaults the network's raw softmax, which is what `train.completed_q` reads.
+root prior. The arm holds the policy temperature and the unknown-move scale at 1
+(refused otherwise), so that logit is the network's raw logit less one constant, the
+same for every candidate - the logits `train.completed_q` reads for I21's target. A
+legal submit the network gives no logit takes `submit_share` and the moves the rest of
+their softmax, exactly as `train.targets.raw_prior` reads it from the record's search
+parameters (the generator gives its full and cheap searches one `submit_share`).
 
 **The pinned forms** (`gumbel.hpp` documents each): the variate `g = -ln(-ln u)`,
 `u = (floor(x / 2^12) + 0.5) x 2^-52` (52 bits: 53 would round to 1 and give +inf);
@@ -3210,11 +3214,17 @@ index give `g` again; `mix64` SplitMix64's finaliser.
 (false), `gumbel_m` (16, the paper's placeholder), `gumbel_simulations` (0: the driver
 gives it - its playout cap less one, the root's own evaluation being a playout),
 `gumbel_c_visit` (50) and `gumbel_c_scale` (1), placeholders as I21's are. `gumbel_m`
-must be 1 or more and the two constants finite and non-negative whether or not the arm
-is on. On, the search refuses (`std::invalid_argument`, naming the parameter):
-`gumbel_simulations` 0; the flat form (its candidates are whole turns, sampled from the
-turn generator - open until 6x, register part K); `root_noise` and a
-`root_policy_temperature` other than 1 (the draw replaces both, I19); `asset_map` and
+must be 1 or more and each constant finite and from 0 to 1e6 whether or not the arm is
+on (refusing an absurd value with the flag off is the reading). The caps
+(`gumbel::kMaxCVisit`, `kMaxCScale`) are placeholders that keep sigma finite: unbounded,
+`(c_visit + max N) x c_scale` reached +inf and a lost candidate's sigma was NaN
+(infinity x 0); `Root::make` refuses the same, and a NaN score orders below every other
+in the halving and the choice. On, the search refuses (`std::invalid_argument`, naming
+the parameter): `gumbel_simulations` 0; the flat form (its candidates are whole turns,
+sampled from the turn generator - open until 6x, register part K); `root_noise` and a
+`root_policy_temperature` other than 1 (the draw replaces both, I19); a
+`policy_temperature` or `unknown_prior_scale` other than 1 (the root's logits are then
+the network's raw ones up to a constant, as I21's target reads them); `asset_map` and
 `hunt_suggest` (root steering - `asset_map` is on by default, so a Gumbel caller turns
 it off); the proof channel (E9's rules are final selection's). Under the arm,
 `choose()` (match play keeps PUCT and LCB, §8.6), `choose_by_visits` with a temperature
@@ -3263,7 +3273,11 @@ target at each halving, the kept half the test's own top half, the final counts 
 3s, four 9s, two 21s and two 49s; the wait, the first phase's refill and the later
 phases' drop; the choice better than the prior in expectation and, at c_scale 0, a
 sample from it. In the search: off by default and inert (the digest under all three
-splits); each refusal by name, the refused calls changing nothing; the root's children
+splits); each refusal by name, the refused calls changing nothing; the root's logits
+the network's raw ones less one constant and ln of the prior `train.targets.raw_prior`
+reads (both splits, with and without a submit and the network's submit logit); the
+constants' caps (the search's and `Root::make`'s refusals, sigma finite at both caps)
+and a NaN score ordered last in the choice and the halving; the root's children
 the sample in its order with the schedule's visits (and edges outside it unvisited); the
 choice the argmax of the scores recomputed from `root_children()`, `v_mix` recomputed
 from them on a search cut mid-phase; a planted move found for 20 seeds; one simulation a

@@ -472,6 +472,34 @@ class Planted final : public mcts::Evaluator {
   }
 };
 
+// Logits a function of the move alone, a fixed submit logit (NaN: none given) and equal values;
+// the first request's logits kept - a search's first evaluation is its root's.
+class Keyed final : public mcts::Evaluator {
+ public:
+  explicit Keyed(float submit) : submit_(submit) {}
+  static float of(const Move& m) {
+    const int key = 7 * m.from_square + 3 * m.to_square + 5 * m.to_timeline + 2 * m.to_half_turn;
+    return 0.31f * static_cast<float>(((key % 11) + 11) % 11) - 1.2f;
+  }
+  void evaluate(std::span<const mcts::EvalRequest> batch, std::span<mcts::Evaluation> out) override {
+    for (std::size_t i = 0; i < batch.size(); ++i) {
+      const auto& moves = batch[i].expansion->moves();
+      out[i].logits.resize(moves.size());
+      for (std::size_t k = 0; k < moves.size(); ++k) out[i].logits[k] = of(moves[k]);
+      out[i].submit_logit = submit_;
+      out[i].wdl = mcts::wdl_of(0.0);
+      out[i].value = mcts::two_hot(0.0);
+      if (first_) root_logits = out[i].logits;
+      first_ = false;
+    }
+  }
+  std::vector<float> root_logits;
+
+ private:
+  float submit_;
+  bool first_ = true;
+};
+
 // Fixed unequal logits (by candidate index) and equal values.
 class Tilted final : public mcts::Evaluator {
  public:
@@ -546,6 +574,16 @@ TEST(mcts_gumbel_refusals_name_their_parameter) {
   p = gumbel_params(64);
   p.proof_channel = true;
   CHECK(refused(p, "proof_channel"));
+  // SF-1 (the review of 2026-11-27): the root's logits are the network's raw ones, as I21 reads.
+  p = gumbel_params(64);
+  p.policy_temperature = 1.25;
+  CHECK(refused(p, "Gumbel root search): policy_temperature must be 1"));
+  p = gumbel_params(64);
+  p.unknown_prior_scale = 0.5;
+  CHECK(refused(p, "Gumbel root search): unknown_prior_scale must be 1"));
+  p = gumbel_params(64);
+  p.unknown_prior_scale = 0;  // unknown moves would never be candidates
+  CHECK(refused(p, "unknown_prior_scale must be 1"));
   p = gumbel_params(0);
   CHECK(refused(p, "gumbel_simulations"));
   p = gumbel_params(64, 0);
@@ -553,10 +591,10 @@ TEST(mcts_gumbel_refusals_name_their_parameter) {
   for (const double bad : {-1.0, std::nan("")}) {
     p = gumbel_params(64);
     p.gumbel_c_visit = bad;
-    CHECK(refused(p, "gumbel_c_visit"));
+    CHECK(refused(p, "SearchParams::gumbel_c_visit"));
     p = gumbel_params(64);
     p.gumbel_c_scale = bad;
-    CHECK(refused(p, "gumbel_c_scale"));
+    CHECK(refused(p, "SearchParams::gumbel_c_scale"));
   }
   // On a Gumbel search: match play's choice and the re-roots are refused, nothing changed.
   const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
@@ -574,6 +612,144 @@ TEST(mcts_gumbel_refusals_name_their_parameter) {
   CHECK_THROWS_AS(s.advance_moves(c.moves), std::invalid_argument);
   CHECK_THROWS_AS(s.advance_action(c.moves), std::invalid_argument);
   CHECK_EQ(s.digest(), digest);
+}
+
+TEST(mcts_gumbel_root_logits_are_the_raw_logits_i21_reads) {
+  // SF-1 (the review of 2026-11-27): under the arm each candidate's logit (gumbel_view's row:
+  // ln of the root prior, which the draw, the halving and the choice read) is the network's raw
+  // logit less one constant, the same for every candidate - and it is ln of the raw prior as
+  // train.targets.raw_prior reads it for I21's target (a submit the network gave no logit:
+  // submit_share, the moves (1 - submit_share) times their softmax; the generator gives its full
+  // and cheap searches one submit_share, and the target reads the record's). Both splits; the
+  // Standard start (no submit) and a mid-turn root with a legal submit, with and without the
+  // network's submit logit.
+  GameState mid = t5d_test::game({"[3k/4/4/K3:0:1:w]", "[3k/4/4/K3:+1:2:w]"}, BoardSize{4, 4}, RuleOptions{},
+                                 Colour::White);
+  t5d_test::play(mid, "(0T1)Ka1(0T1)a2");
+  const double share = mcts::SearchParams{}.submit_share;
+  int submits = 0;
+  for (const mcts::TurnSplit split : {mcts::TurnSplit::BoardMove, mcts::TurnSplit::Tree}) {
+    for (const bool middle : {false, true}) {
+      for (const bool given : {true, false}) {
+        constexpr float kSubmitLogit = 0.4f;
+        Keyed ev(given ? kSubmitLogit : std::numeric_limits<float>::quiet_NaN());
+        mcts::SearchParams p = gumbel_params(40, 32);
+        p.split = split;
+        mcts::Search s(middle ? mid : standard(), p, middle ? 1 : 0);
+        s.run(ev, mcts::Limits{41});
+        const gumbel::RootView view = s.gumbel_view();
+        const std::vector<mcts::RootChild> children = s.root_children();
+        REQUIRE(view.drawn);
+        REQUIRE_EQ(view.rows.size(), children.size());
+        REQUIRE_EQ(children.size(), s.node(s.root()).edge_count);  // m_eff covers every open edge
+        bool offered = false;
+        for (const mcts::RootChild& c : children) offered = offered || c.submit;
+        submits += offered ? 1 : 0;
+        CHECK(offered == middle);
+        // The raw prior, train.targets.raw_prior's form, from the root's own evaluation.
+        const std::vector<float>& z = ev.root_logits;
+        REQUIRE_EQ(z.size() + (offered ? 1u : 0u), children.size());
+        double top = given && offered ? double{kSubmitLogit} : -kInf;
+        for (const float l : z) top = std::max(top, static_cast<double>(l));
+        double sum = given && offered ? std::exp(double{kSubmitLogit} - top) : 0.0;
+        for (const float l : z) sum += std::exp(static_cast<double>(l) - top);
+        const double moves_share = offered && !given ? 1.0 - share : 1.0;
+        double constant = std::numeric_limits<double>::quiet_NaN();
+        for (std::size_t i = 0; i < children.size(); ++i) {
+          const mcts::RootChild& c = children[i];
+          const double raw = c.submit ? double{kSubmitLogit} : static_cast<double>(Keyed::of(c.moves.at(0)));
+          const double raw_prior = c.submit ? (given ? std::exp(raw - top) / sum : share)
+                                            : moves_share * std::exp(raw - top) / sum;
+          CHECK(std::abs(view.rows[i].logit - std::log(raw_prior)) < 1e-9);
+          if (c.submit && !given) continue;  // no raw logit: submit_share stands for it
+          if (std::isnan(constant)) constant = view.rows[i].logit - raw;
+          CHECK(std::abs(view.rows[i].logit - raw - constant) < 1e-9);
+        }
+      }
+    }
+  }
+  CHECK_EQ(submits, 4);
+}
+
+TEST(mcts_gumbel_constants_are_capped_so_sigma_stays_finite) {
+  // EC-3 (the review of 2026-11-27): unbounded, (c_visit + max N) x c_scale overflowed - c_visit
+  // 1e308 and c_scale 10 made a lost candidate's sigma NaN (infinity x 0) and best() play it. Each
+  // constant is capped at 1e6 (a placeholder), refused above it whether or not the arm is on
+  // (refusing an absurd value with the flag off is the reading); at both caps sigma is finite for
+  // any 32-bit visit count.
+  const auto refused = [](const mcts::SearchParams& p, const char* name) {
+    try {
+      mcts::Search s(standard(), p);
+    } catch (const std::invalid_argument& e) {
+      return std::string(e.what()).find(name) != std::string::npos;
+    }
+    return false;
+  };
+  for (const bool on : {true, false}) {
+    mcts::SearchParams p = gumbel_params(63);
+    p.gumbel_root = on;
+    p.gumbel_c_visit = 1e308;
+    p.gumbel_c_scale = 10;
+    CHECK(refused(p, "SearchParams::gumbel_c_visit"));
+    p.gumbel_c_visit = std::nextafter(gumbel::kMaxCVisit, kInf);
+    p.gumbel_c_scale = 1;
+    CHECK(refused(p, "SearchParams::gumbel_c_visit"));
+    p.gumbel_c_visit = kInf;
+    CHECK(refused(p, "SearchParams::gumbel_c_visit"));
+    p.gumbel_c_visit = 50;
+    p.gumbel_c_scale = std::nextafter(gumbel::kMaxCScale, kInf);
+    CHECK(refused(p, "SearchParams::gumbel_c_scale"));
+    p.gumbel_c_scale = kInf;
+    CHECK(refused(p, "SearchParams::gumbel_c_scale"));
+    p.gumbel_c_visit = gumbel::kMaxCVisit;
+    p.gumbel_c_scale = gumbel::kMaxCScale;
+    CHECK_NOTHROW(mcts::Search(standard(), p));
+    p.gumbel_c_visit = 0;
+    p.gumbel_c_scale = 0;
+    CHECK_NOTHROW(mcts::Search(standard(), p));
+  }
+  CHECK_EQ(gumbel::kMaxCVisit, 1e6);
+  CHECK_EQ(gumbel::kMaxCScale, 1e6);
+  for (const double q : {-1.0, 0.0, 1.0}) {
+    const double s = gumbel::sigma(q, std::numeric_limits<std::uint32_t>::max(), gumbel::kMaxCVisit, gumbel::kMaxCScale);
+    CHECK(std::isfinite(s) && s >= 0 && s < 5e15);
+  }
+  // The pure part refuses them too (the case the review found: a lost and a won candidate).
+  CHECK_THROWS_AS(gumbel::Root::make({0.0, 0.0}, 2, gumbel::Config{2, 2, 1e308, 10.0}), std::invalid_argument);
+  CHECK_THROWS_AS(gumbel::Root::make({0.0, 0.0}, 2, gumbel::Config{2, 2, 50.0, std::nan("")}), std::invalid_argument);
+  CHECK_THROWS_AS(gumbel::Root::make({0.0, 0.0}, 2, gumbel::Config{2, 2, -1.0, 1.0}), std::invalid_argument);
+  gumbel::Root capped = gumbel::Root::make({0.0, 0.0}, 2, gumbel::Config{2, 2, gumbel::kMaxCVisit, gumbel::kMaxCScale});
+  std::vector<gumbel::Action> a(2);
+  a[0] = {0.5, 1, 0, -1.0, true};  // lost
+  a[1] = {0.5, 1, 0, +1.0, true};  // won
+  CHECK_EQ(capped.best(a, 0.0), std::size_t{1});
+}
+
+TEST(gumbel_nan_scores_order_last_in_the_choice_and_the_halving) {
+  // EC-3's guard: a NaN score (a NaN q or prior from the caller) orders below every number, so
+  // best() never plays it while another is open and the halving's sort keeps a strict weak order.
+  gumbel::Root root = gumbel::Root::make({0.0, 0.0}, 2, gumbel::Config{2, 2, 50.0, 1.0});
+  std::vector<gumbel::Action> a(2);
+  a[0] = {0.5, 1, 0, std::nan(""), true};
+  a[1] = {0.5, 1, 0, -1.0, true};
+  CHECK_EQ(root.best(a, 0.0), std::size_t{1});
+  std::swap(a[0], a[1]);
+  CHECK_EQ(root.best(a, 0.0), std::size_t{0});
+  a[0].q = a[1].q = std::nan("");  // every score NaN: still an open candidate, the first
+  CHECK_EQ(root.best(a, 0.0), std::size_t{0});
+  // The halving: four candidates a visit each, then two kept - never the NaN one, which has
+  // the largest g (ordered by score it would be first).
+  gumbel::Root four = gumbel::Root::make({9.0, 0.3, 0.2, 0.1}, 4, gumbel::Config{4, 8, 50.0, 1.0});
+  REQUIRE_EQ(four.schedule().size(), std::size_t{2});
+  std::vector<gumbel::Action> b(4, gumbel::Action{0.25, 0, 0, 0.0, true});
+  for (int k = 0; k < 4; ++k) {
+    const std::size_t e = four.next(b, 0.0);
+    REQUIRE(e < 4);
+    ++b[e].visits;
+    b[e].q = e == 0 ? std::nan("") : 0.1 * static_cast<double>(e);
+  }
+  REQUIRE_EQ(four.next(b, 0.0), std::size_t{2});  // the halving ran; of the two kept, the first visited first
+  CHECK((four.considered() == std::vector<std::size_t>{2, 3}));
 }
 
 TEST(mcts_gumbel_root_children_are_the_sample_and_the_visits_the_schedules) {
