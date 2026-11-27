@@ -10,6 +10,29 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-28 - Build log: section 15.5's clause 4 recorded as met, and status lines brought up to the rulings of 2026-11-23
+
+The main loop drafted, read-only, every question still open for the user, for the sign-off
+report. The draft found lines in `docs/BUILD_LOG.md` that predate the user's ruling of 2026-11-23
+(the 2026-11-15 review's 23 decisions are rulings) or later merges. They are brought up to date:
+- The done-means audit's clause 4 ("each committed-class row decided or awaiting a named trained
+  ablation") is recorded as **met since 2026-11-23**. Decision 17 makes C25 a Contingency -
+  "decided for v1, not built" in the register's vocabulary - and settles issue 538 (b) and (c).
+  The register status table's C25 row says so; issues 536 and 538 carry settled notes (decisions
+  16 and 17); clause 2's C26/C27 item says they are required (decision 16) and merged.
+- Register status rows that still said "put to the user" for settled items: B15 (issue 205,
+  decision 1), B17 (issue 217, decision 2), D3 and D9 (issues 231(c) and 233(a), decision 3), I2
+  (issue 450, decision 14).
+- Readings row 13 and the H22 row: since E11's merge (2026-11-24) the clocked loop takes the
+  same node-budgeted, uncharged turn-start verdict (issue 456); the interim reading is the built
+  one.
+- The E12 row: its readings are rows 16-29, not 16-25, and part 1 merged on 2026-11-27.
+- The main loop's work item for issues 536-538 and 300-306 says they are settled, and that the
+  placeholders go to the user in the sign-off report.
+
+Spec: register part K's last row and the register's preamble still say the review's decisions
+await the owner's confirmation - proposed edit 417.
+
 ### 2026-11-28 - Build log: the current state at decision 7's merge
 
 `docs/BUILD_LOG.md`:
