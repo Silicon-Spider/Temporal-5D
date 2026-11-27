@@ -1,0 +1,217 @@
+"""Register E12 (Gumbel root search; a prototype, off by default) through the binding: the
+parameters' defaults and their mirror of the library, the step loop against the engine's own
+run, the choice and the refusals - and the numbers the engine pins against the target side's
+(``train.completed_q``: v_mix and sigma).
+
+The engine's arm is ``t5d_search_params.gumbel_root`` (``engine/include/t5d/gumbel.hpp``; spec
+section 8.4): at a self-play root, a Gumbel sample of m moves and sequential halving over them;
+the move to play is ``Search.choose_gumbel()``. The training generator's arm is not built (its
+policy target and the root value under halving wait on I21 and a ruling; build-log issue 416).
+"""
+
+from __future__ import annotations
+
+import math
+import zlib
+
+import numpy as np
+import pytest
+
+from t5d.engine import Game
+from t5d.engine.capi import (
+    T5D_EVALUATOR_RANDOM,
+    T5D_EVALUATOR_UNIFORM,
+    T5D_SPLIT_BOARD_MOVE,
+    T5D_SPLIT_FLAT,
+    T5D_SPLIT_TREE,
+    layout_mismatches,
+)
+from t5d.engine.errors import EngineArgumentError
+from t5d.engine.evaluator import Evaluation, UniformEvaluator, move_count, run_search, state_of
+from t5d.engine.search import Search, search_params
+from tests.engine.helpers import requires_engine
+
+GUMBEL = dict(gumbel_root=1, gumbel_simulations=63, asset_map=0, hunt=0, settling=0)
+
+
+@requires_engine
+def test_gumbel_parameters_default_off_and_mirror_the_library():
+    """Off by default; m 16, c_visit 50, c_scale 1 - the
+    paper's placeholders; n 0 (the driver gives it); the struct as the library lays it out."""
+    with Game.variant("Standard") as g:
+        assert layout_mismatches(g.lib) == []
+        p = search_params(g.lib)
+    assert (p.gumbel_root, p.gumbel_m, p.gumbel_simulations) == (0, 16, 0)
+    assert (p.gumbel_c_visit, p.gumbel_c_scale) == (50.0, 1.0)
+    from t5d.train.records import params_dict, params_from_dict
+
+    q = params_from_dict(params_dict(search_params(gumbel_root=1, gumbel_m=4, gumbel_simulations=9, gumbel_c_visit=30.0)))
+    assert (q.gumbel_root, q.gumbel_m, q.gumbel_simulations, q.gumbel_c_visit, q.gumbel_c_scale) == (1, 4, 9, 30.0, 1.0)
+
+
+@requires_engine
+@pytest.mark.parametrize("split", [T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_TREE])
+def test_the_gumbel_step_loop_is_the_engines_run(split):
+    """The step API driven by the binding's loop (the uniform evaluator) builds the tree the engine's
+    own run builds - the same digest, the same playouts, the same choice."""
+    with Game.variant("Standard") as g:
+        params = search_params(g.lib, split=split, seed=3, **GUMBEL)
+        with Search(g, params=params) as stepped, Search(g, params=params) as run:
+            run_search(stepped, UniformEvaluator(), playouts=64, batch_size=int(params.batch_size))
+            run.run(T5D_EVALUATOR_UNIFORM, 64)
+            assert stepped.info().playouts == run.info().playouts == 64
+            assert stepped.digest() == run.digest()
+            assert stepped.choose_gumbel() == run.choose_gumbel()
+
+
+@requires_engine
+def test_gumbel_choice_and_refusals_reach_python():
+    """The choice is a root child's index; match play's choice and re-roots are refused under the
+    arm, and so are the parameters it replaces or cannot take - each named; without the flag there
+    is no Gumbel choice."""
+    with Game.variant("Standard") as g:
+        with Search(g, params=search_params(g.lib, **GUMBEL)) as s:
+            s.run(T5D_EVALUATOR_UNIFORM, 64)
+            assert 0 <= s.choose_gumbel() < s.info().root_children
+            with pytest.raises(EngineArgumentError):
+                s.choose()
+            with pytest.raises(EngineArgumentError):
+                s.choose_by_visits(0.9, 0.5)
+            s.choose_by_visits(0.0, 0.5)  # the most visited child: a read, allowed
+            with pytest.raises(EngineArgumentError):
+                s.advance(0)
+        for override, name in (
+            ({"asset_map": 1}, "asset_map"),
+            ({"root_noise": 1}, "root_noise"),
+            ({"root_policy_temperature": 1.25}, "root_policy_temperature"),
+            ({"policy_temperature": 1.25}, ": policy_temperature must be 1"),
+            ({"unknown_prior_scale": 0.5}, "unknown_prior_scale must be 1"),
+            ({"gumbel_c_visit": 2e6}, "gumbel_c_visit"),
+            ({"split": T5D_SPLIT_FLAT}, "flat"),
+            ({"gumbel_simulations": 0}, "gumbel_simulations"),
+        ):
+            with pytest.raises(EngineArgumentError, match=name):
+                Search(g, params=search_params(g.lib, **{**GUMBEL, **override}))
+        with Search(g) as plain:
+            plain.run(T5D_EVALUATOR_UNIFORM, 16)
+            with pytest.raises(EngineArgumentError, match="gumbel_root"):
+                plain.choose_gumbel()
+
+
+def test_the_engines_numbers_are_the_target_sides():
+    """No engine needed: the target side's v_mix and sigma (``train.completed_q``) on the numbers the
+    engine's test pins (test_gumbel.cpp: 0, 31.8, 15.9 and 26.5), and the SplitMix64 finaliser the
+    engine's Gumbel stream is built on, on the inputs the engine pins - so a record can derive an
+    edge's g again (gumbel.hpp's formula, from search_seed, root_key and the candidate index)."""
+    from t5d.train import completed_q
+    from t5d.train.selfplay import mix
+
+    prior = np.array([0.5, 0.3, 0.2])
+    visits = np.array([3, 1, 0])
+    q = np.array([0.2, -0.4, 0.0])
+    v_mix = completed_q.mixed_value(prior, q, visits, 0.1)
+    assert math.isclose(v_mix, 0.0, abs_tol=1e-12)
+    cfg = completed_q.CompletedQConfig()  # c_visit 50, c_scale 1, q mapped onto [0, 1]
+    assert (cfg.c_visit, cfg.c_scale, cfg.value_range) == (50.0, 1.0, "unit")
+    for value, want in ((0.2, 31.8), (-0.4, 15.9), (v_mix, 26.5)):
+        assert math.isclose(float(completed_q.sigma(np.float64(value), 3, cfg)), want, rel_tol=1e-12)
+    assert mix(0) == 0 and mix(1) == 0x5692161D100B05E5 and mix(2) == 0xDBD238973A2B148A
+    assert mix(2**64 - 1) == 0xB4D055FCF2CBBD7B
+
+
+@requires_engine
+def test_gumbel_choice_is_a_finalist_and_varies_with_the_seed():
+    """The binding's ``choose_gumbel`` is the engine's index (the mutation pass of 2026-11-27, P05):
+    with the random evaluator the halving's choice is one of the last two survivors (the most
+    visited children), and over a few seeds it is not always the first child - under the uniform
+    evaluator child 0 always wins, which hid a binding that returned a constant."""
+    choices = []
+    with Game.variant("Standard") as g:
+        for seed in range(1, 9):
+            with Search(g, params=search_params(g.lib, seed=seed, **{**GUMBEL, "gumbel_simulations": 200})) as s:
+                s.run(T5D_EVALUATOR_RANDOM, 201, seed=5)
+                visits = [c.visits for c in s.children()]
+                chosen = s.choose_gumbel()
+                assert visits[chosen] == max(visits)
+                choices.append(chosen)
+    assert any(c != 0 for c in choices), choices
+
+
+class _KeyedEvaluator:
+    """Non-uniform, deterministic evaluations - logits and WDL logits drawn from a generator seeded
+    by the leaf's candidate moves - so that the halving's values, and with them sigma's constants,
+    matter."""
+
+    def __call__(self, positions):
+        out = []
+        for p in positions:
+            moves = np.ascontiguousarray(state_of(p).moves)
+            rng = np.random.default_rng(zlib.crc32(moves.tobytes()) + 7919 * move_count(p))
+            out.append(
+                Evaluation(
+                    rng.normal(0.0, 1.5, move_count(p)).astype(np.float32),
+                    rng.normal(0.0, 1.0, 3).astype(np.float32),
+                )
+            )
+        return out
+
+
+@requires_engine
+@pytest.mark.parametrize("split", [T5D_SPLIT_BOARD_MOVE, T5D_SPLIT_TREE])
+def test_the_gumbel_fields_reach_the_step_loop(split):
+    """The binding's step loop with a non-uniform evaluator (the mutation pass of 2026-11-27): the
+    same search twice is the same tree and choice; ``gumbel_m``, ``gumbel_c_visit`` and
+    ``gumbel_c_scale`` each change the tree (the sample, and sigma in the halving); the choice is a
+    finalist - one of the most visited children."""
+    with Game.variant("Standard") as g:
+
+        def searched(**overrides):
+            fields = {**GUMBEL, "gumbel_simulations": 200, "gumbel_m": 8, "gumbel_c_visit": 2.0, "gumbel_c_scale": 0.3}
+            params = search_params(g.lib, split=split, seed=1, **{**fields, **overrides})  # each field matters here
+            with Search(g, params=params) as s:
+                run_search(s, _KeyedEvaluator(), playouts=201, batch_size=8)
+                assert s.info().playouts == 201
+                visits = [c.visits for c in s.children()]
+                chosen = s.choose_gumbel()
+                assert visits[chosen] == max(visits)
+                return s.digest(), chosen
+
+        base = searched()
+        assert searched() == base
+        for override in ({"gumbel_m": 16}, {"gumbel_c_visit": 50.0}, {"gumbel_c_scale": 1.0}):
+            assert searched(**override)[0] != base[0], override
+
+
+def test_the_gumbel_streams_pinned_values():
+    """No engine needed: ``gumbel.hpp``'s PINNED FORMS written out from the header's words - the
+    stream ``mix64(seed ^ mix64(root_key) ^ "GUMBEL12")`` and the variate ``-ln(-ln u)``, ``u =
+    (floor(x / 2^12) + 0.5) 2^-52``, ``x = mix64(stream + 0x9E3779B97F4A7C15 (index + 1))`` - give the
+    numbers ``test_gumbel.cpp`` pins (``gumbel_stream_and_variate_are_the_headers_pinned_forms``), so
+    a record's ``search_seed``, ``root_key`` and candidate index give an edge's g again."""
+    from t5d.train.selfplay import mix
+
+    mask = (1 << 64) - 1
+    salt = int.from_bytes(b"GUMBEL12", "big")
+    assert salt == 0x47554D42454C3132
+
+    def stream_seed(seed: int, key: int) -> int:
+        return mix(seed ^ mix(key) ^ salt)
+
+    def variate(stream: int, index: int) -> float:
+        x = mix((stream + 0x9E3779B97F4A7C15 * (index + 1)) & mask)
+        u = ((x >> 12) + 0.5) * 2.0**-52
+        return -math.log(-math.log(u))
+
+    pinned = {
+        (1, 2): (0xE34AEC87D7DC0D1C, {0: 1.5411658734337765, 5: 1.5874060407463333}),
+        (0, 0): (0x0BFA9490A6F51B18, {0: 2.108013627453106, 5: 5.611003628944592}),
+        (12345, 0xDEADBEEFCAFEF00D): (0x814F7A0F7D709B5F, {0: -0.8048660621588094, 5: -1.3173491397342962}),
+        (7, 0x0123456789ABCDEF): (
+            0xAA6895FFC57D779C,
+            {0: -0.3186555669931809, 1: -0.07414048585757446, 2: -0.6194684835736681, 19: 0.7140964444518106},
+        ),
+    }
+    for (seed, key), (stream, variates) in pinned.items():
+        assert stream_seed(seed, key) == stream
+        for index, want in variates.items():
+            assert math.isclose(variate(stream, index), want, rel_tol=0, abs_tol=1e-12)
