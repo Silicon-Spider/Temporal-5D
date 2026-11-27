@@ -10,6 +10,40 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-28 - Decision 7's review round, verified: the survivors re-run and the round's checks (no code)
+
+**The survivors.** The mutation pass's 14 gaps and its three bench mutants were re-run with its
+runner on a fresh `git archive` of 6aeef5d. The engine was this tree's own (E12's layout), with 3
+threads and `T5D_REQUIRE_ENGINE=1`. All 17 are KILLED:
+
+| Mutant | Killed by |
+|---|---|
+| S8 | `test_the_transient_tokens_are_the_destinations_on_superseded_boards` |
+| C9 | `test_the_flex_block_mask_is_lossless_under_a5[2-no-structure]` |
+| E2 | `test_transient_tokens_carry_the_global_inputs_with_no_global_registers` |
+| F3, F5 | `test_the_flex_block_mask_is_lossless_under_a5[2-dense-heads]` |
+| F4, F6 | `test_the_flex_block_mask_is_lossless_under_a5[2-routing-self]` |
+| K13 | `test_runs_cap_each_block_at_attn_block_boards` |
+| V1, V2 | `test_the_engines_cached_evaluator_converts_strictly_after_a_relayout` |
+| B1, B2 | `test_the_bench_counts_every_a5_token_once` |
+| B4, B5, B6, B8, B9 | `test_the_bench_runs_an_a5_job` |
+
+Every test above is in `tests/net/test_cache_a5.py`. B4, B6 and B9 were equivalent while the bench
+could not run A5, and are reachable since NC-1. The pass's 12 equivalents are accepted as it reasoned
+them.
+
+**Checks on 6aeef5d**, the engine built in the worktree, `t5d` and `t5d.dll` loaded from it:
+- ruff: "All checks passed!", "146 files already formatted";
+- `tests/net` whole, in four shards, one at a time (`T5D_REQUIRE_ENGINE=1`, 3 threads, slow
+  included): "448 passed", "447 passed", "444 passed", "447 passed" (1,786);
+- the 14 engine test files that build an evaluator, in two shards: "270 passed", "269 passed";
+- verify: every check ok (its 17 standing `proof-channel-vacuous` notes unchanged).
+
+The engine's C++ is untouched, so no engine build or gate run is owed beyond the rebuild for main's
+layout.
+
+Spec: none. This entry is evidence, and no part of the spec describes it.
+
 ### 2026-11-28 - Decision 7's review: the mutation pass's candidate tests adopted (TP-1)
 
 The mutation pass's 77 mutants left 14 real gaps. Its candidate tests kill all 14 and are adopted

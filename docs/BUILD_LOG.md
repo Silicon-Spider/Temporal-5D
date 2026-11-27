@@ -12680,3 +12680,14 @@ entry changes in the same edit as its code, which the standing rule defers to up
     and three structures; the no-global-register carry; the strict conversion after a relayout; the
     bench's counts and `_queries`; `_runs`; the FP8 rounding's unit pin); the flex test's docstring
     corrected. Checks: ruff clean; `test_cache_a5.py` with the engine test, "80 passed, 1 deselected".
+  - **Verified** (6aeef5d). The mutation pass's 14 gaps and B4, B6 and B9, re-run with its runner on a
+    fresh `git archive`: all 17 KILLED, each by a named test in `tests/net/test_cache_a5.py`
+    (CHANGELOG's table). Checks:
+    - ruff "All checks passed!", "146 files already formatted";
+    - `tests/net` whole in four shards: "448 passed", "447 passed", "444 passed", "447 passed";
+    - the 14 evaluator engine files in two shards: "270 passed", "269 passed";
+    - `verify` ok.
+
+    **For the user:** issue 276's open readings (a) and (f), and issue 277, the A5 batch drift.
+    **For the main loop:** edit 386 (completed) upstream; the cache bench's A5 run in the
+    quiet-machine block (issue 266); part 2, the v1 re-run, on the main loop's word.
