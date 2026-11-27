@@ -10,6 +10,48 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-28 - Decision 7's review, the records: the refresh's reading logged, the settled readings cited, the stale text, MEASUREMENTS' margins, the default-path tool (SN-1, SN-3 to SN-8; issue 277)
+
+The three-pass review of 218b1a3 found no HIGH. This entry and the ones after it fix every finding as
+the main loop decided.
+
+- **SN-1:** a refresh's dense pass reads the anchor's destination tokens, so a refreshed epoch's
+  history K/V depend on them. §7.3's "read only by live tokens, never by a frozen one" has no refresh
+  exception; C17 and §7.9 allow present-to-frozen flow at refreshes. It is kept as built, and is now
+  issue 276's reading (f), with both readings and their costs: under the strict one the root's
+  evaluation stops being the dense pass, and C3's test reference changes. The decision-7 entry's
+  "no frozen token's K/V depends on a destination token" and issue 252 now say "in the causal epoch
+  and below a refresh's anchor".
+- **SN-3:** issue 276 cites the spec text that settles (b) (§7.9's other perspective), (c) ("never
+  cached"), (d) (register B12 with C17) and (e) (review decision 4, §16's A6 entry). (a) stays open,
+  noting that the build's transient set is narrower than §14.4's "transient per node" with the same
+  behaviour; so does (f).
+- **SN-4:** edit 386 adds §14.4's "Built behind its flag, for the dense scope", §4.1's list of B16's
+  live query rows (destination tokens), and §15.2's A5 row, which holds in the dense scope only. The
+  BUILD_LOG A5 row's "pure input change" is limited to the dense scope.
+- **SN-5:** decisions row 7 is marked built. Issue 256, issue 258 and the for-the-user list no longer
+  describe the refusal as current. The C2 row names A5. `t5d/net/__init__.py` and
+  `tests/net/test_piece_centric.py` drop "dense scope only". MEASUREMENTS quotes §14.4 as the review
+  left it.
+- **SN-6:** MEASUREMENTS' "The cached path under A5" now has:
+  - each row's conditions, the C3 row's among them;
+  - the seeds actually run;
+  - the FP8/BF16 trunk max (3.72e-2) and value (1.20e-3), against their bounds 1e-1 and 6e-3;
+  - every margin beside A1's. The FP8/FP32 value gap is 3.1x A1's, a 3.6x margin against A1's 11x;
+    the bound is not loosened.
+- **SN-8:** the decision-7 entry's Spec: line is corrected in place (§15.2's rows, §4.1, §7.9 and C3).
+- **SN-7:** the default-path comparison is committed as `python -m t5d.net.default_path`
+  (`record OUT.pt`, `compare A B`), its 119 outputs and seeds in its docstring. A commit before it is
+  recorded by running the file against that commit's package (the docstring's command). Re-run:
+  5e77028 against this tree, "compared 119 outputs: bit for bit", the v1 at 22,969,139 parameters.
+- **Issue 277 (new), for the user:** a padded batch moves the largest A5 position's evaluation by
+  7.15e-7 (FP32), which is bitwise under A1. It is the same under the dense scope, so it predates
+  decision 7. C19-C21 read batch composition as bit-exact. Not fixed, by the main loop's decision.
+
+Spec: §7.3, §7.9, §4.1, §14.4, §15.2 and §16; register C17, C3, A5, B12, B16, C19-C21. Issue 276 is
+restated (two readings open, (a) and (f)) and issue 277 is new. Proposed edit 386 is completed with
+three more passages. Nothing of the spec is edited here.
+
 ### 2026-11-28 - Merge main (d4327ba) into lane/net, before decision 7's review round
 
 Main's commits since 5e77028 are `lane/search`'s round 3 and register E12 part 1 (the Gumbel root
@@ -81,7 +123,10 @@ pieces and its per-board registers (`PositionState.board_tokens(frozen=True)`).
 
   Beside the rows:
   - no frozen token's K/V depends on a destination token - one multiverse with two move sets gives
-    every superseded board the same entry, bit for bit;
+    every superseded board the same entry, bit for bit - in the causal epoch and below a refresh's
+    anchor. *(Review correction, 2026-11-28, SN-1: a refreshed epoch's history K/V are the refresh's
+    dense pass over the anchor, which reads the anchor's destination tokens - issue 276's reading (f),
+    kept as built.)*;
   - the scope, the inputs, B16 and B12 on transient tokens;
   - every attention path computes one function.
 - Engine side (`tests/engine/test_piece_centric_engine.py`): the cached evaluator with an A5 network
@@ -101,13 +146,20 @@ pieces and its per-board registers (`PositionState.board_tokens(frozen=True)`).
 - the search-tree fixture with node refreshes;
 - A5 in the dense scope.
 
+*(Review correction, 2026-11-28, SN-7: the comparison is now committed as `python -m
+t5d.net.default_path`, its outputs and seeds listed in its docstring.)*
+
 Issue 266 (A5 under C26) is resolved: they run together. The window under A5 stays refused (issue
 253). MEASUREMENTS has the gaps met ("The cached path under A5").
 
 Spec: §7.3, §14.4 and §16; register C17, A5, C15, B12, B16, C26. Decision 7 is built as ruled. Issue
 276 (new) holds the five readings the ruling leaves to the build, for the user. Proposed edit 386
 brings §7.3's and §16's "dense scope only" lines and register A5 up to the build. Edit 194 is marked
-superseded by decision 7.
+superseded by decision 7. *(Review correction, 2026-11-28, SN-8: the change also bears on §15.2 - the
+C2/C17, C3, C3a, C20 and G1 rows it runs for A5 - on §4.1, where B16 now biases destination-token
+query rows, and on §7.9 and register C3, the refresh's other perspective and issue 276's reading (f).
+SN-3: issue 276 was restated - four of its points are settled by spec text, and (a) and (f) stay
+open.)*
 
 ### 2026-11-27 - Build log: the current state at register E12's merge
 

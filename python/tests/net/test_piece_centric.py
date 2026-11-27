@@ -1,5 +1,6 @@
 """Register A5, piece-centric tokenisation (spec section 14.4; a prototype behind
-``NetConfig.piece_centric``, off; dense scope only).
+``NetConfig.piece_centric``, off) - in the dense scope here; under the block-causal scope and the
+cache, ``tests/net/test_cache_a5.py``.
 
 A5's tokens are A1's minus the empty squares no candidate move lands on (``state.to_piece_centric``):
 the pieces, the candidate moves' empty destination cells, the registers. The readings behind that -
