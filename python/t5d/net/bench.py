@@ -22,6 +22,17 @@ n2-default a5-piece-centric --boards 44``. A5's arm reads ``synthetic_state(0, N
 piece_centric=True)``: at 44 boards 1,378 tokens against A1's 2,920 (2.12x fewer), where the human
 position of the A5 section's indicative figure has 1,491 (1.96x).
 
+Options for the block: ``--embed`` also times ``T5DNet.embed_tokens`` alone on the same position,
+in the same process after the forward (``embed_ms``, beside the forward's ``seconds``: register
+A8's embedding-time column); ``--repeat R`` runs each (boards, dtype) block R times, the
+configurations' order reversed every other repetition, each pass in its own process, then prints
+each configuration's medians and minima (``"summary": "median"`` lines) - the A8 section's protocol
+with R = 5; ``--threads T`` sets PyTorch's threads in every pass (default: PyTorch's own - 12 on
+the development machine; the A5 section's indicative figure used 4). The A8 table's arms -
+"n2-default" (off), "6p-layout-ff8" (A8), "a8-no-ffn" (A8 without FFN) - with "6p-layout-ff1":
+``--config n2-default 6p-layout-ff8 a8-no-ffn 6p-layout-ff1 --boards 44 240 --dtype bf16 fp32
+--embed --repeat 5``.
+
 Measured 2026-10-01 (AMD Ryzen 9 9900X, 12 PyTorch threads, Windows 11, PyTorch
 2.13.0+cpu; one position, ``synthetic_state(0, N)``: 3,976 tokens at 60 boards, 15,856 at
 240; each figure one run on an otherwise idle machine, except * - one other single-threaded
@@ -72,6 +83,7 @@ import argparse
 import ctypes
 import json
 import os
+import statistics
 import subprocess
 import sys
 import time
@@ -100,7 +112,10 @@ import time
 #: time beside "n2-default"'s). "a5-piece-centric" is the v1 default reading register A5's
 #: piece-centric tokens (``piece_centric``, the dense scope; ``synthetic_state(...,
 #: piece_centric=True)``, the same draws as A1's position): A5's dense wall time beside A1's
-#: ("n2-default"). The operator counter's command line reaches all of them
+#: ("n2-default"). "a8-no-ffn" is A8 without its FFN (``layout_ffn_ratio=0``: the projection and
+#: the merge alone - the A8 section's third column, "A8 without FFN", not register A8 itself),
+#: for that table's embedding and forward times beside "n2-default" and the two 6p arms. The
+#: operator counter's command line reaches all of them
 #: (``python -m t5d.net.opcount --config b15-layer-shared``).
 _ALL = dict(routing_table=True, typed_edge_bias=True, board_pair_smolgen=True)
 CONFIGS: dict[str, dict] = {
@@ -130,6 +145,7 @@ CONFIGS: dict[str, dict] = {
     "ffn-2x": dict(ffn_ratio=2),
     "ffn-4x": dict(ffn_ratio=4),
     "a5-piece-centric": dict(piece_centric=True),
+    "a8-no-ffn": dict(board_layout_embedding=True, layout_ffn_ratio=0),
 }
 
 
@@ -166,8 +182,20 @@ def _peak_bytes() -> int:
     return int(rss if sys.platform == "darwin" else rss * 1024)
 
 
-def measure(config: str, boards: int, dtype: str, seed: int = 0, train: bool = False, layers: int | None = None) -> dict:
-    """One measurement, in this process (call through ``run`` for a clean peak)."""
+def measure(
+    config: str,
+    boards: int,
+    dtype: str,
+    seed: int = 0,
+    train: bool = False,
+    layers: int | None = None,
+    embed: bool = False,
+    threads: int | None = None,
+) -> dict:
+    """One measurement, in this process (call through ``run`` for a clean peak). ``embed``: then
+    also time ``T5DNet.embed_tokens`` alone on the same position (``embed_ms``; a forward only) -
+    after the forward's timing and its peak are taken, so neither changes, and warm: the forward
+    has just embedded that position. ``threads``: PyTorch's CPU threads (None: its default)."""
     import torch
 
     from .config import NetConfig
@@ -175,6 +203,10 @@ def measure(config: str, boards: int, dtype: str, seed: int = 0, train: bool = F
     from .state import collate
     from .synthetic import synthetic_state
 
+    if embed and train:
+        raise ValueError("embed times the forward's embedding: not with a training step")
+    if threads is not None:
+        torch.set_num_threads(threads)
     overrides = CONFIGS[config] | ({} if layers is None else {"n_layers": layers})
     cfg = NetConfig(trunk_dtype=dtype, **overrides)
     model = build_model(cfg, seed=seed).eval()
@@ -198,7 +230,7 @@ def measure(config: str, boards: int, dtype: str, seed: int = 0, train: bool = F
     seconds = time.perf_counter() - start
     after = _peak_bytes()
     assert torch.isfinite(out.value_logits).all()
-    return {
+    row = {
         "config": config,
         "boards": boards,
         "tokens": batch.n_tokens,
@@ -211,11 +243,29 @@ def measure(config: str, boards: int, dtype: str, seed: int = 0, train: bool = F
         "peak_gb": round(after / 2**30, 3),
         "forward_gb": round((after - before) / 2**30, 3),
     }
+    if embed:
+        # The embedding alone, as the forward runs it: outside the trunk's autocast (FP32 under
+        # either trunk), the network's own scope.
+        with torch.no_grad():
+            start = time.perf_counter()
+            x = model.embed_tokens(batch)
+            row["embed_ms"] = round((time.perf_counter() - start) * 1e3, 3)
+        assert torch.isfinite(x).all()
+    return row
 
 
-def run(config: str, boards: int, dtype: str, timeout: float = 3600.0, train: bool = False, layers: int | None = None) -> dict:
+def run(
+    config: str,
+    boards: int,
+    dtype: str,
+    timeout: float = 3600.0,
+    train: bool = False,
+    layers: int | None = None,
+    embed: bool = False,
+    threads: int | None = None,
+) -> dict:
     """``measure`` in a fresh subprocess; a failure (out of memory, timeout) is reported."""
-    args = f"{config!r}, {boards}, {dtype!r}, train={train}, layers={layers}"
+    args = f"{config!r}, {boards}, {dtype!r}, train={train}, layers={layers}, embed={embed}, threads={threads}"
     code = f"import json; from t5d.net.bench import measure; print(json.dumps(measure({args})))"
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     try:
@@ -227,6 +277,30 @@ def run(config: str, boards: int, dtype: str, timeout: float = 3600.0, train: bo
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
+def summarise(rows: list[dict], configs: list[str]) -> list[dict]:
+    """One (boards, dtype) block's repetitions, per configuration in ``configs``' order: the median
+    and the minimum of its passes' times - the forward's (or training step's) ``seconds`` and, where
+    timed, the embedding's ``embed_ms`` (A8's protocol: medians, minima beside them). A failed pass
+    is counted (``failed``), never timed."""
+    out = []
+    for config in configs:
+        mine = [r for r in rows if r["config"] == config]
+        if not mine:
+            continue
+        ok = [r for r in mine if "error" not in r]
+        line: dict = {"summary": "median", "config": config, "boards": mine[0]["boards"], "dtype": mine[0]["dtype"]}
+        line |= {"runs": len(ok), "failed": len(mine) - len(ok)}
+        if ok:
+            line |= {k: ok[0][k] for k in ("pass", "layers", "threads", "tokens")}
+            seconds = [r["seconds"] for r in ok]
+            line |= {"seconds_median": round(statistics.median(seconds), 3), "seconds_min": min(seconds)}
+            embed = [r["embed_ms"] for r in ok if "embed_ms" in r]
+            if embed:
+                line |= {"embed_ms_median": round(statistics.median(embed), 3), "embed_ms_min": min(embed)}
+        out.append(line)
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--boards", type=int, nargs="+", default=[60, 240])
@@ -234,11 +308,38 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", nargs="+", default=["n1-dense", "n2-no-table", "n2-default", "n2-all"], choices=sorted(CONFIGS))
     parser.add_argument("--train", action="store_true", help="time a training step (forward and backward) instead")
     parser.add_argument("--layers", type=int, default=None, help="trunk depth (default: the configuration's, 16)")
+    parser.add_argument(
+        "--embed", action="store_true", help="also time T5DNet.embed_tokens alone, after each forward, in its process (embed_ms)"
+    )
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="passes per configuration in each (boards, dtype) block, the order reversed every other repetition; "
+        "more than 1 adds each configuration's medians and minima (A8's protocol: 5)",
+    )
+    parser.add_argument("--threads", type=int, default=None, help="PyTorch's CPU threads in each pass (default: its own)")
     args = parser.parse_args(argv)
+    if args.embed and args.train:
+        parser.error("--embed times the forward's embedding: not with --train")
+    if args.repeat < 1:
+        parser.error("--repeat must be at least 1")
+    if args.threads is not None and args.threads < 1:
+        parser.error("--threads must be at least 1")
     for boards in args.boards:
         for dtype in args.dtype:
-            for config in args.config:
-                print(json.dumps(run(config, boards, dtype, train=args.train, layers=args.layers)), flush=True)
+            rows = []
+            for r in range(args.repeat):
+                order = args.config if r % 2 == 0 else args.config[::-1]
+                for config in order:
+                    row = run(config, boards, dtype, train=args.train, layers=args.layers, embed=args.embed, threads=args.threads)
+                    if args.repeat > 1:
+                        row["repetition"] = r + 1
+                    rows.append(row)
+                    print(json.dumps(row), flush=True)
+            if args.repeat > 1:
+                for line in summarise(rows, args.config):
+                    print(json.dumps(line), flush=True)
     return 0
 
 

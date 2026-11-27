@@ -266,6 +266,23 @@ The embedding runs in FP32 under either trunk (it precedes the trunk's autocast)
 not follow the trunk's precision. Lc0's "5% latency" is a GPU figure for a different network and is
 not compared.
 
+**The table, quiet - command; not yet measured on a quiet machine.** The table above was timed by
+a script the repository does not hold. Since 2026-11-28 (`lane/search`) the bench does it:
+`--embed` times `T5DNet.embed_tokens` alone on the pass's position (`embed_ms`, beside the
+forward's `seconds`), and `--repeat 5` runs the block five times, the arms' order reversed every
+other repetition, then prints each arm's medians and minima (`"summary": "median"` lines). The
+table's arms are "n2-default" (off), "6p-layout-ff8" (A8) and "a8-no-ffn" (A8 without FFN,
+`layout_ffn_ratio = 0`); "6p-layout-ff1" (the next section) goes beside them. From `python/`:
+
+```
+python -m t5d.net.bench --config n2-default 6p-layout-ff8 a8-no-ffn 6p-layout-ff1 --boards 44 240 --dtype bf16 fp32 --embed --repeat 5
+```
+
+One difference from the table's protocol: each pass runs in a fresh process, which builds its
+arm, warms it on a 2-board position, times one forward, then times the embedding of the same
+position (warm: the forward has just embedded it). The table built each arm once and timed it
+five times in one process. PyTorch's default threads (12), as the table used.
+
 ### A8's FFN at 1x - ablation 6p's second arm, counted (2026-11-22; no threshold, no verdict)
 
 **What it is.** §2.2 since the 2026-11-15 review: "the FFN's width is part of the arm: 6p tests it
@@ -311,6 +328,8 @@ this arm is the figure it named.
 
 **Wall time: not measured** - the machine was loaded. For the quiet-machine block: `python -m
 t5d.net.bench --config n2-default 6p-layout-ff8 6p-layout-ff1 --boards 44 240` (from `python/`).
+The A8 section's quiet command (above, 2026-11-28) runs this arm too, with the embedding's time
+and five repetitions.
 
 ### FFN 2x and 4x - wall time against the v1's 8x (command; not yet measured on a quiet machine)
 
@@ -324,10 +343,11 @@ v1's - "n2-default" is the baseline. The figure is the forward's wall-time ratio
 the arm's, per board count and precision: CPU-labelled (the row's evaluations/s are a GPU
 figure's).
 
-**Command** (from `python/`; one pass per subprocess):
+**Command** (from `python/`; one pass per subprocess, the A8 section's protocol - five
+repetitions, the order reversed every other one, medians and minima printed per arm):
 
 ```
-python -m t5d.net.bench --config n2-default ffn-4x ffn-2x --boards 44 240 --dtype fp32 bf16
+python -m t5d.net.bench --config n2-default ffn-4x ffn-2x --boards 44 240 --dtype fp32 bf16 --repeat 5
 ```
 
 ### A5 - piece-centric tokens: token counts on the human games, counted FLOPs (2026-10-23)
@@ -431,11 +451,11 @@ the quiet-machine block. GPU figures, varlen kernels among them, are deferred (M
 **A5's dense wall at 44 boards - command; not yet measured on a quiet machine.** The figure above
 had no recorded command. The bench's arm "a5-piece-centric" (2026-11-28, `lane/search`): the v1
 default with `piece_centric=True`, dense scope, beside "n2-default" (A1). From `python/`: `python -m
-t5d.net.bench --config n2-default a5-piece-centric --boards 44 --dtype bf16` (the F1 network as
-shipped, BF16). Its position is the bench's synthetic one, not the human position above:
-`synthetic_state(0, 44)` has 2,920 A1 tokens and 1,378 A5 tokens (2.12x fewer, against the human
-position's 1.96x), so its ratio is not the figure above re-measured; the bench's threads are
-PyTorch's default, not the 4 above.
+t5d.net.bench --config n2-default a5-piece-centric --boards 44 --dtype bf16 --threads 4 --repeat 5`
+(the F1 network as shipped, BF16; the figure above's 4 threads and five forwards, as medians). Its
+position is the bench's synthetic one, not the human position above: `synthetic_state(0, 44)` has
+2,920 A1 tokens and 1,378 A5 tokens (2.12x fewer, against the human position's 1.96x), so its ratio
+is not the figure above re-measured.
 
 **Against §14.4's estimates (the 2x rule) - re-stated under CHECKPOINT 9's C26, on the
 legal-destination set §14.4 speaks of** ("only head boards carry the full legal-destination set";

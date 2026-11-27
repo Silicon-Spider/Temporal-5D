@@ -10,6 +10,38 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-28 - The forward bench: the embedding's time, and A8's repetitions and medians
+
+A8's table has one usable column, the embedding's time (`T5DNet.embed_tokens`). It was timed by a
+script the repository does not hold: 5 repetitions interleaved, the order reversed every other
+one, medians. The bench ran one pass per configuration. Nothing was measured.
+
+- `python/t5d/net/bench.py`:
+  - `--embed`: each pass also times `T5DNet.embed_tokens` alone on its position. It runs after
+    the forward's time and peak are taken, so neither changes, and in the same process. The
+    row gains `embed_ms`, appended after every earlier field. A training step is refused.
+  - `--repeat R`: runs each (boards, dtype) block R times, the configurations' order reversed
+    every other repetition. Every pass runs in its own process, as before. Each pass row gains
+    `repetition`. Then a `"summary": "median"` line per configuration gives `seconds_median`,
+    `seconds_min` and, with `--embed`, `embed_ms_median` and `embed_ms_min`. A failed pass is
+    counted, never timed. With R = 1 the output is as before.
+  - `--threads T`: sets PyTorch's threads in each pass. The A5 indicative figure used 4.
+  - `CONFIGS` gains "a8-no-ffn" (`board_layout_embedding=True, layout_ffn_ratio=0`), the A8
+    table's third arm, "A8 without FFN".
+- `python/tests/net/test_bench.py`: the embedding is timed beside the forward on the A8 arms,
+  appended, and refused with a training step; the threads reach the pass; a stubbed pass checks
+  the repetitions' order, each pass's arguments and the medians, a failed pass included; one
+  repetition prints the passes alone; the command line runs `--embed --repeat 2 --threads 2` end
+  to end at 2 boards and 1 layer. No timing is read.
+- `docs/MEASUREMENTS.md`: the A8 table's quiet command (`--embed --repeat 5` over its three arms
+  and the 1x arm), and `--repeat 5` added to the FFN and A5 commands (A5's with `--threads 4`).
+  All are marked "not yet measured on a quiet machine". `docs/BUILD_LOG.md`: step 5's list and
+  the lane line.
+
+Spec: §15.3's "Board-layout embedding (A8)" row (register A8, §2.2) is what the embedding's time
+will be read against. No spec text describes the bench, so no edit is proposed. The write-back
+(M4, edit 186's wall time) follows the measurement.
+
 ### 2026-11-28 - The forward bench: FFN 2x and 4x arms, and A5's piece-centric arm
 
 The quiet-machine block had no command for two of its network figures: the FFN ratio's wall time

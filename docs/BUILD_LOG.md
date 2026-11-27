@@ -818,8 +818,9 @@ pushed after every commit, taking main by merge, never rebase (re-check with `gi
   `VerificationLadder::use_settling_stores_for_tests`) and round 2's two weak tests made strong
   (L1's charge on a decision with work after its timed run, L8's capped Guard scan). **Since
   (2026-11-28, from main d4327ba): the quiet-machine block's missing commands** - Hunt's nodes/s
-  in `t5d-scan6bpp`; the forward bench's FFN 2x/4x and A5 arms (step 5, "The quiet-machine
-  block's missing commands"); built and tested, nothing measured. Not merged.
+  in `t5d-scan6bpp`; the forward bench's FFN 2x/4x and A5 arms, and its embedding time with A8's
+  repetitions (step 5, "The quiet-machine block's missing commands"); built and tested, nothing
+  measured. Not merged.
 - `lane/audit` (from main 01ebbe5, 2026-11-01) - the done-means audit merged (2026-11-08): section 15.2 row by row, section 15.4 invariant by invariant, the committed-class rows and section 15.5 clause by clause, checked adversarially by a five-agent workflow and corrected (section "Done-means audit"; issues 535-538, edits 364-366).
 - `lane/fix535` (from main d8a54d3, 2026-11-02) - issue 535 resolved by issue 600 and merged (2026-11-09, with its review round: no HIGH; 3 MEDIUM and 14 LOW fixed, all 24 surviving mutants killed, the normal path bit-identical to 03eca7a on the review's three twins): the flat form, a node's creation and a re-root exception-safe under an allocation failure, gather's request list and run's buffer inside their rollbacks, the tree form's inheritance and re-evaluation rolled back, the ladder's verdict take and the asset map's lookup safe under `std::bad_alloc`. Issues 603 (this machine's g++ 16.2 breaks `std::deque`'s exception safety under its default `-fassume-sane-operators-new-delete`) and 604 (a `std::bad_alloc` in a synchronous ladder job reported as a contradiction) are the main loop's, in the quiet-machine block. The lane is idle.
 - `lane/net` - A5 (piece-centric tokens, dense scope only, behind its flag, off) merged with
@@ -2190,6 +2191,11 @@ row it will fill, marked "command; not yet measured on a quiet machine":
   dense scope) beside "n2-default" (A1), on the bench's synthetic position - 2.12x fewer tokens at
   44 boards where the indicative figure's human position has 1.96x; the operator counter reaches
   the arm too (`opcount.measure` gives a piece-centric network its own tokens).
+- **A8's embedding time** (the A8 table's usable column) and the A8 section's protocol: the bench's
+  `--embed` (`T5DNet.embed_tokens` alone on the pass's position, after the forward, in its
+  process), `--repeat R` (the order reversed every other repetition; per-arm medians and minima)
+  and `--threads T`; "a8-no-ffn" is the table's third arm (`layout_ffn_ratio=0`). The FFN and A5
+  commands run with `--repeat 5` (A5's with `--threads 4`, as its indicative figure).
 
 ### 6. Phases 2-3 - in progress (see "Current state")
 
