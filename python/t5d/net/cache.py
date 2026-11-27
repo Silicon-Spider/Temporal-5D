@@ -837,9 +837,11 @@ class CachedEvaluator:
 
     def live_pass(self, work: NodeWork, query_boards=None) -> torch.Tensor:
         """The live set - every head (``query_boards``: a subset, for section 15.3's
-        changed-boards-only cost probe; its output is then meaningless) and the global
-        registers - against every frozen board's stored K/V; returns the final trunk output
-        ``(1, L, d)`` with the frozen boards' stored outputs in their rows."""
+        changed-boards-only cost probe; its output is then meaningless), register A5's transient
+        tokens and the global registers - against every frozen board's stored K/V; returns the final
+        trunk output ``(1, L, d)`` with the frozen boards' stored outputs in their rows. A query board
+        is meant to be a head; a superseded one given there is computed live as well, each of its
+        tokens once."""
         model, cfg = self.model, self.model.cfg
         state, ctx, emb, plan, epoch = work.state, work.ctx, work.emb, work.plan, work.epoch
         lay = state.layout
@@ -857,7 +859,9 @@ class CachedEvaluator:
         transient = np.flatnonzero(state.transient)
         row_boards = sorted(set(query) | {int(x) for x in np.searchsorted(offsets, transient, side="right") - 1})
         live_body = np.concatenate([np.arange(offsets[b], offsets[b + 1]) for b in query] + [transient, np.zeros(0, np.int64)])
-        live_body = np.sort(live_body).astype(np.int64)
+        # Sorted and each token once: a superseded board given as a query board (the cost probe's
+        # misuse) would bring its transient tokens twice (the decision-7 review's guard).
+        live_body = np.unique(live_body).astype(np.int64)
         live_tok = torch.cat([torch.from_numpy(live_body), torch.arange(lb, length)])
         blocks = _runs([(int(offsets[b]), int(offsets[b + 1])) for b in row_boards], cfg.attn_block_boards)
         global_free = lb < length  # the position-free global registers' rows (B8), apart

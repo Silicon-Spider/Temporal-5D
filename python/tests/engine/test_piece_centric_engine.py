@@ -255,13 +255,23 @@ def test_the_engines_cached_evaluator_takes_a5(refresh):
     with _search_root("Misc - Timeline Battleground") as root, Search(root, params=search_params(seed=3, batch_size=4)) as search:
         run_search(search, Log(ev), playouts=16, batch_size=4)
     anchor = to_piece_centric(started[-1], strict=True) if refresh else None
-    transient = 0
+    transient = checked = 0
+    store, epoch = ev.cached.store, ev.epoch
     for pos, out in seen:
         state = to_piece_centric(state_of(pos), strict=True)
         transient += int(state.transient.sum())
         _evals_close(out, _split(reference_output(model, state, anchor=anchor), [state])[0], "a5")
+        # Never stored (review NC-2): every superseded board's entry holds exactly its own tokens.
+        plan = ev.cached._plan(state, epoch)
+        for b in plan.frozen:
+            entry = store.entries.get(plan.key(epoch, int(b)))
+            if entry is not None:
+                n = state.board_tokens(int(b), frozen=True).size
+                assert entry.kv.shape[3] == n and entry.out.shape[0] == n, (int(b), entry.kv.shape, n)
+                checked += state.board_tokens(int(b)).size > n  # a board carrying transient tokens
     assert seen and transient > 0, "no leaf with a destination on a superseded board"
-    assert len({k[0] for k in ev.cached.store.entries}) == 1
+    assert checked > 0, "an entry of a board that carried transient tokens was checked"
+    assert len({k[0] for k in store.entries}) == 1
 
 
 # --- the token-count tool (A5.5) -----------------------------------------------------------------------------------

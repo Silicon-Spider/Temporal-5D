@@ -1324,8 +1324,9 @@ with branch origins, C23); N3's CPU wall times.
 - **(2026-10-02's "uncommitted", "next" and "waiting" lists are superseded by
   "Current state" above.)** N3's CPU wall timings still wait for a quiet machine:
   from `python/`, `py -m t5d.net.cache_bench --boards 240 --idle-processes
-  t5d-gate.exe t5d-measure.exe t5d-bench.exe t5d-tests-long.exe --skip-existing
-  --out <dir>`, then `--boards 600 --dtype fp32` and `--boards 600 --dtype bf16`
+  t5d-tests.exe t5d-scan6bpp.exe t5d-legality-cost.exe t5d-play.exe t5d-gate.exe t5d-measure.exe
+  t5d-bench.exe --skip-existing --out <dir>` (2026-11-28: `t5d-tests-long.exe` is no longer built;
+  the list is the engine's executables that exist now), then `--boards 600 --dtype fp32` and `--boards 600 --dtype bf16`
   (about 45, 70 and 45 minutes); the benchmark refuses a loaded machine.
 
 ## The brief - standing rules for every session
@@ -5571,7 +5572,10 @@ superseded or made moot says so; nothing is deleted.
     evaluator converts at the network's edge, at or above it the root refresh with the destination
     tokens live (`tests/net/test_phase_form.py`, `tests/engine/test_phase_form.py`'s
     `test_a5_under_the_phase_form_through_the_step_api`). The A5-under-C26 cached-node figure stays
-    analytic until the cache bench is run on a quiet machine with `piece_centric`.*
+    analytic until the cache bench is run on a quiet machine with `piece_centric`.* *(2026-11-28,
+    review NC-1: the bench could not start an A5 job as shipped; it can now -
+    `py -m t5d.net.cache_bench --piece-centric ...`, its files named `-a5` - and the run waits for
+    the quiet-machine block.)*
 267. **"Once per board and epoch" is per board with its past, its perspective and its epoch** (§7.3's
     end, §7.9; register C20, C27; spec issue 303). *C27 built behind the fixture's tree form
     (2026-11-09).* The cached path keys an entry by (epoch, digest), the digest covering the board,
@@ -12665,3 +12669,9 @@ entry changes in the same edit as its code, which the standing rule defers to up
     seven, BF16 on seeds 0-2 with a refreshed root, FP8/BF16's trunk max, and B16 below a refreshed
     anchor. Checks: ruff clean; `test_cache_a5.py` "61 passed", the A5 C27 cases "21 passed", the A5
     variant tests "32 passed".
+  - **The bench, an engine test, the probe's guard** (NC-1, NC-2): the cache bench takes
+    `piece_centric` through its jobs, `run()` and the CLI, its A5 files named `-a5` and summarised
+    apart; the engine test checks every stored entry's token count; `live_pass(query_boards=...)`
+    takes each live token once; the bench's process list names today's executables
+    (`t5d-tests-long.exe` is gone). Checks: ruff clean; `test_cache_a5.py` with the new tests and the
+    engine test, "65 passed, 1 deselected".

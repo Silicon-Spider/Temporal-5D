@@ -10,6 +10,37 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-28 - Decision 7's review: the cache bench runs A5's jobs, an engine test checks what it claims, the cost probe's guard, the bench's process list (NC-1, NC-2)
+
+- **NC-1:** the cache bench now takes `piece_centric` through its four jobs, `run()` and the CLI
+  (`--piece-centric`). Before, only `_setup` took it, so an A5 job could not be started.
+  - `name_of` (now a module function) marks an A5 job's file `-a5`, so A5 files never overwrite A1's
+    and `--skip-existing` never takes one for the other.
+  - `summarise` keys records by the tokenisation too, and each row says which it is.
+  - Test (`test_the_bench_runs_an_a5_job`): `job_cached` with an A5 network (1 layer) on a position
+    whose superseded boards and their pasts carry transient tokens. Each child's supersession query
+    and key tokens are recomputed and found to be the boards' own tokens exactly; the summary reads
+    the record's exact live set; and the file names differ, with A1's unchanged. The mutation pass's
+    B4, B6 and B9 now have a test that reaches them.
+  - The measured A5 run waits for the quiet-machine block (issue 266).
+- **NC-2:** `test_the_engines_cached_evaluator_takes_a5` now asserts what its docstring says: every
+  stored entry of a superseded board holds exactly that board's own-token count (its K/V and
+  outputs), on boards that carried transient tokens among them.
+- **The cost probe's guard:** `live_pass(query_boards=...)` takes each live token once, so a
+  superseded board given as a query board no longer brings its transient tokens twice. The A1
+  path is the same array (`np.unique` of a sorted, duplicate-free list). Tested: with the heads as
+  query boards the probe is the full live pass, bit for bit, and with a carrier board added it is
+  finite and the position's shape.
+- **The bench's process list** (the main loop's addition): `t5d-tests-long.exe` is no longer built.
+  The bench's notes and the BUILD_LOG's quoted N3 command name the engine's executables that exist
+  now: `t5d-tests.exe`, `t5d-scan6bpp.exe`, `t5d-legality-cost.exe`, `t5d-play.exe`, `t5d-gate.exe`,
+  `t5d-measure.exe` and `t5d-bench.exe`.
+
+The decision-7 entry's "the cache bench takes `piece_centric`" is corrected in place.
+
+Spec: §15.3 (the cost figures the bench measures); register A5, C2, C17. No part of the spec
+describes the bench's plumbing or the probe's guard. No edit.
+
 ### 2026-11-28 - Decision 7's review: A5's cached rows brought to A1's coverage (SN-2)
 
 The spec pass found that "section 15.2's cached rows run for A5" overstated the coverage against
@@ -136,7 +167,8 @@ pieces and its per-board registers (`PositionState.board_tokens(frozen=True)`).
 - `CachedEvaluator` takes A5. `CachedNetworkEvaluator` converts at the network's edge, strictly, as
   `NetworkEvaluator` does.
 - The search-tree fixture hands an A5 network each node's A5 view (`SearchTree.view`).
-- The cache bench takes `piece_centric`, with exact per-board token counts.
+- The cache bench takes `piece_centric`, with exact per-board token counts. *(Review correction,
+  2026-11-28, NC-1: only `_setup` took it - no job, `run()` or the CLI did; threaded through since.)*
 - `cost.py`'s notes are brought up to date.
 
 **Tests:**

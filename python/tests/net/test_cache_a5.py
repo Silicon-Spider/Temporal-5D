@@ -549,3 +549,63 @@ def test_what_issue_252_refused_is_accepted():
     assert state.piece_centric
     cond = _conditions(bench_model, state)
     assert cond["tokens_per_board"] is None and cond["live_tokens"] > state.global_regs and cond["frozen_tokens"] > 0
+
+
+# --- the cache bench under A5 (review NC-1) ----------------------------------------------------------------
+
+
+def test_the_bench_runs_an_a5_job(monkeypatch):
+    """The cache bench takes ``piece_centric`` through its jobs (review NC-1): ``job_cached`` runs
+    register A5's network (1 layer here) on a position whose superseded boards and their pasts carry
+    transient tokens; each child's supersession query and key tokens are the boards' own tokens,
+    exactly, never their transient ones; the summary reads the record's exact live set; and the
+    result file is named apart from A1's, so neither overwrites nor stands in for the other."""
+    import t5d.net.cache_bench as cb
+    from t5d.net.cache import KVStore
+
+    setup = cb._setup
+    monkeypatch.setattr(cb, "_setup", lambda *a, **kw: setup(*a, **{"n_layers": 1, **kw}))
+    rec = cb.job_cached(8, 3, "fp32", 1, seed=3, piece_centric=True)
+    assert rec["piece_centric"] and rec["tokens_per_board"] is None
+    model, state = cb._setup(8, 3, "fp32", "block_causal", 3, piece_centric=True)
+    ev = CachedEvaluator(model)
+    with torch.no_grad():
+        epoch = ev.root_epoch(state)
+    own = lambda s, b: s.board_tokens(int(b), frozen=True).size  # noqa: E731
+    transient_queries = transient_keys = 0
+    for name, (universe, move) in cb._children(state, 3).items():
+        cev = CachedEvaluator(model, store=KVStore(dict(ev.store.entries)))
+        child = cb._net_state(model, universe.apply(move).state())
+        work = cev.prepare(child, epoch)
+        todo = cev.missing(work)
+        c = rec[f"child_{name}"]
+        assert c["supersession_query_tokens"] == [own(child, b) for b in todo], name
+        assert c["supersession_key_tokens"] == [sum(own(child, j) for j in [*work.plan.deps[b], b]) for b in todo], name
+        transient_queries += sum(child.board_tokens(int(b)).size != own(child, b) for b in todo)
+        transient_keys += sum(child.board_tokens(int(j)).size != own(child, j) for b in todo for j in work.plan.deps[b])
+    assert transient_queries and transient_keys, "superseded boards and their pasts carry transient tokens"
+    row = cb.summarise([rec])["rows"][0]
+    assert row["piece_centric"] and row["live_tokens"] == rec["live_tokens"]
+    common = dict(boards=8, timelines=3, dtype="fp32")
+    assert cb.name_of("cached", {**common, "piece_centric": True}) != cb.name_of("cached", common)
+    assert cb.name_of("cached", common) == "cached-8-3-fp32", "A1's file names unchanged"
+
+
+def test_the_cost_probe_computes_each_live_token_once():
+    """``live_pass(query_boards=...)`` (section 15.3's changed-only cost probe): a superseded board
+    given as a query board, transient tokens on it, is computed live with each of its tokens once -
+    the output has the position's shape and every head's and transient token's row is the full live
+    pass's own when the query boards are the heads (the review's guard)."""
+    model = _model(11)
+    p = _a5(_transient_root(11))
+    ev = CachedEvaluator(model)
+    with torch.no_grad():
+        epoch = ev.root_epoch(p)
+        work = ev.prepare(p, epoch)
+        full = ev.live_pass(work)
+        heads = [int(b) for b in np.flatnonzero(p.is_head)]
+        assert torch.equal(ev.live_pass(work, query_boards=heads), full)
+        offsets = p.layout.board_offsets
+        carrier = next(b for b in np.flatnonzero(~p.is_head) if p.transient[offsets[b] : offsets[b + 1]].any())
+        probe = ev.live_pass(work, query_boards=[*heads, int(carrier)])
+    assert probe.shape == full.shape and torch.isfinite(probe).all()

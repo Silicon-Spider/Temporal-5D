@@ -55,9 +55,12 @@ runs again (``--retries``); one still flagged keeps its byte counts in the summa
 times are left out.
 
 Run (from ``python/``): ``py -m t5d.net.cache_bench --out DIR`` (``--quick`` for a smoke run
-at 20 boards). Writes one JSON file per job and ``summary.json`` into ``DIR`` - keep it out
-of the repository (``docs/MEASUREMENTS.md`` takes the figures, with their conditions);
-``--skip-existing`` reuses clean job files, ``--summarise`` only rebuilds the summary.
+at 20 boards; ``--piece-centric`` for register A5's jobs, their files named apart). Writes one JSON
+file per job and ``summary.json`` into ``DIR`` - keep it out of the repository
+(``docs/MEASUREMENTS.md`` takes the figures, with their conditions); ``--skip-existing`` reuses
+clean job files, ``--summarise`` only rebuilds the summary. ``--idle-processes`` names executables
+that must not run beside a job - the engine's own, as built today: ``t5d-tests.exe
+t5d-scan6bpp.exe t5d-legality-cost.exe t5d-play.exe t5d-gate.exe t5d-measure.exe t5d-bench.exe``.
 """
 
 from __future__ import annotations
@@ -268,12 +271,13 @@ def _conditions(model, state) -> dict:
     }
 
 
-def job_dense(boards: int, timelines: int | None, dtype: str, repeats: int, seed: int = 0) -> dict:
-    """The dense network (C1): one forward over the whole position."""
+def job_dense(boards: int, timelines: int | None, dtype: str, repeats: int, seed: int = 0, piece_centric: bool = False) -> dict:
+    """The dense network (C1): one forward over the whole position (``piece_centric``: register A5's
+    network on the position's A5 view)."""
     from .state import collate
     from .synthetic import synthetic_state
 
-    model, state = _setup(boards, timelines, dtype, "dense", seed)
+    model, state = _setup(boards, timelines, dtype, "dense", seed, piece_centric=piece_centric)
     batch = collate([state])
     model(collate([_net_state(model, synthetic_state(seed + 1, 2))]))  # warm-up: kernels, thread pool
     before = _peak_bytes()
@@ -291,12 +295,14 @@ def job_dense(boards: int, timelines: int | None, dtype: str, repeats: int, seed
     }
 
 
-def job_dense_flops(boards: int, timelines: int | None, dtype: str, seed: int = 0, attn_impl: str = "block_sparse") -> dict:
+def job_dense_flops(
+    boards: int, timelines: int | None, dtype: str, seed: int = 0, attn_impl: str = "block_sparse", piece_centric: bool = False
+) -> dict:
     """FLOPs of one dense forward: block-sparse (B14, the default) or chunked (every key scored)."""
     from .cost import count_flops
     from .state import collate
 
-    model, state = _setup(boards, timelines, dtype, "dense", seed, attn_impl=attn_impl)
+    model, state = _setup(boards, timelines, dtype, "dense", seed, attn_impl=attn_impl, piece_centric=piece_centric)
     _, flops = count_flops(lambda: model(collate([state])))
     return {"job": "dense_flops", **_conditions(model, state), "flops": flops}
 
@@ -330,15 +336,17 @@ def job_cached(
     seed: int = 0,
     causal_past: str = "lineage",
     frozen_kv_format: str = "match",
+    piece_centric: bool = False,
 ) -> dict:
     """The cached path: the history build, a node (the live pass), the changed-only probe,
     the supersession recompute of a physical move and of two jumps, a root refresh, and the
-    store's bytes - with repeats and kernel times."""
+    store's bytes - with repeats and kernel times (``piece_centric``: register A5's network)."""
     from .cache import CacheConfig, CachedEvaluator, KVStore
     from .state import collate
     from .synthetic import synthetic_state
 
-    model, state = _setup(boards, timelines, dtype, "block_causal", seed, causal_past=causal_past, frozen_kv_format=frozen_kv_format)
+    flags = dict(causal_past=causal_past, frozen_kv_format=frozen_kv_format, piece_centric=piece_centric)
+    model, state = _setup(boards, timelines, dtype, "block_causal", seed, **flags)
     warm = CachedEvaluator(model)
     small = _net_state(model, synthetic_state(seed + 1, 3))
     warm.evaluate(small, warm.root_epoch(small))
@@ -430,13 +438,15 @@ def job_cached(
     return out
 
 
-def job_cached_flops(boards: int, timelines: int | None, dtype: str, seed: int = 0, causal_past: str = "lineage") -> dict:
+def job_cached_flops(
+    boards: int, timelines: int | None, dtype: str, seed: int = 0, causal_past: str = "lineage", piece_centric: bool = False
+) -> dict:
     """The FLOPs the cached path issues: the live pass, the node's preparation (its embedding),
     the changed-only probe, each supersession, the refresh."""
     from .cache import CacheConfig, CachedEvaluator, KVStore
     from .cost import count_flops
 
-    model, state = _setup(boards, timelines, dtype, "block_causal", seed, causal_past=causal_past)
+    model, state = _setup(boards, timelines, dtype, "block_causal", seed, causal_past=causal_past, piece_centric=piece_centric)
     ev = CachedEvaluator(model)
     epoch = ev.root_epoch(state)
     work = ev.prepare(state, epoch)
@@ -553,16 +563,17 @@ def summarise(results: list[dict]) -> dict:
             r.get("frozen_kv_format", "match"),
             r.get("causal_past", ""),
             r.get("attn_impl", ""),
+            bool(r.get("piece_centric", False)),  # register A5's jobs apart from A1's
         )
         by[key] = r
     rows = []
-    for (job, boards, timelines, dtype, fmt, reading, _), r in sorted(by.items(), key=lambda kv: [str(x) for x in kv[0]]):
+    for (job, boards, timelines, dtype, fmt, reading, _, a5), r in sorted(by.items(), key=lambda kv: [str(x) for x in kv[0]]):
         if job != "cached" or fmt != "match" or reading != "lineage":
             continue
 
-        def find(name, impl="block_sparse", fmt="match", reading="", dt=dtype, timelines=timelines, boards=boards):
+        def find(name, impl="block_sparse", fmt="match", reading="", dt=dtype, timelines=timelines, boards=boards, a5=a5):
             for key, value in by.items():
-                if key[:6] == (name, boards, timelines, dt, fmt, reading) and (name != "dense_flops" or key[6] == impl):
+                if key[:6] == (name, boards, timelines, dt, fmt, reading) and key[7] == a5 and (name != "dense_flops" or key[6] == impl):
                     return value
             return None
 
@@ -580,6 +591,7 @@ def summarise(results: list[dict]) -> dict:
         a_dense, a_node = dense_flops(t, cfg)["total"], pass_flops(live_t, t, cfg)["total"]
         row = {
             "boards": boards,
+            "piece_centric": a5,
             "timelines": timelines,
             "timeline_source": "spec" if TIMELINES.get(boards, (None,))[0] == timelines else "corpus",
             "heads": r["heads"],
@@ -693,6 +705,16 @@ def _queries(child: dict, tpb: int | None) -> list[int]:
     return [tpb] * len(child["supersession_key_tokens"])
 
 
+def name_of(job: str, kwargs: dict) -> str:
+    """A job's result file name (without ``.json``): its job and every argument that sets its
+    conditions - register A5's jobs marked, so that they never overwrite A1's files and
+    ``--skip-existing`` never takes one for the other."""
+    parts = [job, kwargs["boards"], kwargs["timelines"], kwargs["dtype"]]
+    parts += [kwargs.get("frozen_kv_format", ""), kwargs.get("causal_past", ""), kwargs.get("attn_impl", "")]
+    parts += ["a5" if kwargs.get("piece_centric") else ""]
+    return "-".join(str(x) for x in parts if x != "")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", required=True, help="directory for the JSON results (outside the repository)")
@@ -706,6 +728,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--retries", type=int, default=3, help="runs allowed for a contended or unstable job")
     parser.add_argument("--summarise", action="store_true", help="only rebuild summary.json from the job files in --out")
     parser.add_argument("--skip-existing", action="store_true", help="reuse a job's file in --out when it holds a usable result")
+    parser.add_argument(
+        "--piece-centric", action="store_true", help="register A5's network on the positions' A5 views (its files named apart)"
+    )
     args = parser.parse_args(argv)
     os.makedirs(args.out, exist_ok=True)
 
@@ -731,11 +756,6 @@ def main(argv: list[str] | None = None) -> int:
         idle=tuple(args.idle_processes), max_other_cores=args.max_other_cores, min_free_gb=args.min_free_gb, max_wait=args.max_wait
     )
 
-    def name_of(job: str, kwargs: dict) -> str:
-        parts = [job, kwargs["boards"], kwargs["timelines"], kwargs["dtype"]]
-        parts += [kwargs.get("frozen_kv_format", ""), kwargs.get("causal_past", ""), kwargs.get("attn_impl", "")]
-        return "-".join(str(x) for x in parts if x != "")
-
     def clean(job: str, **kwargs) -> None:
         path = os.path.join(args.out, name_of(job, kwargs) + ".json")
         if args.skip_existing and os.path.exists(path):
@@ -760,6 +780,8 @@ def main(argv: list[str] | None = None) -> int:
                 if boards > 240 and dtype == "bf16" and not spec_count:
                     continue  # BF16 at 600 boards: the spec's timeline count only (run time)
                 common = dict(boards=boards, timelines=timelines, dtype=dtype)
+                if args.piece_centric:
+                    common["piece_centric"] = True
                 clean("dense", repeats=2 if boards > 240 else repeats, **common)
                 clean("cached", repeats=repeats, **common)
                 if dtype == "bf16" and spec_count:
