@@ -61,14 +61,34 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "slow: a long test (the full 16-layer network); deselect with -m 'not slow'")
 
 
+#: Measured seconds of the files whose tests cost far more than the suite's typical test, for the
+#: shard split below (development machine, one process, the whole file with its slow tests;
+#: 2026-11-28, main 0281c70 - CI's runners took about 1.9x these). A file not listed weighs
+#: ``_SECONDS_PER_TEST`` per collected test. Re-measure with ``--durations=0`` when a CI shard
+#: nears its time limit; CI prints each shard's slowest tests (``--durations`` in network.yml).
+_FILE_SECONDS: dict[str, float] = {
+    "tests/net/test_turn_refresh.py": 1026.0,
+    "tests/net/test_turn_refresh_matrix.py": 1203.0,
+    "tests/net/test_turn_refresh_matrix_a5.py": 812.0,
+    "tests/engine/test_cached_tree_form.py": 241.0,
+    "tests/net/test_piece_centric.py": 211.0,
+    "tests/net/test_layout.py": 160.0,
+    "tests/net/test_displacement.py": 146.0,
+}
+_SECONDS_PER_TEST = 1.5
+
+
 def pytest_collection_modifyitems(config, items):
     """``T5D_TEST_SHARD=i/n`` keeps shard ``i`` of ``n`` of the collected test files (CI runs the
     suite as ``n`` parallel jobs, ``i`` from 0). The unit is the file, never the test: some
     modules' tests share module-level state in order (a case that checks what its siblings
-    recorded), so a module is never split. Files go to shards greedily by test count, largest
-    first (ties by path), each to the shard with the fewest tests so far - so the shards are
+    recorded), so a module is never split. Files go to shards greedily by estimated cost, largest
+    first (ties by path), each to the shard with the least cost so far - so the shards are
     disjoint, their union is the whole collection, and every job that collects the same files
-    (CI's jobs check out one commit) computes the same split. Unset, every test runs."""
+    (CI's jobs check out one commit) computes the same split. A file's cost is its measured
+    seconds where ``_FILE_SECONDS`` has them, else ``_SECONDS_PER_TEST`` per test (until
+    2026-11-28 the split weighed every test alike, and one shard held C27's whole matrix past its
+    90 minutes). Unset, every test runs."""
     spec = os.environ.get("T5D_TEST_SHARD", "").strip()
     if not spec:
         return
@@ -80,12 +100,13 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         module = item.nodeid.split("::", 1)[0]
         sizes[module] = sizes.get(module, 0) + 1
-    loads = [0] * n
+    costs = {module: _FILE_SECONDS.get(module, _SECONDS_PER_TEST * size) for module, size in sizes.items()}
+    loads = [0.0] * n
     shard_of: dict[str, int] = {}
-    for module, size in sorted(sizes.items(), key=lambda kv: (-kv[1], kv[0])):
+    for module, cost in sorted(costs.items(), key=lambda kv: (-kv[1], kv[0])):
         target = min(range(n), key=lambda k: (loads[k], k))
         shard_of[module] = target
-        loads[target] += size
+        loads[target] += cost
     kept, dropped = [], []
     for item in items:
         (kept if shard_of[item.nodeid.split("::", 1)[0]] == i else dropped).append(item)

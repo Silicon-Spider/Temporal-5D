@@ -25,16 +25,18 @@ concurrency:
 
 jobs:
   test:
-    # The suite outgrew one hour-long job (about two hours on a runner by 2026-11): it runs
-    # as four shards in parallel, each test file in exactly one, balanced by test count
-    # (T5D_TEST_SHARD, tests/conftest.py); 90 minutes each, since a count is not a time.
-    name: test (shard ${{ matrix.shard }} of 4)
+    # The suite outgrew one hour-long job (about two hours on a runner by 2026-11, more than
+    # three by 2026-11-28): it runs as six shards in parallel, each test file in exactly one,
+    # balanced by estimated cost - measured seconds for the heaviest files, a per-test weight
+    # for the rest (T5D_TEST_SHARD, tests/conftest.py); 90 minutes each, and each shard prints
+    # its slowest tests so that the weights can be re-measured when one nears the limit.
+    name: test (shard ${{ matrix.shard }} of 6)
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        shard: [0, 1, 2, 3, 4, 5]
     defaults:
       run:
         working-directory: python
@@ -77,5 +79,5 @@ jobs:
       - name: Test
         env:
           T5D_REQUIRE_ENGINE: "1"
-          T5D_TEST_SHARD: "${{ matrix.shard }}/4"
-        run: python -m pytest -q -p no:cacheprovider
+          T5D_TEST_SHARD: "${{ matrix.shard }}/6"
+        run: python -m pytest -q -p no:cacheprovider --durations=40
