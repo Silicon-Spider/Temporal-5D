@@ -5770,6 +5770,45 @@ superseded or made moot says so; nothing is deleted.
     already do across batches (issue 262). Not fixed (the main loop's decision). For the user: whether
     A5's purity row is read to the summation order, or A5's blocks are made board-aligned per position
     (a cost on the block-sparse selection, issue 249).
+278. **Row 11's FP8 cache at FP32 resolution has no discriminating bound at the v1's 16 layers: its
+    rounding flips compound with depth to mutant M14's level** (§15.2's G1 row and its protocol;
+    register G1, C15, C17; step 2's re-run, part 2; MEASUREMENTS, "Row 11's FP8 cache at FP32
+    resolution at the v1's 16 layers"). **For the user to review**, after the main loop's decision.
+    - **Found:** `test_fp8_cache_equals_the_fp8_network_at_fp32_resolution` (2 layers, standard
+      geometry, seeds 0-2) bounds the FP8 cache against the FP8 network's forward under the FP32
+      trunk at trunk RMS 4e-4, value 5e-5, policy 5e-3 - measured on the flips at 2 layers, as
+      section 15.2's protocol says. At the v1's 16 layers (small_board, seed 0) the gap is trunk
+      RMS 6.1e-4 and value 2.0e-4: over both. The run stopped there and reported (the stop rule).
+    - **Attributed (the main loop's steps 1-2): the flips alone, no defect.** At every quantisation
+      point of the cached path, per layer, both paths round exactly their own inputs, under scales
+      taken from the same slice (relative difference 1.7e-7 at layer 0), and every one of the
+      64,502 differing codes has its two inputs on either side of the codes' midpoint. The first
+      flips (layer 1: 4) come from FP32 differences of at most 2.7e-7; each layer adds 4-85 more
+      tipped by FP32 noise, and the rest are tipped by inputs earlier flips moved - 1.2% of the codes
+      differ in layer 15. With FP8 rounding the identity on both paths and all else equal, the
+      outputs fall to trunk RMS 2.6e-7 / max 2.0e-6, row 1's FP32 level.
+    - **The flip gap at 16 layers** (7 geometries x 12 seeds, 504 nodes): trunk RMS at most 9.7e-4,
+      value 3.3e-4, policy 8.4e-3 - against 1.4e-4, 3.3e-5 and 2.5e-3 at 2 layers on the same
+      cases, where the 2-layer bounds hold (2.8x, 1.5x, 2.0x).
+    - **Not committed: the 16-layer test.** The test's docstring sets its trunk bound 5x above the
+      largest flip gap: about 5e-3 at 16 layers. M14 (a frozen board reading its own K/V unquantised)
+      gives trunk RMS 5.1e-3 at its smallest node and 7.6e-3 at its largest at 16 layers - 1.0-1.5x
+      that bound, where the main loop required about 3x. M14's gap does not grow with depth (5.1-8.0e-3
+      at 2 layers), the flips' grows 7x, and the two are 5.3x apart at 16 layers (36x at 2): no bound
+      can sit 5x above the one and 3x below the other. By the main loop's instruction the 16-layer
+      test is not committed and the 2-layer test and its bounds are unchanged.
+    - **Section 15.2's protocol** reads the flips as rare ("agree up to rare rounding flips"). At 2
+      layers they are; at 16 they are not (1.2% of a layer's codes). The edit it needs waits on the
+      decision below.
+    - **For the main loop, then the user:** how row 11's FP32-resolution check covers the v1's depth.
+      Options seen here, none measured: (a) keep it at 2 layers, where a flip bound discriminates
+      (13x on M14), and let the 16-layer FP8 configuration the v1 serves - FP8 K/V under the BF16
+      trunk - stand on its BF16-resolution test, which holds at 16 layers by 2.0x; (b) a 16-layer
+      test against a self-calibrated reference - the cache's distance from the forward set against
+      the forward's distance from itself under another summation order (another batch or thread
+      count), as the BF16 test sets the cache against the live pass; (c) compare the cache's stored
+      codes with the forward's layer by layer (the flips' counts per layer are in the MEASUREMENTS
+      entry; M14's are not measured).
 <!-- A new list, so that the numbers from 140 render as written. -->
 
 140. **M22's "optional moves played" is undefined** (§8.2 "Measure first", §15.1's
@@ -12753,3 +12792,17 @@ entry changes in the same edit as its code, which the standing rule defers to up
     **For the user:** issue 276's open readings (a) and (f), and issue 277, the A5 batch drift.
     **For the main loop:** edit 386 (completed) upstream; the cache bench's A5 run in the
     quiet-machine block (issue 266); part 2, the v1 re-run, on the main loop's word.
+- **2026-11-28 - Step 2's re-run, part 2: section 15.2's network rows on the finished v1**
+  (`lane/net`; main 453ba11 merged first, M23; the main loop's brief: rows 1 and 11 re-measured, BF16
+  and FP8 on the adversarial geometries, more seeds for the every-switch sets, the F1 probe, row 16
+  optional; the stop rule - a result within 10% of its bound, or over it, is reported first).
+  - **The stop, and its attribution** (issue 278). The FP8 cache at FP32 resolution, probed at the
+    v1's 16 layers, was over the 2-layer test's trunk and value bounds; the run stopped and reported.
+    The main loop's decision: attribute it first. Attributed: FP8 rounding flips alone, compounding
+    with depth - both paths round exactly their own inputs under scales from the same slice, every
+    differing code straddles the midpoint of its inputs, and with the rounding the identity the gap
+    falls to row 1's FP32 level. The flip gap measured at 16 layers over 7 geometries x 12 seeds;
+    mutant M14 beside it is only 5.3x above it, so a bound set by the test's own policy would not
+    catch M14 and no 16-layer test is committed (the main loop's instruction). MEASUREMENTS, "Row
+    11's FP8 cache at FP32 resolution at the v1's 16 layers". **For the main loop, then the user:**
+    issue 278.

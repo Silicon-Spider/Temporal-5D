@@ -10,6 +10,31 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-28 - Row 11's FP8 cache at FP32 resolution at the v1's 16 layers: attributed to rounding flips, and no 16-layer bound committed (issue 278)
+
+Step 2's re-run of section 15.2's network rows on the finished v1 (part 2) stopped on one result:
+the FP8 cache against the FP8 network's forward under the FP32 trunk, bounded at 2 layers by
+`test_fp8_cache_equals_the_fp8_network_at_fp32_resolution` (trunk RMS 4e-4, value 5e-5, policy
+5e-3), is over its trunk and value bounds at the v1's 16 layers (6.1e-4, 2.0e-4). The main loop had
+it attributed before anything else was done with it. Recorded, no code changed:
+- `docs/MEASUREMENTS.md`, a new entry: at every quantisation point of the cached path, per layer,
+  both paths round exactly their own inputs under scales from the same slice; all 64,502 differing
+  codes have their inputs on either side of the codes' midpoint; the first flips come from FP32
+  differences of 2.7e-7 and the rest from inputs earlier flips moved (1.2% of the codes differ in
+  layer 15); with FP8 rounding the identity on both paths the gap falls to trunk RMS 2.6e-7, row 1's
+  FP32 level. So: flips alone, no defect. The flip gap at 2 and 16 layers over 7 geometries x 12
+  seeds (16 layers: trunk RMS at most 9.7e-4, value 3.3e-4, policy 8.4e-3), and mutant M14 (a frozen
+  board reading its own K/V unquantised) beside it: 5.1-7.6e-3 at 16 layers, only 5.3x above the
+  flips (36x at 2 layers).
+- `docs/BUILD_LOG.md`: issue 278 - a 16-layer bound 5x above the flips, the test docstring's own
+  policy, would sit at M14's level, so no 16-layer test is committed and the 2-layer test and its
+  bounds are unchanged (the main loop's instruction); three options for the main loop and the user.
+  The session log's part-2 entry.
+
+Spec: section 15.2's G1 row and its protocol ("agree up to rare rounding flips ... their tolerance
+is measured on the flips"), register G1, C15, C17 - the flips are rare at 2 layers and not at 16
+(issue 278); the protocol's edit waits on the main loop's decision there, so none is proposed yet.
+
 ### 2026-11-28 - Build log: section 15.5's clause 4 recorded as met, and status lines brought up to the rulings of 2026-11-23
 
 The main loop drafted, read-only, every question still open for the user, for the sign-off

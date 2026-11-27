@@ -2371,3 +2371,81 @@ changes is when a board is computed - at the next evaluated node, once per board
 epoch - and how many: a board superseded inside a turn and never read by an evaluated node (an
 eager entry the turn's next evaluated nodes do not read, as after the present moves under the
 current frozen features) is never computed.
+
+### Row 11's FP8 cache at FP32 resolution at the v1's 16 layers - rounding flips compounding with depth, attributed (numerics; no threshold, no verdict)
+
+**What it is.** `python/tests/net/test_cache.py`'s `test_fp8_cache_equals_the_fp8_network_at_fp32_resolution`
+bounds the FP8 cache against the FP8 network's own forward under the FP32 trunk - section 15.2's "under
+FP8, paths that differ only in summation order agree up to rare rounding flips ... so their tolerance
+is measured on the flips" - at trunk RMS 4e-4, value 5e-5, policy 5e-3, measured at 2 layers. The
+re-run of rows 1 and 11 (the entry below) found it over those bounds at the v1's 16 layers. This entry
+is the attribution the main loop asked for (BUILD_LOG issue 278): whether the gap is flips alone or a
+defect in where the cached path quantises, the flip gap measured at 16 layers, and mutant M14 measured
+beside it.
+
+**Conditions.** 2026-11-28, machine `dev-r` (this run's probes, two at a time), PyTorch 2.13.0+cpu,
+Python 3.14.7, NumPy 2.5.2, `lane/net` at main 453ba11 (the network code of d470681); FP32 trunk, FP8
+frozen K/V, `NetConfig()`'s v1 under the block-causal scope, 16 layers (and 2 for the comparison);
+random weights at initialisation scale. Cases: `test_cache.py`'s seven geometries, model seed = tree
+seed, a random 5-move path from each root (`_trees`), every node's cached evaluation against the
+forward. 12 torch threads, except the 2-layer sweeps (8, run beside the 16-layer ones): the flips
+depend on the summation order and so on the thread count - the same 2-layer case (small_board, seed 0)
+gave a policy gap of at most 1.9e-4 at 12 threads and 2.5e-3 at 8.
+
+**1. The attribution** (16 layers, small_board, seed 0 - the worst case of the re-run - its 6 nodes).
+At every quantisation point of the cached path - a frozen board's stored K/V, which the board itself
+reads in `compute_board`, later boards read, and the live set reads; nothing else is quantised - the
+two paths' FP8 codes, per layer, per frozen board, K and V, with their FP32 inputs (the forward's taken
+by a `kv_hook` before its rounding, the cache's kept beside each entry):
+- Both paths round exactly their own inputs: the forward's rounded values equal its codes times its
+  scale at every element (0 mismatches of 17.5 million), it rounds no live token (0), and the cache's
+  self-read equals its stored codes, which equal the FP8 rounding of its own inputs under the scale of
+  its own inputs (0).
+- The scales come from the same slice on both paths - a board's own tokens, one layer, K or V, one
+  head: at layer 0 they differ by at most 1.7e-7 (relative; FP32 noise). Where a different element
+  attains the absmax (6 slices at layer 0), the absmax itself agrees to that 1.7e-7.
+- 64,502 codes differ over the 16 layers. Every one is explained by its inputs: its two FP32 inputs lie
+  on either side of the midpoint between the two codes (0 exceptions).
+- The flips begin from FP32 noise and compound:
+
+| Layer | Codes that differ (of 1,092,096) | ... from inputs within 8 FP32 ulps of the board's absmax | Largest input difference (relative to the board's absmax) | Control: the same, FP8 rounding the identity |
+|---|---|---|---|---|
+| 0 | 0 | - | 4.0e-7 | 4.0e-7 |
+| 1 | 4 (largest input difference behind them 2.7e-7, 0.02 of an FP8 step) | 4 | 4.9e-7 | 5.0e-7 |
+| 2 | 26 | 20 | 1.1e-5 | 5.4e-7 |
+| 5 | 272 (1 by two steps) | 85 | 2.6e-4 | 5.5e-7 |
+| 8 | 2,447 (230 by two or more) | 30 | 1.2e-3 | 6.6e-7 |
+| 12 | 8,852 (978) | 27 | 2.4e-3 | 6.9e-7 |
+| 15 | 13,038 = 1.2% (1,435) | 20 | 3.5e-3 | 7.5e-7 |
+
+  Every layer from 1 on has 4-85 flips tipped by FP32 noise; the rest are tipped by inputs that earlier
+  flips moved, and those inputs move further layer by layer, until some lie more than an FP8 step apart
+  (codes two or three steps apart, inputs up to 2.4 steps apart).
+- **The control** - FP8 rounding made the identity on both paths, everything else equal: the inputs
+  stay within 4.0-7.8e-7 of each other at every layer, and the outputs at trunk RMS 2.6e-7 / max 2.0e-6,
+  value 6.0e-7, policy 1.7e-6 - row 1's FP32 level (3.3e-6 at 16 layers). The 16-layer gap is FP8's.
+
+So the gap is the flips alone; no defect in where the cached path quantises was found.
+
+**2. The flip gap and M14 at 2 and 16 layers** (7 geometries x model seeds 0-11, 6 nodes each - 504
+nodes per depth). M14 is the mutant of the test's docstring: a frozen board reads its own K/V
+unquantised (`compute_board`'s self-read), its stored entry still FP8.
+
+| Quantity, the largest over the 504 nodes | 2 layers | 16 layers | The 2-layer test's bound |
+|---|---|---|---|
+| Flips: trunk RMS | 1.43e-4 (registers_4_0, seed 7) | 9.67e-4 (small_board, seed 6) | 4e-4 |
+| Flips: value | 3.33e-5 (small_board, seed 1) | 3.26e-4 (small_board, seed 6) | 5e-5 |
+| Flips: policy | 2.47e-3 (small_board, seed 0) | 8.43e-3 (registers_4_0, seed 11) | 5e-3 |
+| Flips: trunk max | 1.28e-2 | 1.91e-2 | - |
+| Flips: each tree's largest trunk RMS - median / 90th percentile | 8.3e-6 / 5.8e-5 | 5.3e-4 / 7.7e-4 | - |
+| M14: trunk RMS, smallest node / largest | 5.11e-3 / 8.01e-3 | 5.14e-3 / 7.56e-3 | - |
+| M14's smallest over the flips' largest (trunk RMS) | 36x | 5.3x | - |
+
+*Read.* At 2 layers the test's bounds hold on every geometry over 12 seeds - trunk RMS 2.8x, value
+1.5x, policy 2.0x - and M14 at its smallest is 13x the trunk bound. At 16 layers the flips' gap is 7x
+larger (trunk RMS) while M14's is the same as at 2 layers, so the two are only 5.3x apart: a trunk bound
+5x above the flips' largest, as the test's docstring sets its own (about 5e-3), would sit at M14's
+smallest node (5.1e-3, 1.0x) and under its largest by 1.5x - it would not catch M14. No 16-layer test is
+committed (the main loop's instruction); the 2-layer test is unchanged. The flips are not rare at 16
+layers (1.2% of the last layer's codes), which section 15.2's protocol assumes; BUILD_LOG issue 278
+carries the question.
