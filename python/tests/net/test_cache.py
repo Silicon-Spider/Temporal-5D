@@ -18,8 +18,9 @@ logits - the size of the BF16 / FP32 gap itself (2.3e-3 RMS); FP8 cached against
 pass with FP8 frozen K/V (BF16 trunk), RMS 3.9e-3 / max 3.8e-2, 2.0e-3, 1.9e-2; FP8 against
 BF16, RMS 9.1e-3 / max 5.6e-2, 1.3e-2, 3.5e-2. Every bound sits 2.0x or more above its
 figure. (Measured before on 2026-10-17, on the standard geometry, after F5's RMSNorm and F6's
-Mish.) The FP8 cache at FP32 resolution is measured at 2 layers only: at 16 layers its FP8
-rounding flips compound past that test's bounds (BUILD_LOG issue 278).
+Mish.) The FP8 cache at FP32 resolution is bounded at 2 layers only: at 16 layers its FP8
+rounding flips compound to a mutant's gap, so there its rounding is asserted exactly instead, layer
+by layer (``test_fp8_cache_rounds_exactly_as_the_fp8_network_at_full_depth``; BUILD_LOG issue 278).
 Adversarial constructions: duplicated boards, deep travel, many timelines,
 non-standard board sizes, even starts, register-count arms, and supersession inside a
 refreshed subtree.
@@ -607,6 +608,231 @@ def test_fp8_cache_equals_the_fp8_network_at_fp32_resolution():
                 node = tree.child(node, move)
             g = _gaps(tree.evaluate(node), model(collate([node.state]), return_trunk=True))
             assert g["trunk_rms"] < 4e-4 and g["value"] < 5e-5 and g["policy"] < 5e-3, g
+
+
+#: FP32 noise between the two paths' K/V inputs - relative to the board's absmax at that layer (K or
+#: V, every head) for an input, to the head's scale for a scale. Sized from the noise measured on the
+#: v1 (BUILD_LOG issue 278; small_board, deep travel and many timelines, seed 0, 16 layers): with FP8
+#: rounding the identity the inputs differed by at most 7.8e-7 at any layer; before the first FP8
+#: flip (always at layer 1) the scales by at most 5.1e-7 (1.7e-7 at layer 0), the inputs by 4.8e-7,
+#: and the inputs behind a first flip by 1.5e-7 (2.7e-7 absolute). 4e-6 is 5x the largest of them
+#: and 34 FP32 ulps.
+_FP32_NOISE = 4e-6
+_E4M3_MAX = 448.0
+
+
+class _RoundingRecorder(CachedEvaluator):
+    """The cached path, recording what the FP8 rounding test compares: each entry's K/V as computed,
+    before any rounding (``_entry``'s input, kept on the entry), and each frozen board's self-read -
+    the K/V its own queries attend to in ``compute_board``, one attention call per layer (the call's
+    operands, by the spy ``_spy_fast_path`` installs)."""
+
+    def __init__(self, model):
+        super().__init__(model)
+        self.reads: dict = {}
+        self.calls: list | None = None
+
+    def _entry(self, kv, out, deps, source):
+        entry = super()._entry(kv, out, deps, source)
+        entry.raw = kv.detach().float().clone()
+        return entry
+
+    def compute_board(self, work, b, source="supersession"):
+        self.calls = []
+        try:
+            super().compute_board(work, b, source)
+        finally:
+            self.reads[work.plan.key(work.epoch, b)], self.calls = self.calls, None
+
+
+def _spy_fast_path(monkeypatch, recorder: _RoundingRecorder) -> None:
+    import t5d.net.cache as cache_module
+
+    base = cache_module._FastPath
+
+    class Spy(base):
+        def __init__(self, q, k, v, ctx):
+            super().__init__(q, k, v, ctx)
+            if recorder.calls is not None:
+                recorder.calls.append((k.detach().clone(), v.detach().clone()))
+
+    monkeypatch.setattr(cache_module, "_FastPath", Spy)
+
+
+def _record_forward_rounding(monkeypatch) -> list:
+    """The forward's frozen-K/V rounding wrapped to record its output, layer by layer."""
+    import t5d.net.model as model_module
+
+    rounded: list = []
+    make = model_module._frozen_kv_rounding
+
+    def recording(batch, kv_format):
+        inner = make(batch, kv_format)
+
+        def hook(layer, k, v):
+            k, v = inner(layer, k, v)
+            rounded.append((k.detach().clone(), v.detach().clone()))
+            return k, v
+
+        return hook
+
+    monkeypatch.setattr(model_module, "_frozen_kv_rounding", recording)
+    return rounded
+
+
+def _slice_scale(x: torch.Tensor) -> torch.Tensor:
+    """A board's FP8 scales, one per head: its absmax over the board's own tokens and the head's dims,
+    over 448 (``kvformat``'s rule, written out here)."""
+    return (x.abs().amax(dim=(-2, -1), keepdim=True) / _E4M3_MAX).clamp(min=1e-30)
+
+
+def _codes(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+    return (x / scale).clamp(-_E4M3_MAX, _E4M3_MAX).to(torch.float8_e4m3fn).float()
+
+
+def _forward_kv(model, state, rounded: list) -> list:
+    """The forward's K/V per layer: (inputs, rounded) for K and V, each ``(H, L, dh)``."""
+    inputs: list = []
+
+    def capture(layer, k, v):
+        inputs.append((k.detach().clone(), v.detach().clone()))
+        return k, v
+
+    rounded.clear()
+    model(collate([state]), return_trunk=True, kv_hook=capture)
+    return [((ik[0], rk[0]), (iv[0], rv[0])) for (ik, iv), (rk, rv) in zip(inputs, rounded, strict=True)]
+
+
+def _check_fp8_rounding(model, rec: _RoundingRecorder, node, rounded: list, where) -> dict:
+    """Row 11's FP8 rounding, exact, at every layer of one node. Returns what it met: the codes that
+    differ, the first layer with one, and the largest of each noise figure it bounded."""
+    state = node.state
+    layers = _forward_kv(model, state, rounded)
+    plan = rec._plan(state, node.epoch)
+    boards = [(int(b), torch.from_numpy(state.board_tokens(int(b), frozen=True))) for b in plan.frozen]
+    live = torch.ones(layers[0][0][0].shape[1], dtype=torch.bool)
+    for _, tok in boards:
+        live[tok] = False
+    flips, first = 0, None
+    met = {"scale": 0.0, "inputs": 0.0, "first_flips": 0.0}
+    for layer, pair in enumerate(layers):
+        at_noise = first is None  # no FP8 flip below this layer: the inputs differ by summation order alone
+        layer_flips = 0
+        for kv, (f_in, f_out) in enumerate(pair):
+            at = (*where, layer, "KV"[kv])
+            # (2) The forward rounds no live token.
+            assert torch.equal(f_out[:, live], f_in[:, live]), ("a live token rounded", at)
+            for b, tok in boards:
+                key = plan.key(node.epoch, b)
+                entry = rec.store[key]
+                f, f_rounded = f_in[:, tok], f_out[:, tok]
+                c, codes_c, s_c = entry.raw[layer, kv], entry.kv[layer, kv].float(), entry.scale[layer, kv]
+                s_f = _slice_scale(f)
+                # (1) Each path's scale is its own slice's: the board's own tokens, this layer, K or V, a head.
+                assert torch.equal(s_c, _slice_scale(c)), ("the cache's scale is not its own slice's", at, b)
+                if at_noise:
+                    rel = float(((s_c - s_f).abs() / s_f).max())
+                    assert rel <= _FP32_NOISE, ("the two paths' scales differ beyond FP32 noise", at, b, rel)
+                    met["scale"] = max(met["scale"], rel)
+                # (2) The forward's rounded values are its codes times its scale.
+                codes_f = _codes(f, s_f)
+                assert torch.equal(f_rounded, codes_f * s_f), ("the forward's rounding", at, b)
+                # (3) The cache's stored codes are the rounding of its own inputs, and its self-read in
+                # compute_board is those codes times its scale.
+                assert torch.equal(codes_c, _codes(c, s_c)), ("the cache's stored codes", at, b)
+                reads = rec.reads[key]
+                assert len(reads) == len(layers), ("one attention call per layer in compute_board", at, b)
+                self_read = reads[layer][kv][0, :, -c.shape[1] :]
+                assert torch.equal(self_read, codes_c * s_c), ("the cache's self-read is not its stored codes", at, b)
+                # (4) Codes that differ have their two inputs on either side of the codes' midpoint, and
+                # before any flip the inputs differ by FP32 noise.
+                amax = float(f.abs().max())
+                if at_noise:
+                    noise = float((c - f).abs().max()) / amax
+                    assert noise <= _FP32_NOISE, ("the paths' inputs differ beyond FP32 noise", at, b, noise)
+                    met["inputs"] = max(met["inputs"], noise)
+                diff = codes_c != codes_f
+                n = int(diff.sum())
+                if n:
+                    mid = (codes_c[diff] + codes_f[diff]) / 2
+                    y_c, y_f = (c / s_c)[diff], (f / s_f)[diff]
+                    assert bool(((y_c - mid) * (y_f - mid) <= 0).all()), ("a differing code its inputs do not straddle", at, b)
+                    if at_noise:  # a first-generation flip: tipped by FP32 noise
+                        behind = float((c - f)[diff].abs().max()) / amax
+                        assert behind <= _FP32_NOISE, ("a first flip behind more than FP32 noise", at, b, behind)
+                        met["first_flips"] = max(met["first_flips"], behind)
+                    layer_flips += n
+        flips += layer_flips
+        if layer_flips and first is None:
+            first = layer
+    return {"flips": flips, "first": first, **met}
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("geometry", ["small_board", "deep_travel"])
+def test_fp8_cache_rounds_exactly_as_the_fp8_network_at_full_depth(geometry, monkeypatch):
+    """(e), C15 at the v1's 16 layers, exact - no tolerance set on the FP8 flips (BUILD_LOG issue 278,
+    the main loop's decision (c), beside test_fp8_cache_equals_the_fp8_network_at_fp32_resolution's
+    2-layer bound, kept). Under the FP32 trunk the cached path and the FP8 network's forward differ
+    only in summation order; at depth the FP8 rounding flips that order tips compound (4 differing
+    codes at layer 1, 1.2% of the codes at layer 15 on small_board), and their gap reaches mutant M14's,
+    so no output bound tells them apart. What row 11 protects is asserted instead, at every layer, on
+    every frozen board, for K and V, at every node of the tree:
+
+    1. each path's scale is its own slice's - the board's own tokens, the layer, K or V, a head - and
+       before the first flip the two scales agree to FP32 noise (``_FP32_NOISE``, relative);
+    2. the forward's rounded values are its codes times its scale, and it rounds no live token;
+    3. the cache's stored codes are the rounding of its own inputs, and a board's self-read in
+       ``compute_board`` - the K/V its own queries attend to - is those codes times its scale;
+    4. every code that differs between the paths has its two inputs on either side of the midpoint
+       between the two codes, and up to the first layer with a flip the inputs - those behind each
+       first flip among them - differ by FP32 noise alone;
+    5. the control: with FP8 rounding the identity on both paths, the inputs differ by FP32 noise at
+       every layer.
+
+    Given 1-3, a differing code straddles by arithmetic; 4's straddle guards the comparison, and its
+    noise bound with 5 is what says the paths differ in summation order only. M14 (a frozen board
+    reading its own K/V unquantised) fails 3; a cache scale over every head fails 1."""
+    seed = 0
+    model = _model(seed, layers=16, frozen_kv_format="fp8")
+    rounded = _record_forward_rounding(monkeypatch)
+    rec = _RoundingRecorder(model)
+    _spy_fast_path(monkeypatch, rec)
+    root, moves = _trees(geometry, seed)
+    tree = SearchTree(rec, root)
+    node, total = tree.root, 0
+    for i, move in enumerate([None, *moves]):
+        if move is not None:
+            node = tree.child(node, move)
+        tree.evaluate(node)
+        total += _check_fp8_rounding(model, rec, node, rounded, (geometry, i))["flips"]
+    assert total > 0, "no FP8 code differs: the comparison saw no flip, so its straddle check went unexercised"
+
+    # (5) The control: FP8 rounding the identity on both paths, everything else equal.
+    import t5d.net.cache as cache_module
+    import t5d.net.model as model_module
+
+    monkeypatch.setattr(model_module, "fake_quantise", lambda x, kv_format: x)
+    monkeypatch.setattr(cache_module, "fake_quantise", lambda x, kv_format: x)
+    monkeypatch.setattr(cache_module, "quantise_fp8", lambda x: (x.detach().float().clone(), torch.ones(x.shape[:-2] + (1, 1))))
+    monkeypatch.setattr(cache_module, "dequantise_fp8", lambda data, scale, dtype: (data.float() * scale).to(dtype))
+    rec = _RoundingRecorder(model)
+    tree = SearchTree(rec, root)
+    node = tree.root
+    for i, move in enumerate([None, *moves]):
+        if move is not None:
+            node = tree.child(node, move)
+        tree.evaluate(node)
+        layers = _forward_kv(model, node.state, rounded)
+        plan = rec._plan(node.state, node.epoch)
+        for b in (int(b) for b in plan.frozen):
+            tok = torch.from_numpy(node.state.board_tokens(b, frozen=True))
+            raw = rec.store[plan.key(node.epoch, b)].raw
+            for layer, pair in enumerate(layers):
+                for kv, (f_in, _) in enumerate(pair):
+                    f = f_in[:, tok]
+                    noise = float((raw[layer, kv] - f).abs().max()) / float(f.abs().max())
+                    assert noise <= _FP32_NOISE, ("control: the inputs differ beyond FP32 noise", geometry, i, b, layer, "KV"[kv], noise)
 
 
 @pytest.mark.parametrize("geometry", list(GEOMETRIES))

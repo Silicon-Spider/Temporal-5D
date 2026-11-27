@@ -10,6 +10,39 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-28 - Issue 278 decided: row 11's FP8 rounding asserted exactly at the v1's 16 layers, the 2-layer bound kept
+
+The main loop decided issue 278 as (a) and (c): the 2-layer bound test
+(`test_fp8_cache_equals_the_fp8_network_at_fp32_resolution`) stays exactly as it is, and at 16
+layers - where the FP8 rounding flips compound to mutant M14's gap, so no bound on them can tell the
+two apart - row 11's arithmetic is asserted exactly instead. (b), a self-calibrated bound, is not
+built. It strengthens row 11: no tolerance is set on the flips.
+- `python/tests/net/test_cache.py`: `test_fp8_cache_rounds_exactly_as_the_fp8_network_at_full_depth`
+  (slow; 16 layers, FP32 trunk, FP8 frozen K/V, block-causal; small_board and deep travel, seed 0,
+  every node of a 6-node tree). At every layer, frozen board, K and V: (1) each path's scale is its
+  own slice's (the board's own tokens, the layer, K or V, a head), the two agreeing to FP32 noise
+  before the first flip; (2) the forward's rounded values are its codes times its scale, and it
+  rounds no live token; (3) the cache's stored codes are the rounding of its inputs, and a board's
+  self-read in `compute_board` - the K/V its own attention calls take - is those codes times its
+  scale; (4) every differing code is straddled by its two inputs, and up to the first flip the
+  inputs differ by FP32 noise; (5) with FP8 rounding the identity, the inputs differ by FP32 noise at
+  every layer. The noise bound, 4e-6 relative, is 5x the largest noise measured on three
+  geometries. The recorder, the attention-call spy and the forward-rounding recorder are test
+  helpers (monkeypatch); nothing in `t5d/` changed. Run time at 12 threads: 7.4 s and 17.3 s. Two
+  mutants re-made and reverted: M14 fails (3), the cache's stored scale over every head fails (1).
+  The module docstring says so.
+- `docs/MEASUREMENTS.md`: the issue-278 entry's part 3 - the test's bounded figures on three
+  geometries with their margins, its run time, the mutants' failure lines, and the flip count's
+  dependence on grad mode (64,502 codes under `torch.no_grad()`, 43,693 in grad mode, each
+  reproducible); its conditions name `torch.no_grad()`.
+- `docs/BUILD_LOG.md`: issue 278 decided - (a) and (c) built, (b) not built, still for the user to
+  review - with the 2- and 16-layer figures and M14's 5.3x beside the decision; the audit's row 11;
+  proposed edit 419; the session log; `lane/net`'s line under "Now".
+
+Spec: section 15.2's protocol ("agree up to rare rounding flips ... their tolerance is measured on
+the flips") and its G1 row, register G1, C15 - the flips are rare at shallow depth only, and at depth
+row 11's FP32-resolution check is exact on the arithmetic: proposed edit 419.
+
 ### 2026-11-28 - F1 on engine positions under the cached configuration, re-measured on the finished v1
 
 The last item of step 2's re-run, part 2: F1 as shipped (BF16, 16 layers) under the block-causal

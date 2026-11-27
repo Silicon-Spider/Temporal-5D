@@ -2388,7 +2388,7 @@ Python 3.14.7, NumPy 2.5.2, `lane/net` at main 453ba11 (the network code of d470
 frozen K/V, `NetConfig()`'s v1 under the block-causal scope, 16 layers (and 2 for the comparison);
 random weights at initialisation scale. Cases: `test_cache.py`'s seven geometries, model seed = tree
 seed, a random 5-move path from each root (`_trees`), every node's cached evaluation against the
-forward. 12 torch threads, except the 2-layer sweeps (8, run beside the 16-layer ones): the flips
+forward, under `torch.no_grad()`. 12 torch threads, except the 2-layer sweeps (8, run beside the 16-layer ones): the flips
 depend on the summation order and so on the thread count - the same 2-layer case (small_board, seed 0)
 gave a policy gap of at most 1.9e-4 at 12 threads and 2.5e-3 at 8.
 
@@ -2445,10 +2445,39 @@ unquantised (`compute_board`'s self-read), its stored entry still FP8.
 1.5x, policy 2.0x - and M14 at its smallest is 13x the trunk bound. At 16 layers the flips' gap is 7x
 larger (trunk RMS) while M14's is the same as at 2 layers, so the two are only 5.3x apart: a trunk bound
 5x above the flips' largest, as the test's docstring sets its own (about 5e-3), would sit at M14's
-smallest node (5.1e-3, 1.0x) and under its largest by 1.5x - it would not catch M14. No 16-layer test is
-committed (the main loop's instruction); the 2-layer test is unchanged. The flips are not rare at 16
+smallest node (5.1e-3, 1.0x) and under its largest by 1.5x - it would not catch M14. No 16-layer bound is
+set on the flips (the main loop's instruction; part 3 asserts the rounding exactly instead); the 2-layer
+test is unchanged. The flips are not rare at 16
 layers (1.2% of the last layer's codes), which section 15.2's protocol assumes; BUILD_LOG issue 278
 carries the question.
+
+**3. The exact test** (2026-11-28, the main loop's decision on issue 278: (a) the 2-layer bound kept,
+and (c) the rounding asserted exactly at depth). `test_fp8_cache_rounds_exactly_as_the_fp8_network_at_full_depth`
+(slow; 16 layers, FP32 trunk, FP8 frozen K/V; small_board and deep travel, seed 0, 6 nodes each)
+asserts the attribution's properties at every layer, frozen board, K and V and node - each path's
+scale its own slice's, each path's rounding exact, the cache's self-read its stored codes times its
+scale, every differing code straddled - and bounds by FP32 noise (4e-6, relative) what is not exact:
+the two paths' scales and inputs up to the first layer with a flip, the inputs behind each first flip,
+and, with FP8 rounding the identity, the inputs at every layer. Measured on three geometries (the
+test's two and many timelines, 12 threads), the bounded figures and their margins:
+
+| Figure (relative) | small_board | deep travel | many timelines | Margin under 4e-6 |
+|---|---|---|---|---|
+| The paths' scales, before the first flip | 5.1e-7 | 3.9e-7 | 4.3e-7 | 7.9x |
+| The paths' inputs, before the first flip | 4.8e-7 | 4.7e-7 | 4.0e-7 | 8.3x |
+| The inputs behind a first flip | 6.8e-8 | 1.5e-7 | 9.1e-8 | 27x |
+| The first layer with a flip (every node) | 1 | 1 | 1 | - |
+| Codes that differ, the tree's 6 nodes | 43,693 | 134,156 | 92,846 | - |
+
+The control's inputs measured in part 1: at most 7.8e-7 at any layer (5.1x). The flip count follows
+the FP32 summation order, which PyTorch's grad mode changes: the same case gives 64,502 differing codes
+under `torch.no_grad()` (part 1's probes, layer by layer the same) and 43,693 in grad mode (the test),
+each reproducible; the test asserts no count, only that some code differs. Run time at 12 threads: 7.4 s
+(small_board) and 17.3 s (deep travel), the control included. Two mutants re-made and reverted:
+M14 (`compute_board`'s self-read unquantised) fails assertion 3 at node 0, layer 0, K, board 1 ("the
+cache's self-read is not its stored codes"); the cache's stored scale taken over every head
+(`kvformat.quantise_fp8`) fails assertion 1 at the same place ("the cache's scale is not its own
+slice's").
 
 ### Section 15.2's network rows on the finished v1 - rows 1 and 11 re-measured (numerics; no threshold, no verdict)
 
