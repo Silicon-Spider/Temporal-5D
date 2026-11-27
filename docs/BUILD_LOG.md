@@ -130,6 +130,10 @@ day - "The user's answers", below):
   free everywhere.
 - **Section 8.5's "complete turns"** (spec issue 729(b)): the turn start a submit reaches, as
   built, or the mid-turn node where a turn's obligations are met?
+- **Register E12, part 1's review round** (issue 415): readings rows 16-29 to confirm. Under
+  batching the visits are exactly the synchronous search's, but the halving can keep other
+  survivors (row 20); and should a proven win override the Gumbel choice once the proof channel
+  opens (row 28)?
 
 **The user's answers (2026-11-23)**, given to this session after the round's report, to four of
 the questions above. The spec and the register are still not edited here: each answer has its
@@ -792,8 +796,10 @@ pushed after every commit, taking main by merge, never rebase (re-check with `gi
   search, part 1 - the engine arm, off (issue 415; edits 312-315; the generator's arm designed
   and waiting on two questions, issue 416) - built: the pure parts, the search's arm, the C API
   and the binding. Its three-pass review's fix round (2026-11-27; issue 415's review round): main
-  c2f9013 merged first; SF-1, EC-3, EC-1 and EC-2 fixed, the mutation pass's tests adopted
-  (TP-1), SF-2 to SF-7 and the minor points done; the checks and the survivors' re-run next.
+  c2f9013 merged first; every finding fixed (SF-1 to SF-7, EC-1 to EC-3, the minor points) and
+  the mutation pass's tests adopted (TP-1); verified - engine 923 of 923, the Lazy SMP test x3,
+  ruff, pytest, verify, and the survivors' re-run (34 of 35 KILLED, M20 equivalent). The
+  commit-tier gate is the main loop's at the merge. For the user: readings rows 16-29.
 - `lane/search` (from main 2b752ba, 2026-10-23) - E10 redone and merged (Hunt under 100
   boards, the settling scans under 50, the asset map - off in self-play until I2's steered
   visits are validated, issue 450 - Guard's hook built and off, H44's audit-lane tooling;
@@ -1432,6 +1438,7 @@ threads reach at least one thread's sum (one retry on a shared machine).
 | 2026-11-24 | the search lane into main (E11/E8 with both review rounds; `mcts.cpp`'s deadline, root-listing lift and re-check; the main loop's merge battery) | main b18a7b3 + lane/search 485921e, merged tree before the commit | dev-r, 24 logical; both lanes held to reading and writing; load not read (the probe printed nothing) | 32 | 293 / 293 / 293 | 312 / 314 / 317 | none | pass x3 |
 | 2026-11-27 | the search lane's round 3 into main (MT-03's settling-scan test; `ladder.cpp`'s tests-only store hook; the main loop's merge battery) | main 5e77028 + lane/search ae054fb, merged tree before the commit | dev-r, 24 logical; the engine lane's checks, the net lane and a mutation pass running beside it; load 2% before, 10% after | 32 | 293 / 293 / 293 | 315 / 312 / 312 | none | pass x3 |
 | 2026-11-24 | Round 3 of lane/search (the ladder's tests-only settling-store seam, `ladder.hpp`/`ladder.cpp`; no scanner, prover or search file) | lane/search 22d980e, inside its checks after the whole `--werror --test` run | dev-r, 24 logical; the engine lane's E12 work beside; load 9 / 13 / 20% before, 7 / 7 / 28% after | 32 | 293 / 293 / 293 | 313 / 312 / 317 | none | pass x3 |
+| 2026-11-27 | Register E12's review round (`mcts.cpp`: a collision under a Gumbel root ends the batch; the memory budget's Gumbel term; `validate`'s refusals) | lane/engine dd0c073, after the whole `--werror --test` run (b418c98; its own run 293 / 314) | dev-r, 24 logical; another lane's runs beside; load 64 / 19 / 31% before, 21 / 56 / 12% after | 32 | 293 / 293 / 293 | 314 / 314 / 316 | none | pass x3 |
 
 ## Environment
 
@@ -2279,7 +2286,7 @@ width (M22)", "The CHECKPOINT 8 figures"). Found on the way: the ruling's premis
 | E2, E3 | built behind flags, tested | Off; awaiting 6m and 6t. They read a node's uncertainty signal: the categorical's variance by default, the error head's output under 6m's switch (`uncertainty_source`, engine ABI round 2a; issue 149); their constants placeholders twice over (issues 81, 149) |
 | E8 | built behind its flag (off; `lane/search`, 2026-11-09; placeholders) | Difficulty-weighted allocation (`TimeParams::difficulty_weighting`, `t5d/timeman.hpp`): the root's effort distribution (D4's 16 bins, the top one censored) through the time context; the plan E7's soft bound x 2^(the bin at the 0.8 quantile - this game's running mean bin, seeded at 256 visits), clamped to [0.25, 4], to a floor of 32 evaluations and to E7's hard bound; won't-resolve (censored mass >= 0.5) plans for the hard bound (reading A) or E7's plan (B: `CapAtPlan`), and takes no overlap-with-churn extension; the guards code paths (the ex-post extensions still apply; the floor; the hard bound and the ladder's budgets untouched - I4). Off = E7 bit for bit (tested). The quantile is heads.effort_quantile's (tested across languages). Inert without an effort distribution - the built-in evaluators and netplay give none (issue 473). Issues 471-475, edits 339-341 |
 | E6 | not built (rule) | Refused |
-| E12 | part 1 built, tested (2026-11-24), its review round's fixes on `lane/engine` (2026-11-27); part 2 not built | *Register E10 until edit 412 is applied - renamed by ruling, 2026-11-23 (issue 730).* Gumbel root search (section 8.4; 2026-11-15 review). Part 1, the engine arm behind `gumbel_root` (off), its C API and binding: issue 415, its readings rows 16-25 of the readings table, edits 312-315. Part 2, the generator's arm: designed, not built - its target is I21's, and the root value under halving and the record wait for the user (issue 416). Its experiment (6g) after I21's ranking |
+| E12 | part 1 built, tested (2026-11-24), its review round's fixes made and verified on `lane/engine` (2026-11-27); part 2 not built | *Register E10 until edit 412 is applied - renamed by ruling, 2026-11-23 (issue 730).* Gumbel root search (section 8.4; 2026-11-15 review). Part 1, the engine arm behind `gumbel_root` (off), its C API and binding: issue 415, its readings rows 16-25 of the readings table, edits 312-315. Part 2, the generator's arm: designed, not built - its target is I21's, and the root value under halving and the record wait for the user (issue 416). Its experiment (6g) after I21's ranking |
 | F1, F2 | built, tested | 22,965,426 parameters (F1 after F5, B15, M20, A6, D3 and D4: 21,338,634 after F5 - 20,736 fewer than N5's 21,359,370, gain-only norms, no Q/K/V biases, spec issue 203 - plus B15's 1,623,168, spec issue 210, plus M20's 3,337: the policy's promotion offset, 3,341, less the learned register coordinates, 4 - plus A6's 8,768: the turn-state counts' MLP, spec issue 230 - less D3's 12,079: three short-term outputs, 771, and the error head, 257, on the value MLP's shared layer, and N1's 51-bin short value head, 13,107, gone, issue 231 - plus D4's 3,598: the soft policy, 69,390, and N1's always-built reply head, 65,792, now a prototype off - 69,133 with its offset when on, issue 232); the L24-ff12 preset, 46,894,834 (F2: 44,460,082 and B15's 2,434,752 over 24 layers). Unchanged by F6's Mish in the heads, by B11's fold (its flag is off; with it on, 40 scalars where there were 48) and by B16 (its 304 are in a network of the cached configuration only: 22,965,730 with `attn_scope = "block_causal"`) and B17 (off; with it on, 6,115,328 more - 29,080,754, or 23,729,842 with the vectors shared by the heads; spec issue 218) |
 | F5 | built, tested | Network: RMSNorm-style norms (a learned gain, no centring, no bias; FP32) everywhere in the trunk, no Q/K/V biases, the attention-output and FFN biases kept (spec issue 200), pre-norm. 6y's arm - post-norm with DeepNet's initialisation, `norm_placement="post"` - through the dense trunk and the cached path, its unstated details placeholders (issue 201); smolgen has no norm to keep (issue 202) |
 | F6 | built, tested | Network: Mish in the trunk FFN (`ffn_activation="mish"`) and in every head's hidden layers - the value head's MLP, the only head with one (CHECKPOINT 8's ruling on issue 204, `lane/net` N-F6heads: no switch - `head_activation` and its GELU removed); 6y's arm, squared ReLU (`"squared_relu"`), in the trunk only, through the dense trunk and the cached path - tested: no head follows it. Outside F6's words, kept as built: the embedding's Δt MLP (GELU) and B12's smolgen (SiLU) - spec issue 221 |
@@ -7014,8 +7021,10 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     choice, the refusals) and the binding (`python/tests/engine/test_gumbel_root.py`: defaults and
     layout, the record header's round trip, the step loop the engine's run digest for digest under
     the board-move split and the tree form, the choice and refusals as `EngineArgumentError`, and
-    the engine's numbers against `train.completed_q` and `train.selfplay.mix`). **Checks**: in the
-    verification entry below the item's last commit.
+    the engine's numbers against `train.completed_q` and `train.selfplay.mix`). **Checks**: part 1's
+    were the main loop's on f28062f (engine 894 of 894 at `--werror`; the Lazy SMP test x3; ruff clean;
+    pytest on `tests/engine` and `tests/train` 927 passed, 1 skipped; verify ok); the review round's
+    are its verification, the last bullet below.
     **The review round (2026-11-27; a three-pass review of 5e77028..f28062f - spec, correctness,
     mutation - with the main loop's binding decisions; main c2f9013 merged first).** No HIGH
     finding. Fixed, a commit per group:
@@ -7094,6 +7103,12 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
       halving's four, `gumbel::Root::heap_bytes()`, and the view; test
       `mcts_gumbel_memory_budget_counts_the_roots_buffers` - the C++ Gumbel tests 47 with it); `Root::score` made private (above);
       reading (d) says how a cut search's choice differs from the paper's.
+    - **Verification (2026-11-27).** Checks: engine 923 of 923 (`py engine/build.py --werror --test`, on b418c98, 22 minutes; the in-suite Lazy SMP run 293 against 314); after the `heap_bytes` check was strengthened (dd0c073) the Gumbel tests 47 of 47; the Lazy SMP test x3 on dd0c073 (`mcts.cpp` changed: 1 thread 293 each run, 5 threads 314 / 314 / 316; load 64 / 19 / 31% before, 21 / 56 / 12% after - the table); ruff "All checks passed!" and "144 files already formatted"; pytest `tests/engine` and `tests/train` with T5D_REQUIRE_ENGINE=1: 931 passed, 1 skipped (test_records' opt-in T5D_RECORDS run) in 29 minutes, on dd0c073; verify exit 0 (pins, corpus, known divergences, rulebook, boundary, provenance, engine baseline, golden observations: ok; its 17 notes on the proof channel's required sets, which it does not fail on, as before). The commit-tier gate is the main loop's at the merge (ftxi is not built in this worktree). The survivors' re-run, on a fresh `git archive` of dd0c073 with the mutation pass's runner and list (M03 and M04 re-expressed against the capped check; the pristine library rebuilt before the Python mutant): of the 35 gaps, 34 KILLED by named tests and M20 EQUIVALENT (reasoned above); ten mutants of this round's own fixes (N01-N10: the collision rule, the two SF-1 refusals, the caps in `validate` and `Root::make`, the NaN ordering in `best` and `halve`, `memory_bytes` and `heap_bytes`) all KILLED; M03 taken literally (isfinite alone dropped) EQUIVALENT - the cap refuses +infinity and `>= 0` refuses NaN. The table is in the CHANGELOG; the copy, runner, logs and results are kept outside the tree (the lane's scratchpad).
+    - **For the user**: readings rows 16-29 (16, 17, 18, 20 reworded; 26-29 new). Two to note: under
+      batching the allocation is exactly the synchronous search's, but which candidates survive a
+      halving can differ (row 20 - the halving reads values, and a batch's leaves below the root
+      are chosen under virtual loss: 83 of 120 Random-evaluator pairs kept other survivors); and
+      whether a proven win should override the Gumbel choice once the proof channel opens (row 28).
 
 416. **Register E12 (Gumbel root search), part 2 - the training generator's arm: designed, not built;
     two questions for the user** (register E12, I21, D3, D4, I13, I15, I18; §8.4, §12.2, §12.8;
@@ -12478,3 +12493,16 @@ entry changes in the same edit as its code, which the standing rule defers to up
   - **(b) Round 2's two weak tests**: L1 on Guard's re-search under the model clock (work after the
     timed run), L8 on Guard's capped scan on a test clock; each fix mutated back - L1's (the model clock's charge the timed run's work alone) KILLED by ladder_the_model_clock_charges_guards_research_with_the_decision, L8's (Guard's scan given guard_ms uncapped) KILLED by ladder_guards_scan_gets_no_more_than_the_hard_bound_leaves, each the other test passing, the file restored and rebuilt.
   - **The checks.** Checks on 22d980e: engine 876 of 876 (`--werror`); the long twin added (`long_ladder_settling_scans_keep_their_facts_in_the_stores_under_tt_churn_6f`) passed, its figures as measured; the Lazy SMP test x3, owed by the ladder's seam (1 thread 293 each run, 5 threads 313 / 312 / 317; the engine lane's E12 work beside, load 9 / 13 / 20% before, 7 / 7 / 28% after - the table); verify ok (exit 0; its note of 17 problems in the required sets of the proof channel's tiers, which it does not fail on, as before); gate commit "oracle layer [commit]: ok", SMOKE TEST - PASSED (baseline 41 compared, 0 declined), proof channel DISABLED. No Python changed (no ruff or pytest owed); no truth source (the nightly not owed).
+- **2026-11-27 - Register E12 part 1's review round** (`lane/engine`; issue 415; a three-pass
+  review - spec, correctness, mutation - with the main loop's binding decisions). Main c2f9013 merged
+  first (M23; 2d3a24b: the CHANGELOG rebuilt by heading with the lane's entries on top, the BUILD_LOG
+  both sides). Six commits: SF-1 and EC-3 (e7ea397: the root's logits held to I21's - `policy_temperature`
+  and `unknown_prior_scale` refused under the arm, the submit's logit found to agree with
+  `train.completed_q` exactly; sigma's constants capped at 1e6, a NaN score ordered last); EC-1 and
+  EC-2 (7765fe7: a collision under a Gumbel root ends the batch, so the allocation is exactly the
+  synchronous search's and a phase waits at most once); TP-1 (52a2ead: 34 of the 35 gaps' tests
+  adopted, M13's absolute check, M20 equivalent); SF-2 to SF-7 and the minor points (b418c98:
+  readings rows 16, 17 reworded and 27-29 added, the references, `memory_bytes()` counting the
+  Gumbel buffers); the `heap_bytes` check strengthened (dd0c073); and this verification. No new issue
+  or edit number: issue 415 and edits 312 and 314 amended, readings rows 26-29 added. Checks: engine 923 of 923 (`py engine/build.py --werror --test`, on b418c98, 22 minutes; the in-suite Lazy SMP run 293 against 314); after the `heap_bytes` check was strengthened (dd0c073) the Gumbel tests 47 of 47; the Lazy SMP test x3 on dd0c073 (`mcts.cpp` changed: 1 thread 293 each run, 5 threads 314 / 314 / 316; load 64 / 19 / 31% before, 21 / 56 / 12% after - the table); ruff "All checks passed!" and "144 files already formatted"; pytest `tests/engine` and `tests/train` with T5D_REQUIRE_ENGINE=1: 931 passed, 1 skipped (test_records' opt-in T5D_RECORDS run) in 29 minutes, on dd0c073; verify exit 0 (pins, corpus, known divergences, rulebook, boundary, provenance, engine baseline, golden observations: ok; its 17 notes on the proof channel's required sets, which it does not fail on, as before). The commit-tier gate is the main loop's at the merge (ftxi is not built in this worktree).
+  The survivors' re-run, on a fresh `git archive` of dd0c073 with the mutation pass's runner and list (M03 and M04 re-expressed against the capped check; the pristine library rebuilt before the Python mutant): of the 35 gaps, 34 KILLED by named tests and M20 EQUIVALENT (issue 415's review block gives the reason); ten mutants of this round's own fixes (N01-N10: the collision rule, the two SF-1 refusals, the caps in `validate` and `Root::make`, the NaN ordering in `best` and `halve`, `memory_bytes` and `heap_bytes`) all KILLED; M03 taken literally (isfinite alone dropped) EQUIVALENT - the cap refuses +infinity and `>= 0` refuses NaN. The table is in the CHANGELOG; the copy, runner, logs and results are kept outside the tree (the lane's scratchpad).

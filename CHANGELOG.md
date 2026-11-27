@@ -10,6 +10,66 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-27 - Register E12's review round, verified: the checks and the survivors' re-run
+
+Checks: engine 923 of 923 (`py engine/build.py --werror --test`, on b418c98, 22 minutes; the in-suite Lazy SMP run 293 against 314); after the `heap_bytes` check was strengthened (dd0c073) the Gumbel tests 47 of 47; the Lazy SMP test x3 on dd0c073 (`mcts.cpp` changed: 1 thread 293 each run, 5 threads 314 / 314 / 316; load 64 / 19 / 31% before, 21 / 56 / 12% after - the table); ruff "All checks passed!" and "144 files already formatted"; pytest `tests/engine` and `tests/train` with T5D_REQUIRE_ENGINE=1: 931 passed, 1 skipped (test_records' opt-in T5D_RECORDS run) in 29 minutes, on dd0c073; verify exit 0 (pins, corpus, known divergences, rulebook, boundary, provenance, engine baseline, golden observations: ok; its 17 notes on the proof channel's required sets, which it does not fail on, as before). The commit-tier gate is the main loop's at the merge (ftxi is not built in this worktree).
+
+The mutation pass's 35 gaps, re-run with its runner and list on a fresh copy of dd0c073 (M03 and
+M04 re-expressed against the capped check; the pristine library rebuilt before the Python mutant):
+34 KILLED by named tests, M20 EQUIVALENT.
+
+| id | what the mutant did | verdict | by |
+|---|---|---|---|
+| G07 | stream_seed: root key not mixed | KILLED | gumbel_stream_and_variate_are_the_headers_pinned_forms |
+| G08 | stream_seed: salt changed | KILLED | gumbel_stream_and_variate_are_the_headers_pinned_forms |
+| G09b | stream_seed: ^ -> + (compiling form of G09) | KILLED | gumbel_stream_and_variate_are_the_headers_pinned_forms |
+| G10 | variate: counter index instead of index + 1 | KILLED | gumbel_stream_and_variate_are_the_headers_pinned_forms |
+| G11 | variate: counter's odd constant changed | KILLED | gumbel_stream_and_variate_are_the_headers_pinned_forms, capi_gumbel_fields_reach_the_search |
+| M16 | draw: stream ignores the root key | KILLED | mcts_gumbel_root_g_is_the_seed_and_root_keys_stream |
+| G13 | sample_order: ties to the higher index | KILLED | gumbel_sample_order_ties_go_to_the_lower_index |
+| G29 | v_mix: zero prior mass not guarded | KILLED | gumbel_mixed_value_with_no_prior_mass_is_v_net |
+| G33 | max_open_visits: closed actions counted | KILLED | gumbel_sigma_scale_counts_open_actions_only |
+| G38b | score: unvisited edge takes its q, not v_mix (compiling form of G38) | KILLED | gumbel_best_scores_an_unvisited_candidate_by_v_mix |
+| G59 | best: v_net instead of v_mix | KILLED | gumbel_best_scores_an_unvisited_candidate_by_v_mix |
+| G42 | halve: keep floor(c / 2) | KILLED | gumbel_halving_keeps_the_ceiling_of_half |
+| G43 | halve: keep not capped by members | KILLED | gumbel_halving_keeps_only_the_members_left |
+| G48 | next: ties to the last candidate | KILLED | gumbel_next_ties_go_to_the_first_candidate, gumbel_nan_scores_order_last_in_the_choice_and_the_halving |
+| G37b | refill: takes a closed edge (compiling form of G37) | KILLED | gumbel_refill_skips_a_closed_edge |
+| G54 | next: every-closed fallback skips the shown edges | KILLED | gumbel_with_every_candidate_closed_the_shown_then_the_next_open_edges_are_taken |
+| G55 | next: every-closed fallback never takes an unshown edge | KILLED | gumbel_with_every_candidate_closed_the_shown_then_the_next_open_edges_are_taken |
+| G57 | best: no fallback to the shown edges | KILLED | gumbel_with_every_candidate_closed_the_shown_then_the_next_open_edges_are_taken |
+| M03 | validate: c_visit +inf accepted (re-expressed: isfinite and the cap gone) | KILLED | mcts_gumbel_constants_are_capped_so_sigma_stays_finite |
+| M04 | validate: c_visit 0 refused (re-expressed) | KILLED | mcts_gumbel_constants_are_capped_so_sigma_stays_finite |
+| M13 | set_priors: draw with the flag off | KILLED | mcts_gumbel_is_off_by_default_and_inert, mcts_gumbel_memory_budget_counts_the_roots_buffers |
+| M23 | gumbel_next: instantiated not grown | KILLED | mcts_gumbel_a_refilled_candidate_is_instantiated_at_once |
+| M28 | select_once: Wait does not release the path | KILLED | mcts_gumbel_waits_at_most_once_a_phase, mcts_gumbel_batched_allocation_is_the_synchronous_one, mcts_gumbel_wait_releases_the_roots_virtual_visit, mcts_gumbel_a_batch_ends_at_a_halvings_wait |
+| M29 | gather: Wait does not end the batch | KILLED | mcts_gumbel_a_batch_ends_at_a_halvings_wait (hangs; the run's timeout) |
+| M33 | choose_gumbel: batch check removed | KILLED | mcts_gumbel_choice_refused_while_a_batch_waits |
+| M36 | choose_gumbel: edge index returned, not the root_children index | KILLED | mcts_gumbel_choice_indexes_root_children_after_a_removal |
+| T02 | TimeManager::begin: refused only after the manager has begun | KILLED | mcts_gumbel_timed_refusal_leaves_the_manager_unchanged |
+| S01 | play_game: not refused | KILLED | mcts_gumbel_game_loop_refuses_before_any_evaluation |
+| C01 | params_from: gumbel_m not copied | KILLED | capi_gumbel_fields_reach_the_search |
+| C03 | params_from: gumbel_c_visit not copied | KILLED | capi_gumbel_fields_reach_the_search |
+| C04 | params_from: gumbel_c_scale not copied | KILLED | capi_gumbel_fields_reach_the_search |
+| C05 | params_from: c_visit and c_scale swapped | KILLED | capi_gumbel_fields_reach_the_search |
+| C06 | params_from: gumbel_root not checked 0/1 | KILLED | capi_gumbel_fields_reach_the_search |
+| P05 | search.py: choose_gumbel returns 0 | KILLED | test_gumbel_choice_is_a_finalist_and_varies_with_the_seed |
+| M20 | fill: dead ends open | EQUIVALENT | `mark_dead_end` prunes the root edge in the same call; a root child has no other parent |
+
+This round's own fixes, mutated back on the same copy: N01 (a collision no longer ending the batch)
+KILLED by `mcts_gumbel_waits_at_most_once_a_phase` and `mcts_gumbel_batched_allocation_is_the_synchronous_one`;
+N02, N03 (the SF-1 refusals) by `mcts_gumbel_refusals_name_their_parameter`; N04-N06 (the caps in
+`validate` and `Root::make`) by `mcts_gumbel_constants_are_capped_so_sigma_stays_finite`; N07, N08
+(the NaN ordering) by `gumbel_nan_scores_order_last_in_the_choice_and_the_halving`; N09, N10
+(`memory_bytes`, `heap_bytes`) by `mcts_gumbel_memory_budget_counts_the_roots_buffers`. M03 taken
+literally (isfinite alone dropped) is EQUIVALENT: the cap refuses +infinity and `>= 0` refuses NaN.
+
+`docs/BUILD_LOG.md`: issue 415's checks and its review block's verification and user bullets, the
+Lazy SMP log's row, the session log, the E12 row, the lane's line and the user's list.
+
+Spec: no part of the spec describes the checks; no proposed edit; no measured figure for
+MEASUREMENTS (test counts; the Lazy SMP timings are the build log's table).
+
 ### 2026-11-27 - Register E12's review round: the readings and references put right, the memory budget (SF-2 to SF-7, minor points)
 
 - **SF-2**: reading (a) and readings row 16 quote both texts - §16's "**E10**: Gumbel root search
