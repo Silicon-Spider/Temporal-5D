@@ -787,8 +787,8 @@ pushed after every commit, taking main by merge, never rebase (re-check with `gi
   search, part 1 - the engine arm, off (issue 415; edits 312-315; the generator's arm designed
   and waiting on two questions, issue 416) - built: the pure parts, the search's arm, the C API
   and the binding. Its three-pass review's fix round (2026-11-27; issue 415's review round): main
-  c2f9013 merged first; SF-1, EC-3, EC-1 and EC-2 fixed; the tests (TP-1), SF-2 to SF-7 and the
-  minor points, the checks and the survivors' re-run next.
+  c2f9013 merged first; SF-1, EC-3, EC-1 and EC-2 fixed, the mutation pass's tests adopted
+  (TP-1); SF-2 to SF-7 and the minor points, the checks and the survivors' re-run next.
 - `lane/search` (from main 2b752ba, 2026-10-23) - E10 redone and merged (Hunt under 100
   boards, the settling scans under 50, the asset map - off in self-play until I2's steered
   visits are validated, issue 450 - Guard's hook built and off, H44's audit-lane tooling;
@@ -7009,6 +7009,39 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
       tightened to the three halvings' waits. Each fails with the fix taken out. The claim kept
       ("at most once a phase") is now true; the README's, row 20's and reading (e)'s text say what
       ends a batch and what may still differ (the survivors, not the visits).
+    - **TP-1** (the mutation pass: 128 mutants, 77 killed, 10 equivalent - accepted - and 35
+      gaps): the candidate tests adopted under names that say what they pin, 34 gaps covered. In
+      `test_gumbel.cpp`: the stream's forms by value (G07-G11, G09b; the numbers the header's
+      formula gives in Python, and `test_the_gumbel_streams_pinned_values` computes them again
+      there), the root's g the seed's and root key's stream (M16), the sample's and the pick's
+      ties (G13, G48), `v_mix` with no prior mass (G29), sigma's open maximum (G33), an unvisited
+      candidate scored by `v_mix` (G38b, G59), the halving's ceil(half) and its cap (G42, G43), the
+      refill skipping a closed edge (G37b), the three every-closed fallbacks (G54, G55, G57), the
+      choice refused while a batch waits (M33) and an index into `root_children()` after a removal
+      (M36), a refilled candidate instantiated at once (M23), a wait releasing the root's virtual
+      visit (M28; batches of 5) and ending the batch (M29; redesigned: with EC-1's fix a gather of
+      SIZE_MAX in the first batch of a phase ends at a collision, so the test asks it where each
+      candidate has two of its three visits - it returns the 16 third visits at the wait, and
+      without the wait's break it would never return), the timed refusal leaving the manager's
+      state as it was in a decision begun on a plain search (T02), the game loop refusing by name
+      before any evaluation (S01), and the C fields reaching the search under the random evaluator
+      with `gumbel_root` 2 and -1 refused (C01, C03-C05, C06 - `params_from` refuses any int32 flag
+      other than 0 or 1, `boolean()`, so this one is refused too: the ABI's convention).
+      c_visit 0 and +infinity (M03, M04) are `mcts_gumbel_constants_are_capped_so_sigma_stays_finite`'s
+      (EC-3). In the binding: the choice a finalist that varies with the seed (P05; the random
+      evaluator), and the step loop under a non-uniform Python evaluator, each Gumbel field
+      changing its tree. **M13** (the inert test was relative): `mcts_gumbel_is_off_by_default_and_inert`
+      adds the absolute check - off, the root's edges in prior order (the stable sort; both
+      splits) and no Gumbel view; four older tests killed M13 already
+      (`mcts_root_noise_is_seeded_and_only_at_the_root`,
+      `mcts_tree_form_evaluates_a_carried_root_it_inherited`, `mcts_i15_root_cpuct_and_the_effort_label`,
+      `selfplay_plays_only_moves_known_legal_whatever_the_budget`). **M20** (a root child turned dead
+      end counted as open) is EQUIVALENT, not a gap: a node's `dead_end` is set only by
+      `mark_dead_end`, which prunes the edge into it in the same call, and a root child has no
+      other parent (each move adds a board, so no other node holds its state, and re-roots are
+      refused under the arm) - `!pruned` already closes it; the dead-end term in `fill_gumbel`
+      is defensive. The Gumbel tests now number 46 in C++ (20 of the pure parts, 24 of the search's
+      arm, 2 of the C API) and 7 in Python (9 cases).
 
 416. **Register E12 (Gumbel root search), part 2 - the training generator's arm: designed, not built;
     two questions for the user** (register E12, I21, D3, D4, I13, I15, I18; §8.4, §12.2, §12.8;

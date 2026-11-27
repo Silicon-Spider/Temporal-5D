@@ -10,6 +10,52 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-27 - Register E12's review round: the mutation pass's tests adopted (TP-1)
+
+The mutation pass found 35 real gaps among 128 mutants (77 killed, 10 equivalent - accepted). Its
+candidate tests are adopted, under names that say what they pin, and cover 34 gaps:
+
+- `engine/tests/test_gumbel.cpp`, the pure parts: `gumbel_stream_and_variate_are_the_headers_pinned_forms`
+  (G07-G11, G09b: `stream_seed`, `variate` and a sample's g by value, for four (seed, root key)
+  pairs), `gumbel_sample_order_ties_go_to_the_lower_index` (G13),
+  `gumbel_mixed_value_with_no_prior_mass_is_v_net` (G29), `gumbel_sigma_scale_counts_open_actions_only`
+  (G33), `gumbel_best_scores_an_unvisited_candidate_by_v_mix` (G38b, G59),
+  `gumbel_next_ties_go_to_the_first_candidate` (G48),
+  `gumbel_with_every_candidate_closed_the_shown_then_the_next_open_edges_are_taken` (G54, G55,
+  G57), `gumbel_halving_keeps_the_ceiling_of_half` (G42), `gumbel_halving_keeps_only_the_members_left`
+  (G43), `gumbel_refill_skips_a_closed_edge` (G37b).
+- The search's arm: `mcts_gumbel_root_g_is_the_seed_and_root_keys_stream` (M16),
+  `mcts_gumbel_choice_refused_while_a_batch_waits` (M33),
+  `mcts_gumbel_choice_indexes_root_children_after_a_removal` (M36),
+  `mcts_gumbel_a_refilled_candidate_is_instantiated_at_once` (M23),
+  `mcts_gumbel_wait_releases_the_roots_virtual_visit` (M28, batches of 5),
+  `mcts_gumbel_a_batch_ends_at_a_halvings_wait` (M29 - redesigned: since EC-1's fix a gather of
+  SIZE_MAX in a phase's first batch ends at a collision, so it is asked where every candidate has
+  two of its three visits, and returns the 16 third visits at the wait),
+  `mcts_gumbel_timed_refusal_leaves_the_manager_unchanged` (T02: the manager's plan and scale in a
+  decision begun on a plain search, the same after the refused call),
+  `mcts_gumbel_game_loop_refuses_before_any_evaluation` (S01: by name, no evaluation). M03 and M04
+  (c_visit +infinity and 0) are covered by EC-3's `mcts_gumbel_constants_are_capped_so_sigma_stays_finite`.
+- The C API: `capi_gumbel_fields_reach_the_search` (C01, C03-C05 under the random evaluator, each
+  field shown to change the tree; C06 - `gumbel_root` 2 and -1 refused, as `params_from`'s
+  `boolean()` refuses every int32 flag other than 0 or 1: the ABI's convention, followed).
+- The binding (`python/tests/engine/test_gumbel_root.py`): `test_gumbel_choice_is_a_finalist_and_varies_with_the_seed`
+  (P05), `test_the_gumbel_fields_reach_the_step_loop` (the step loop under a non-uniform Python
+  evaluator: the same search twice the same, each Gumbel field changing the tree, the choice a
+  finalist; both splits), `test_the_gumbel_streams_pinned_values` (no engine: the header's PINNED
+  FORMS written out in Python give the numbers the C++ test pins).
+- **M13** (the inert test was relative): `mcts_gumbel_is_off_by_default_and_inert` adds an
+  absolute check - with the flag off the root's edges are in the as-built order (the stable sort
+  by prior; both splits) and `gumbel_view` is empty. Four older tests already killed M13:
+  `mcts_root_noise_is_seeded_and_only_at_the_root`, `mcts_tree_form_evaluates_a_carried_root_it_inherited`,
+  `mcts_i15_root_cpuct_and_the_effort_label`, `selfplay_plays_only_moves_known_legal_whatever_the_budget`.
+- **M20** (a root child turned dead end counted as open) is equivalent, not a gap: a node's
+  `dead_end` is set only by `mark_dead_end`, which prunes the edge into it in the same call, and a
+  root child has no other parent (build-log issue 415's review block).
+- Documents: the README's tests paragraph; issue 415's review block, the lane's line.
+
+Spec: no part of the spec describes the tests; register E12's row unchanged. No proposed edit.
+
 ### 2026-11-27 - Register E12's review round: batched allocation exactly the synchronous one (EC-1, EC-2)
 
 - **EC-1 (MEDIUM): under batching the last two survivors did not split their visits equally.**

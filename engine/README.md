@@ -3271,7 +3271,9 @@ read - needs a ruling (build-log issue 415, with its design).
 
 **Tests** (`tests/test_gumbel.cpp`, `python/tests/engine/test_gumbel_root.py`): the
 variate finite at both ends and Gumbel-distributed (mean 0.5772, variance 1.6449 over
-200,000 draws), a pure function of (stream, index); the sample a permutation with the
+200,000 draws), a pure function of (stream, index), and the pinned forms by value (the
+stream, the variate and a sample's g for four (seed, root key) pairs - the same numbers
+computed again in Python from the header's words); the sample a permutation with the
 closed edges last, and its first two drawn from the softmax without replacement (40,000
 seeds); the schedule's hand counts (16 moves and 200 visits: 3, 6, 12 and 25 more a
 phase, 6 left over) and its laws for m 1 to 64 and n 1 to 2,000; sigma and `v_mix` on
@@ -3280,8 +3282,13 @@ the numbers the target side pins (0, 31.8, 15.9, 26.5), in C++ and through
 target at each halving, the kept half the test's own top half, the final counts eight
 3s, four 9s, two 21s and two 49s; the wait, the first phase's refill and the later
 phases' drop; the choice better than the prior in expectation and, at c_scale 0, a
-sample from it. In the search: off by default and inert (the digest under all three
-splits); each refusal by name, the refused calls changing nothing; the root's logits
+sample from it; the pure parts' contracts one by one (ties to the lower index in the
+sample and to the first candidate in the pick, `v_mix` with no prior mass, sigma's
+maximum over the open actions, an unvisited candidate scored by `v_mix`, a halving's
+ceil(half) and its cap at the members left, the refill skipping a closed edge, the
+three every-closed fallbacks). In the search: off by default and inert (the digest under
+all three splits; absolutely, the root's edges in prior order and no Gumbel view); the
+root's g the seed's and root key's stream; each refusal by name, the refused calls changing nothing; the root's logits
 the network's raw ones less one constant and ln of the prior `train.targets.raw_prior`
 reads (both splits, with and without a submit and the network's submit logit); the
 constants' caps (the search's and `Root::make`'s refusals, sigma finite at both caps)
@@ -3297,9 +3304,16 @@ at most one wait a phase and one collision a batch, every short batch ending at 
 tree form and MCGS, interior nodes still widening; a one-move root and a mated one;
 every allocation of the root's first delivery failing in turn, each surfaced, the
 invariants held and the same sample and visits after; a timed decision and the game loop
-refused; the C fields, their layout and defaults, the
-C choice the C++ one, and the refusals through the C API and Python; the binding's step
-loop the engine's own run, digest for digest.
+refused - the manager's state the same after the refused call, the game loop before any
+evaluation; the choice refused while a batch waits and an index into `root_children()`
+after an earlier candidate's removal; a refilled candidate instantiated at once; a
+halving's wait releasing the root's virtual visit and ending the batch (a gather of
+SIZE_MAX returns at the phase's end); the C fields, their layout and defaults, each
+reaching the search under the random evaluator (m, c_visit and c_scale each change the
+tree), `gumbel_root` 2 refused like every flag, the C choice the C++ one, and the
+refusals through the C API and Python; the binding's step loop the engine's own run,
+digest for digest, and under a non-uniform evaluator each Gumbel field changing its tree;
+the binding's choice a finalist that varies with the seed.
 
 ## Stage E8: the verification layer's redesign (M14, a prototype until 6b′)
 

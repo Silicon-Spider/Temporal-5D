@@ -420,6 +420,177 @@ TEST(gumbel_choice_improves_on_the_prior_in_expectation) {
   }
 }
 
+// ---- the pure parts' contracts, pinned (the mutation pass of 2026-11-27, TP-1) ------------------------
+
+TEST(gumbel_stream_and_variate_are_the_headers_pinned_forms) {
+  // G07-G11 (the stream's mixing, salt and XOR; the counter's index and odd constant): a record
+  // derives an edge's g again from (search seed, root key, index) by gumbel.hpp's PINNED FORMS, so
+  // the forms are pinned by value. The expected values are the header's formula written out again
+  // in Python (python/tests/engine/test_gumbel_root.py, test_the_gumbel_streams_pinned_values,
+  // checks the same numbers from the formula alone).
+  CHECK_EQ(gumbel::stream_seed(1, 2), std::uint64_t{0xe34aec87d7dc0d1c});
+  CHECK_EQ(gumbel::stream_seed(0, 0), std::uint64_t{0x0bfa9490a6f51b18});
+  CHECK_EQ(gumbel::stream_seed(12345, 0xDEADBEEFCAFEF00Dull), std::uint64_t{0x814f7a0f7d709b5f});
+  CHECK_EQ(gumbel::stream_seed(7, 0x0123456789ABCDEFull), std::uint64_t{0xaa6895ffc57d779c});
+  const std::uint64_t a = gumbel::stream_seed(1, 2);
+  CHECK(std::abs(gumbel::variate(a, 0) - 1.5411658734337765) < 1e-12);
+  CHECK(std::abs(gumbel::variate(a, 5) - 1.5874060407463333) < 1e-12);
+  const std::uint64_t b = gumbel::stream_seed(0, 0);
+  CHECK(std::abs(gumbel::variate(b, 0) - 2.108013627453106) < 1e-12);
+  CHECK(std::abs(gumbel::variate(b, 5) - 5.611003628944592) < 1e-12);
+  const std::uint64_t c = gumbel::stream_seed(12345, 0xDEADBEEFCAFEF00Dull);
+  CHECK(std::abs(gumbel::variate(c, 0) - -0.8048660621588094) < 1e-12);
+  CHECK(std::abs(gumbel::variate(c, 5) - -1.3173491397342962) < 1e-12);
+  // A sample's g, by index: the same numbers, whatever the logits.
+  const std::uint64_t d = gumbel::stream_seed(7, 0x0123456789ABCDEFull);
+  std::vector<double> logits(20, 0.0);
+  logits[3] = -kInf;  // closed: its g is drawn all the same
+  const gumbel::Sample s = gumbel::sample_order(logits, d);
+  const double want[] = {-0.3186555669931809, -0.07414048585757446, -0.6194684835736681};
+  for (std::size_t i = 0; i < 3; ++i) CHECK(std::abs(s.g[i] - want[i]) < 1e-12);
+  CHECK(std::abs(s.g[19] - 0.7140964444518106) < 1e-12);
+}
+
+TEST(gumbel_sample_order_ties_go_to_the_lower_index) {
+  // G13: an exact tie of g + logit (built from the stream's own variates) goes to the lower index.
+  int ties = 0;
+  for (std::uint64_t stream = 1; stream < 2000 && ties < 5; ++stream) {
+    const double g0 = gumbel::variate(stream, 0), g1 = gumbel::variate(stream, 1);
+    const double l1 = g0 - g1;
+    if (g1 + l1 != g0) continue;
+    ++ties;
+    const gumbel::Sample s = gumbel::sample_order(std::vector<double>{0.0, l1}, stream);
+    CHECK_EQ(s.order[0], std::size_t{0});
+    CHECK_EQ(s.order[1], std::size_t{1});
+  }
+  REQUIRE(ties > 0);
+}
+
+TEST(gumbel_mixed_value_with_no_prior_mass_is_v_net) {
+  // G29: v_mix is v_net where the visited actions carry no prior mass (the header's contract).
+  std::vector<gumbel::Action> a(2);
+  a[0] = {0.0, 3, 0, 0.5, true};
+  a[1] = {0.0, 0, 0, 0.0, true};
+  CHECK_EQ(gumbel::mixed_value(a, 0.25), 0.25);
+}
+
+TEST(gumbel_sigma_scale_counts_open_actions_only) {
+  // G33: sigma's max_b N(b) is over the open actions only.
+  gumbel::Root root = gumbel::Root::make({0.0, 5.0, 0.0}, 3, gumbel::Config{3, 30, 50.0, 1.0});
+  REQUIRE(root.active());
+  std::vector<gumbel::Action> a(3);
+  a[0] = {0.5, 1, 0, 0.2, true};
+  a[1] = {0.5, 1, 0, 0.1, true};
+  a[2] = {0.5, 100, 0, 0.0, false};  // closed, the most visits
+  // Open max 1: edge 0 scores ln .5 + 51 x 0.6 = 30.6 + ln .5, edge 1 5 + 51 x 0.55 = 33.05 + ln .5:
+  // edge 1. With the closed 100 counted: 90 against 87.5 - edge 0.
+  CHECK_EQ(root.best(a, 0.0), std::size_t{1});
+}
+
+TEST(gumbel_best_scores_an_unvisited_candidate_by_v_mix) {
+  // G38, G59: an unvisited candidate's completed q is v_mix - not its q field, not v_net.
+  gumbel::Root root = gumbel::Root::make({0.0, 40.0}, 2, gumbel::Config{2, 10, 50.0, 1.0});
+  REQUIRE(root.active());
+  std::vector<gumbel::Action> a(2);
+  a[0] = {0.5, 1, 0, 1.0, true};   // visited once, q 1
+  a[1] = {0.5, 0, 0, -1.0, true};  // unvisited: its q is not read
+  // v_net -1: v_mix (-1 + 1 x 1) / 2 = 0. Edge 0 scores ln .5 + 51; edge 1 40 + ln .5 + 25.5: edge 1.
+  // Scored by q -1 or by v_net -1, edge 1 has 40 + ln .5: edge 0.
+  CHECK_EQ(root.best(a, -1.0), std::size_t{1});
+}
+
+TEST(gumbel_next_ties_go_to_the_first_candidate) {
+  // G48: the candidate with the fewest visits and pending ones - ties: the first.
+  gumbel::Root root = gumbel::Root::make({0.3, 0.2, 0.1, 0.0}, 4, gumbel::Config{4, 8, 50.0, 1.0});
+  std::vector<gumbel::Action> a(4, gumbel::Action{0.25, 0, 0, 0.0, true});
+  for (std::size_t want = 0; want < 4; ++want) {
+    const std::size_t e = root.next(a, 0.0);
+    CHECK_EQ(e, want);
+    if (e < a.size()) ++a[e].pending;
+  }
+}
+
+TEST(gumbel_with_every_candidate_closed_the_shown_then_the_next_open_edges_are_taken) {
+  // G54, G55, G57: every member closed after the first phase - best() falls back to the open shown
+  // edges; next() takes the open shown edges (showing nothing new), and only with none of those
+  // the next edge of the order.
+  std::vector<double> g{0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1};
+  gumbel::Root root = gumbel::Root::make(g, 8, gumbel::Config{4, 40, 50.0, 1.0});
+  std::vector<gumbel::Action> a(8, gumbel::Action{0.125, 0, 0, 0.0, true});
+  for (std::size_t e = 0; e < 8; ++e) a[e].q = 0.1 * static_cast<double>(e % 3);
+  while (root.phase() == 0) {
+    const std::size_t e = root.next(a, 0.0);
+    REQUIRE(e < a.size());
+    ++a[e].visits;
+  }
+  REQUIRE_EQ(root.shown(), std::size_t{4});
+  const std::vector<std::size_t> members = root.considered();
+  REQUIRE_EQ(members.size(), std::size_t{2});
+  for (const std::size_t m : members) a[m].open = false;
+  const std::size_t b = root.best(a, 0.0);  // G57
+  CHECK(b < 4 && a[b].open);
+  const std::size_t h = root.next(a, 0.0);  // G54
+  CHECK(h < 4 && a[h].open);
+  CHECK_EQ(root.shown(), std::size_t{4});
+  for (std::size_t e = 0; e < 4; ++e) a[e].open = false;
+  CHECK_EQ(root.next(a, 0.0), std::size_t{4});  // G55
+  CHECK_EQ(root.shown(), std::size_t{5});
+}
+
+TEST(gumbel_halving_keeps_the_ceiling_of_half) {
+  // G42: each halving keeps ceil(c / 2) - five candidates: 5, then 3, then 2.
+  gumbel::Root root = gumbel::Root::make({0.5, 0.4, 0.3, 0.2, 0.1}, 5, gumbel::Config{5, 50, 50.0, 1.0});
+  REQUIRE_EQ(root.schedule().size(), std::size_t{3});
+  std::vector<gumbel::Action> a(5, gumbel::Action{0.2, 0, 0, 0.0, true});
+  for (std::size_t e = 0; e < 5; ++e) a[e].q = 0.2 * static_cast<double>(e) - 0.4;
+  std::vector<std::size_t> sizes{root.considered().size()};
+  for (int k = 0; k < 50; ++k) {
+    const std::size_t phase = root.phase();
+    const std::size_t e = root.next(a, 0.0);
+    REQUIRE(e < a.size());
+    if (root.phase() != phase) sizes.push_back(root.considered().size());
+    ++a[e].visits;
+    a[e].q = 0.2 * static_cast<double>(e) - 0.4;
+  }
+  CHECK((sizes == std::vector<std::size_t>{5, 3, 2}));
+}
+
+TEST(gumbel_halving_keeps_only_the_members_left) {
+  // G43: a halving keeps no more than the members left - three of four closed in the second of
+  // three phases leave one member, and the halving keeps it alone.
+  std::vector<double> g;  // g decreasing by 2, equal priors and q: the score order is the edge order
+  for (int e = 0; e < 8; ++e) g.push_back(14.0 - 2.0 * e);
+  gumbel::Root root = gumbel::Root::make(g, 8, gumbel::Config{8, 48, 50.0, 1.0});
+  REQUIRE_EQ(root.schedule().size(), std::size_t{3});
+  std::vector<gumbel::Action> a(8, gumbel::Action{0.125, 0, 0, 0.0, true});
+  while (root.phase() == 0) {
+    const std::size_t e = root.next(a, 0.0);
+    REQUIRE(e < a.size());
+    ++a[e].visits;
+  }
+  REQUIRE((root.considered() == std::vector<std::size_t>{0, 1, 2, 3}));
+  a[0].open = a[2].open = a[3].open = false;  // edge 1 - the first phase's second best - is left
+  while (root.phase() == 1) {
+    const std::size_t e = root.next(a, 0.0);
+    REQUIRE(e < a.size());
+    ++a[e].visits;
+  }
+  CHECK((root.considered() == std::vector<std::size_t>{1}));
+}
+
+TEST(gumbel_refill_skips_a_closed_edge) {
+  // G37: the first phase's refill skips an edge that closed before it was shown.
+  gumbel::Root root =
+      gumbel::Root::make({0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1}, 8, gumbel::Config{4, 40, 50.0, 1.0});
+  std::vector<gumbel::Action> a(8, gumbel::Action{0.125, 0, 0, 0.0, true});
+  a[1].open = false;  // a candidate found illegal
+  a[4].open = false;  // the next of the order, closed before it is shown
+  const std::size_t e = root.next(a, 0.0);
+  CHECK(e < a.size() && a[e].open);
+  CHECK((root.considered() == std::vector<std::size_t>{0, 2, 3, 5}));
+  CHECK_EQ(root.shown(), std::size_t{6});
+}
+
 // ---- the search's arm (SearchParams::gumbel_root) -----------------------------------------------------
 
 namespace {
@@ -541,7 +712,29 @@ TEST(mcts_gumbel_is_off_by_default_and_inert) {
     y.run(*ev, mcts::Limits{64});
     CHECK_EQ(x.digest(), y.digest());
     CHECK(!y.gumbel_view().drawn);
+    CHECK(y.gumbel_view().rows.empty());
     CHECK_THROWS_AS(y.choose_gumbel(), std::invalid_argument);
+  }
+  // M13 (the mutation pass of 2026-11-27): the comparison above is relative - a hook firing with
+  // the flag off fires in both searches. Absolutely: off, the root's edges are in the as-built
+  // order, the stable sort by prior (no draw reorders them), and there is no Gumbel view.
+  for (const mcts::TurnSplit split : {mcts::TurnSplit::BoardMove, mcts::TurnSplit::Tree}) {
+    mcts::SearchParams p = gumbel_params(63);
+    p.gumbel_root = false;
+    p.widening = false;  // every edge instantiated
+    p.split = split;
+    mcts::Search s(standard(), p);
+    s.run(*ev, mcts::Limits{8});
+    const std::vector<mcts::RootChild> c = s.root_children();
+    REQUIRE(c.size() >= 20);
+    bool distinct = false;
+    for (std::size_t i = 0; i + 1 < c.size(); ++i) {
+      CHECK(c[i].prior >= c[i + 1].prior);
+      distinct = distinct || c[i].prior != c[i + 1].prior;
+    }
+    CHECK(distinct);  // the random evaluator's logits differ: the order means something
+    CHECK(!s.gumbel_view().drawn);
+    CHECK(s.gumbel_view().rows.empty());
   }
 }
 
@@ -1210,6 +1403,192 @@ TEST(mcts_gumbel_is_refused_by_the_timed_decision_and_the_game_loop) {
   CHECK_THROWS_AS(mcts::play_game(standard(), *ev, pp), std::invalid_argument);
 }
 
+// ---- the search's arm, pinned (the mutation pass of 2026-11-27, TP-1) ---------------------------------
+
+namespace {
+
+// Counts the positions it is asked to evaluate.
+class Counting final : public mcts::Evaluator {
+ public:
+  explicit Counting(mcts::Evaluator& inner) : inner_(inner) {}
+  void evaluate(std::span<const mcts::EvalRequest> batch, std::span<mcts::Evaluation> out) override {
+    calls += batch.size();
+    inner_.evaluate(batch, out);
+  }
+  std::size_t calls = 0;
+
+ private:
+  mcts::Evaluator& inner_;
+};
+
+}  // namespace
+
+TEST(mcts_gumbel_root_g_is_the_seed_and_root_keys_stream) {
+  // M16: each root edge's g is variate(stream_seed(search seed, root key), its index in the
+  // expansion's order) - the root key's part of the stream pinned in the search, not only in
+  // gumbel::stream_seed.
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
+  mcts::Search s(standard(), gumbel_params(63, 16, 7));
+  s.run(*ev, mcts::Limits{64});
+  const gumbel::RootView v = s.gumbel_view();
+  REQUIRE(v.drawn);
+  const std::uint64_t stream = gumbel::stream_seed(7, s.node(s.root()).key);
+  const std::size_t edges = s.node(s.root()).edge_count;
+  for (const gumbel::Row& r : v.rows) {
+    bool found = false;
+    for (std::size_t j = 0; j < edges && !found; ++j) found = gumbel::variate(stream, j) == r.g;
+    CHECK(found);
+  }
+}
+
+TEST(mcts_gumbel_choice_refused_while_a_batch_waits) {
+  // M33: no choice while a batch waits for its evaluations.
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
+  mcts::Search s(standard(), gumbel_params(63));
+  s.run(*ev, mcts::Limits{20});
+  REQUIRE(s.gather(4) > 0);
+  CHECK_THROWS_AS(s.choose_gumbel(), std::invalid_argument);
+  s.abandon();
+  CHECK_NOTHROW(s.choose_gumbel());
+}
+
+TEST(mcts_gumbel_choice_indexes_root_children_after_a_removal) {
+  // M36: the choice is an index into root_children(), also after a candidate before it was found
+  // illegal (the king in check: d1 and f1 illegal, unknown to the expansion's zero budget).
+  const GameState s = t5d_test::game({"[k7/8/8/8/8/8/8/r3K3:0:1:w]"}, BoardSize{8, 8});
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
+  int removed = 0;
+  for (std::uint64_t seed = 1; seed <= 12; ++seed) {
+    mcts::SearchParams p = gumbel_params(20, 2, seed);
+    p.legality = LegalityOptions::budgeted(0, 0);
+    mcts::Search search(s, p);
+    search.run(*ev, mcts::Limits{21});
+    if (search.stats().verified_illegal == 0) continue;
+    ++removed;
+    const std::vector<mcts::RootChild> children = search.root_children();
+    const std::size_t c = search.choose_gumbel();
+    REQUIRE(c < children.size());
+    CHECK(children[c].visits > 0);
+    CHECK(search.gumbel_view().rows.at(c).considered);
+  }
+  CHECK(removed > 0);
+}
+
+TEST(mcts_gumbel_a_refilled_candidate_is_instantiated_at_once) {
+  // M23: a candidate the first phase's refill shows is a root child at once - after every single
+  // playout, every visited root edge is within the instantiated prefix (root_children() lists it).
+  const GameState s = t5d_test::game({"[k7/8/8/8/8/8/8/r3K3:0:1:w]"}, BoardSize{8, 8});
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
+  int refilled = 0;
+  for (std::uint64_t seed = 1; seed <= 12; ++seed) {
+    mcts::SearchParams p = gumbel_params(20, 2, seed);
+    p.legality = LegalityOptions::budgeted(0, 0);
+    p.synchronous = true;
+    mcts::Search search(s, p);
+    for (int k = 0; k < 21; ++k) {
+      search.run(*ev, mcts::Limits{1});  // one more playout
+      const mcts::NodeView root = search.node(search.root());
+      for (std::size_t i = root.instantiated; i < root.edge_count; ++i) {
+        CHECK_EQ(search.edge(search.root(), i).visits, std::uint32_t{0});
+      }
+    }
+    refilled += search.stats().verified_illegal > 0 ? 1 : 0;
+  }
+  CHECK(refilled > 0);
+}
+
+TEST(mcts_gumbel_wait_releases_the_roots_virtual_visit) {
+  // M28: a halving's wait releases the selection's virtual visit at the root. Batches of 5 do not
+  // divide the first three phases' 48 visits, so a batch ends short at each of their ends (with
+  // batches of 8 the phases end on batch boundaries and the search never waits).
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
+  mcts::Search s(standard(), gumbel_params(200));
+  int short_batches = 0;
+  for (int b = 0; b < 100 && s.stats().playouts < 201; ++b) {
+    const std::uint64_t collisions = s.stats().collisions;
+    const std::size_t n = s.gather(5, 201 - s.stats().playouts);
+    if (b > 0 && n < 5 && s.stats().collisions == collisions && s.stats().playouts < 201 - n) ++short_batches;
+    std::vector<mcts::Evaluation> out(n);
+    ev->evaluate(s.requests(), out);
+    s.deliver(out);
+    CHECK_EQ(s.node(s.root()).virtual_loss, std::uint32_t{0});
+  }
+  std::fprintf(stderr, "  %d short batches without a collision\n", short_batches);
+  CHECK(short_batches >= 3);  // the first three phases' ends
+  CHECK_EQ(s.stats().playouts, std::uint64_t{201});
+  CHECK_NOTHROW(s.check_invariants());
+}
+
+TEST(mcts_gumbel_a_batch_ends_at_a_halvings_wait) {
+  // M29: the halving's wait ends the batch - a gather as large as can be asked for ends at the
+  // first phase's end, not at its iteration limit (unbounded for SIZE_MAX: without the wait's
+  // break the gather would never return). Each of the 16 candidates has 2 of its 3 visits; the
+  // gather gives each its third (16 leaves, no collision), then waits.
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
+  mcts::Search s(standard(), gumbel_params(200));
+  s.run(*ev, mcts::Limits{33});  // the root's own evaluation, then two visits to each candidate
+  for (const mcts::RootChild& c : s.root_children()) REQUIRE_EQ(c.visits, std::uint32_t{2});
+  const std::uint64_t collisions = s.stats().collisions;
+  const std::size_t n = s.gather(std::numeric_limits<std::size_t>::max());
+  CHECK_EQ(n, std::size_t{16});
+  CHECK_EQ(s.stats().collisions, collisions);  // ended by the wait, not by a collision
+  std::vector<mcts::Evaluation> out(n);
+  ev->evaluate(s.requests(), out);
+  s.deliver(out);
+  for (const mcts::RootChild& c : s.root_children()) CHECK_EQ(c.visits, std::uint32_t{3});
+  CHECK_EQ(s.gumbel_view().phase, std::size_t{0});  // the halving runs at the next pick
+  CHECK_NOTHROW(s.check_invariants());
+}
+
+TEST(mcts_gumbel_timed_refusal_leaves_the_manager_unchanged) {
+  // T02: TimeManager::begin refuses a Gumbel search before anything changes - compared with the
+  // manager's state before the refused call, in a decision begun on a plain search (a refusal
+  // made after beginning would have begun a decision on the 30-second clock).
+  mcts::SearchParams plain = gumbel_params(63);
+  plain.gumbel_root = false;
+  mcts::Search other(standard(), plain);
+  mcts::Search gumbel(standard(), gumbel_params(63));
+  mcts::TimeManager tm;
+  mcts::TimeContext ctx;
+  ctx.remaining_seconds = 60;
+  CHECK_THROWS_AS(tm.begin(gumbel, ctx), std::invalid_argument);  // a fresh manager
+  CHECK(!tm.in_decision());
+  CHECK_EQ(tm.plan().boards, 0);
+  CHECK_EQ(tm.plan().usable_seconds, 0.0);
+  tm.begin(other, ctx);
+  REQUIRE(tm.in_decision());
+  const mcts::TimePlan before = tm.plan();
+  const double scale = tm.scale();
+  mcts::TimeContext shorter;
+  shorter.remaining_seconds = 30;
+  CHECK_THROWS_AS(tm.begin(gumbel, shorter), std::invalid_argument);
+  CHECK(tm.in_decision());
+  const mcts::TimePlan after = tm.plan();
+  CHECK_EQ(after.boards, before.boards);
+  CHECK_EQ(after.usable_seconds, before.usable_seconds);
+  CHECK_EQ(after.soft_evaluations, before.soft_evaluations);
+  CHECK_EQ(after.soft_seconds, before.soft_seconds);
+  CHECK_EQ(after.hard_seconds, before.hard_seconds);
+  CHECK_EQ(tm.scale(), scale);
+}
+
+TEST(mcts_gumbel_game_loop_refuses_before_any_evaluation) {
+  // S01: play_game refuses the arm itself, up front - by name, before any evaluation (the loop's
+  // later refusals, choose_by_visits' temperature or a re-root, come only after a search's work).
+  const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
+  Counting counting(*ev);
+  mcts::PlayParams pp;
+  pp.search = gumbel_params(63);
+  bool named = false;
+  try {
+    mcts::play_game(standard(), counting, pp);
+  } catch (const std::invalid_argument& e) {
+    named = std::string(e.what()).find("PlayParams::search.gumbel_root") != std::string::npos;
+  }
+  CHECK(named);
+  CHECK_EQ(counting.calls, std::size_t{0});
+}
+
 // ---- the C API ---------------------------------------------------------------------------------------
 
 TEST(capi_gumbel_fields_defaults_and_choice) {
@@ -1264,5 +1643,59 @@ TEST(capi_gumbel_fields_defaults_and_choice) {
   CHECK_EQ(t5d_search_choose_gumbel(nullptr, &chosen, nullptr), T5D_ERR_ARGUMENT);
   CHECK_EQ(t5d_search_choose_gumbel(s, nullptr, nullptr), T5D_ERR_ARGUMENT);
   t5d_search_destroy(s);
+  t5d_game_destroy(g);
+}
+
+TEST(capi_gumbel_fields_reach_the_search) {
+  // C01, C03-C05 (the mutation pass of 2026-11-27): each Gumbel field of t5d_search_params
+  // reaches the search - the C API's search is the C++ twin's with the same non-default m,
+  // c_visit and c_scale, under the random evaluator (values differ, so sigma's form matters), and
+  // each field at another value gives another tree (the precondition that makes the comparison
+  // mean something). C06: gumbel_root is 0 or 1 - params_from refuses any other value of every
+  // int32 flag of the ABI (boolean()), and this one is no exception.
+  const std::uint64_t kSeed = 5;
+  const auto twin_digest = [&](std::uint32_t m, double c_visit, double c_scale) {
+    mcts::SearchParams cpp = gumbel_params(200, m);
+    cpp.gumbel_c_visit = c_visit;
+    cpp.gumbel_c_scale = c_scale;
+    mcts::Search twin(standard(), cpp);
+    const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Random, kSeed);
+    twin.run(*ev, mcts::Limits{201});
+    return twin.digest();
+  };
+  const std::uint32_t m = 8;
+  const double c_visit = 2.0, c_scale = 0.3;  // each field matters here (the mutation pass's grid)
+  const std::uint64_t want = twin_digest(m, c_visit, c_scale);
+  CHECK(twin_digest(16, c_visit, c_scale) != want);  // m not copied
+  CHECK(twin_digest(m, 50.0, c_scale) != want);      // c_visit not copied
+  CHECK(twin_digest(m, c_visit, 1.0) != want);       // c_scale not copied
+  CHECK(twin_digest(m, c_scale, c_visit) != want);   // the two swapped
+  t5d_search_params p;
+  t5d_search_params_default(&p);
+  p.expand.square_features = T5D_FEATURES_NONE;
+  p.gumbel_root = 1;
+  p.gumbel_simulations = 200;
+  p.gumbel_m = m;
+  p.gumbel_c_visit = c_visit;
+  p.gumbel_c_scale = c_scale;
+  p.hunt = 0;
+  p.settling = 0;
+  p.asset_map = 0;
+  t5d_game* g = nullptr;
+  REQUIRE_EQ(t5d_game_new_variant("Standard", T5D_RULES_STANDARD, &g, nullptr), T5D_OK);
+  t5d_search* s = nullptr;
+  REQUIRE_EQ(t5d_search_new(g, 1, &p, &s, nullptr), T5D_OK);
+  REQUIRE_EQ(t5d_search_run(s, T5D_EVALUATOR_RANDOM, kSeed, 201, nullptr), T5D_OK);
+  std::uint64_t digest = 0;
+  REQUIRE_EQ(t5d_search_digest(s, &digest), T5D_OK);
+  CHECK_EQ(digest, want);
+  t5d_search_destroy(s);
+  for (const std::int32_t bad : {2, -1}) {
+    p.gumbel_root = bad;
+    char* error = nullptr;
+    CHECK_EQ(t5d_search_new(g, 1, &p, &s, &error), T5D_ERR_ARGUMENT);
+    CHECK(error != nullptr && std::string(error).find("gumbel_root must be 0 or 1") != std::string::npos);
+    t5d_free(error);
+  }
   t5d_game_destroy(g);
 }
