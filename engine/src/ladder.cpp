@@ -228,6 +228,16 @@ void VerificationLadder::set_verdict_hook_for_tests(VerdictHook hook) {
   hook_ = std::move(hook);
 }
 
+void VerificationLadder::use_settling_stores_for_tests(SolvedStore* proofs, DisproofStore* disproofs) {
+  std::lock_guard<std::mutex> lock(m_);
+  if (!options_.synchronous) {
+    throw std::logic_error("use_settling_stores_for_tests: the synchronous mode only (the test's stores)");
+  }
+  if (settling_) throw std::logic_error("use_settling_stores_for_tests: before the first settling scan");
+  settling_proofs_ = proofs;
+  settling_disproofs_ = disproofs;
+}
+
 void VerificationLadder::wait_idle() {
   std::unique_lock<std::mutex> lock(m_);
   idle_cv_.wait(lock, [this] { return queue_.empty() && !running_; });
@@ -323,7 +333,7 @@ LadderVerdict VerificationLadder::run(const Job& job) {
       // The game's prover: its own proof and disproof stores (never the
       // permanent store, H19, H23) and its TT of estimates, kept across the
       // game's scans (H17).
-      settling_ = std::make_unique<Prover>(po);
+      settling_ = std::make_unique<Prover>(po, settling_proofs_, settling_disproofs_);  // null both: its own
     }
     const ProveResult r = settling_->prove(*job.position, budget, job.depth);
     v.stats = r.stats;

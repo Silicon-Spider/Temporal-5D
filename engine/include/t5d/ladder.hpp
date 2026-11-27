@@ -237,6 +237,16 @@ class VerificationLadder {
   using VerdictHook = std::function<void(LadderVerdict&)>;
   void set_verdict_hook_for_tests(VerdictHook hook);
 
+  /// TESTS ONLY (6f's TT-churn test through the wired settling path; build-log
+  /// spec issue 402's part 5): the solved store and the disproof store the
+  /// game's settling prover is built over, the test's own, in place of the
+  /// prover's - so that the test can hold their facts to the game tree, which
+  /// the prover's own stores do not list. Before the first settling scan, and
+  /// in the synchronous mode only (the scans then run on the caller's thread:
+  /// the test's stores need not be thread-safe); std::logic_error otherwise.
+  /// Not the permanent store (H19, H23): the test's, read and dropped by it.
+  void use_settling_stores_for_tests(SolvedStore* proofs, DisproofStore* disproofs);
+
  private:
   struct Job {
     LadderJob kind = LadderJob::Hunt;
@@ -256,6 +266,8 @@ class VerificationLadder {
   std::uint32_t ruleset_ = 0;
   AssetMap assets_;
   std::unique_ptr<Prover> settling_;  // the game's settling prover (the worker's, or inline)
+  SolvedStore* settling_proofs_ = nullptr;        // tests only: the stores it is built over
+  DisproofStore* settling_disproofs_ = nullptr;   // (use_settling_stores_for_tests)
   std::optional<Carried> carried_;
 
   mutable std::mutex m_;
