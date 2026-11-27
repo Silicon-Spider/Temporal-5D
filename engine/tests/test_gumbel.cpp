@@ -1579,7 +1579,9 @@ TEST(mcts_gumbel_memory_budget_counts_the_roots_buffers) {
   // least the 20 edges' view and g. Off, an inactive Root holds nothing.
   CHECK_EQ(gumbel::Root{}.heap_bytes(), std::size_t{0});
   const gumbel::Root made = gumbel::Root::make(std::vector<double>(20, 0.0), 20, gumbel::Config{16, 200, 50.0, 1.0});
-  CHECK(made.heap_bytes() >= 20 * (2 * sizeof(double) + sizeof(std::size_t)));
+  // Its four buffers: g, considered and the scratch reserved for 20 edges, and the schedule.
+  CHECK(made.heap_bytes() >= 20 * (sizeof(double) + sizeof(std::size_t) + sizeof(std::pair<double, std::size_t>)) +
+                                 made.schedule().size() * sizeof(gumbel::Phase));
   const std::unique_ptr<mcts::Evaluator> ev = mcts::make_evaluator(mcts::BuiltinEvaluator::Uniform);
   mcts::SearchParams on = gumbel_params(200);
   mcts::SearchParams off = on;

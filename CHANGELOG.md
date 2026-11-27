@@ -35,7 +35,8 @@ the spec describes the change.
   al. with the max(1, ·) floor and the leftover visits to the last two.
 - **The correctness pass's minor points**: `memory_bytes()` (`Limits::bytes`' measure) counts a
   Gumbel root's buffers - `gumbel::Root::heap_bytes()` (new) and the view; off, nothing (test
-  `mcts_gumbel_memory_budget_counts_the_roots_buffers`, which fails with the term taken out).
+  `mcts_gumbel_memory_budget_counts_the_roots_buffers`, which fails with the term taken out; its
+  check of `heap_bytes()` itself names all four buffers, so that leaving one out fails too).
   Reading (d), the README and `mcts.hpp` say that a search cut mid-schedule chooses among the
   current survivors where the paper's choice is among a completed halving's. (`Root::score` was
   made private with EC-3.)
