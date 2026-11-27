@@ -2084,6 +2084,25 @@ points that no creation order realises, judged one by one because the abstract c
 at its step limit (4,096) on nearly every box. What would change them is algorithmic (issue
 407); whether the play loop's exact steps should carry a node budget is a decision (issue 408).
 
+### An unscored game at 88 boards under the game loop's default budget (indicative; one game; no threshold, no verdict)
+
+Build-log issues 413 and 414 (register H22, review decision 13). The engine's own test
+`selfplay_games_end_by_checkmate_stalemate_or_the_cap` (`engine/tests/test_selfplay.cpp`), its
+flat-form game from Very Small - Open: the material evaluator, 12 playouts per decision, seed 2, the
+turn cap 12 turns or 300 boards, self-play's root noise, the asset map off, the ladder's defaults,
+square features none; the game loop's node budget the default 2,000,000 (`kTerminalNodes`, a
+placeholder). `lane/engine` at 193b517 and again with the review's fixes (73e6430), `dev-r`, other
+lanes' jobs running - load 97-100%: wall-clock seconds are indicative. 2026-11-23/24.
+
+| Game | Actions | Final position | End | Its turn-start verdicts | The game |
+|---|---|---|---|---|---|
+| Very Small - Open, flat form, seed 2 | 18 | 88 boards | unknown (the verdict: unsettled within 2,000,000 nodes) | 2.94 s / 3.33 s | 54.6 s / 56.3 s |
+
+*Read.* One game of the test's ten, the only one that ended unscored; before the ruling its exact
+verdict ran until it settled (the suite's slowest test). It shows the placeholder can end a game
+well below the turn cap's 300 boards and near the generator's 80; how often, by board count, is the
+pilot run's to measure (issue 413, for the user).
+
 ### The cached path at engine roots - C3's anchor (issue 259) (numerics; no threshold, no verdict)
 
 **What it is.** How often a search root's pseudo-legal and legal move lists differ - where C3's root
@@ -2139,11 +2158,22 @@ block-causal, N\* = the start's boards + 3.
 |---|---|---|
 | Rooted under N\*: the phase form's search against the dense search (digest, counts, every evaluation) | bitwise equal, every arm | bitwise |
 | Rooted at or above N\*: a cached leaf against the two-level reference anchored at the root (logits) | 1.31e-6 | 1e-4 |
-| ... the root leaf against the dense pass (issue 259's anchor) | 9.54e-7 | 1e-4 |
+| ... the root leaf against the dense pass (issue 259's anchor) | 9.54e-7 | 1e-4; 1e-5 (`ROOT_DENSE_BOUND`) from 2026-11-23 |
 | ... a search's non-root leaves against the dense pass (the smallest search maximum) | 1.33e-1 (smallest) | above 1e-3 |
+| ... every non-root leaf against the dense pass (the smallest over every leaf; 2026-11-23) | 5.35e-2 (smallest) | above 1e-3, per leaf |
+| A carried graph search across N\*: a carried node reached after the crossing by a cached path - its WDL against the dense pass's, and against the cached path's evaluation of the same state (2026-11-23; BUILD_LOG issue 264) | 1e-6 (largest); 1.3e-3 to 5.0e-3 | - |
 | The dense pass: a position alone against in a batch of four (logits; 3 seeds x 4 synthetic positions of 9-17 boards) | 1.13e-6 | - |
 | The dense pass: grad against no-grad, alone | 1.37e-6 | - |
 | The dense pass: the same batch twice | 0 (bitwise) | - |
+
+*Added 2026-11-23 (C26/C27's review round; the same machine, loaded - other lanes' tests running -
+PyTorch 2.13.0+cpu, Python 3.14.7, NumPy 2.5.2, 3 torch threads, the engine built in `lane/net` on
+main 4e9267e).* The per-leaf row is the smallest gap met by R6b's 18 searches and R6c's, now asserted
+per leaf (the review's own probe of the 18: 5.36e-2, on Very Small - Open, seed 1). The graph row:
+the ply split with `graph=1`, N\* the root's boards + 1, 256 playouts before the crossing and 128 after
+it, model and search seeds (6, 3) and (7, 4) on Timeline Battleground, Very Small - Open and Two
+Timelines; 3 of the 6 carried searches met such a node (nine links in all), the WDLs compared as
+probabilities (the engine's `network_wdl` and the softmax of each evaluation's logits).
 
 *Read.* Under N\* the phase form is the dense search itself, so its figure is equality, not a gap.
 At or above N\* the cached leaves sit on their references at the summation-order level, as MT-04's

@@ -99,13 +99,16 @@ struct LegalityOptions {
   std::size_t max_bytes = kDefaultSearchBytes;
   /// The detector tier 3 searches with.
   Detector detector = Detector::Hypercuboid;
-  /// A wall-clock deadline (none by default): each of tier 3's searches is
-  /// given the time left (SearchBudget::max_time), and none starts once it
-  /// has passed - the moves they would have settled are Unknown. How a
-  /// caller's own deadline (a search's Limits::seconds, a game's
-  /// PlayParams::max_seconds) reaches the detector inside a classification
-  /// (build-log issue 406). Never set by the search's own budgets: a node
-  /// budget is deterministic, a deadline is not.
+  /// A wall-clock deadline (none by default; build-log issue 406, stage E11).
+  /// Past it no further check is taken - tier 2's checks, destination scans
+  /// and greedy tries included (E11's gating, kept at the merge of the two
+  /// lanes: a tighter bound, H37-sound) - and no search of tier 3 starts; a
+  /// search running is given the time left (SearchBudget::max_time). The
+  /// moves not yet settled are Unknown. How a caller's own deadline - a
+  /// search's Limits::seconds, a game's PlayParams::max_seconds, the time
+  /// manager's hard bound (Search::set_deadline) - reaches the detector inside
+  /// a classification. Never set by the search's own budgets: a node budget is
+  /// deterministic, a deadline is not.
   std::optional<std::chrono::steady_clock::time_point> deadline;
 
   static LegalityOptions exact() noexcept { return LegalityOptions{}; }
@@ -140,6 +143,10 @@ struct LegalityStats {
   std::size_t searched_illegal = 0;   // tier 3
   std::size_t unknown = 0;            // tier 3, the budget (or memory ceiling) spent
   std::uint64_t search_nodes = 0;     // spent by tier 3
+  /// tier 3: searches from the state itself (before tier 1, or with no move
+  /// legal yet) not started because the deadline had passed (the E11 review's
+  /// S8) - a move's search is not reached past it (its loop stops first)
+  std::size_t root_searches_past_deadline = 0;
   std::size_t scans = 0;              // royal-capture scans of tier 1 (stripped and destination)
   bool bulk = false;                  // tier 1's stripped multiverse was capture-free
   std::size_t kept_blockers = 0;      // pieces tier 1 kept

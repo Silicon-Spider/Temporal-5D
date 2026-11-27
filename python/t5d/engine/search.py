@@ -37,6 +37,20 @@ rule or a search decision.
   epoch, so that the cache keeps them apart (``evaluator.start_epoch``). The cache has no lock:
   the searches sharing it must never be used from two threads at once - the caller's duty, as
   the C calls release the GIL and nothing here checks it.
+* **Time management (stage E11, ``t5d/timeman.hpp``).** ``TimeManager`` wraps one
+  ``t5d_timeman`` - one player's clock through a game, match play only: ``begin`` plans a
+  decision at a search's root (a soft bound in evaluations, a hard bound in wall-clock seconds),
+  ``check`` between batches says whether to stop (elapsed seconds, or NaN for the cost model's
+  deterministic clock), ``end`` closes it; ``evaluator.run_timed_search`` runs that loop with
+  the network. ``time_params(**overrides)`` fills a ``t5d_time_params``: 6o's arms are its
+  ``allocator`` (``"integral"``, ``"flat_evals"``, ``"flat_wall_clock"`` or the constant) and
+  ``signals``; ``proof_volatility`` (off) lets Hunt's and the settling scans' proofs EXTEND a
+  decision, never stop it - with the proof channel off, which this binding cannot turn on
+  (build-log spec issue 180, ruled 2026-11-23: the 2026-11-15 review's decision 12). E8 (a
+  prototype, off: ``difficulty_weighting``) weights the plan by the root's predicted effort,
+  given to ``begin`` as the effort head's 16 probabilities
+  (``effort``; none: inert). ``Search.set_deadline`` gives the rules engine's calls inside
+  a batch the hard bound; ``Search.run_timed`` is a timed decision with a built-in evaluator.
 * **Lifetimes.** A leaf's pointers live until the next ``gather``, ``deliver``, ``abandon``
   or ``close``: ``leaf_expansion`` copies at once (``Expansion.from_c``). ``close`` (or the
   context manager, or garbage collection) releases the handle.
@@ -53,12 +67,16 @@ import contextlib
 import ctypes
 import math
 from collections.abc import Sequence
-from ctypes import byref, c_double, c_float, c_int32, c_size_t, c_uint64, c_void_p
+from ctypes import byref, c_double, c_float, c_int32, c_int64, c_size_t, c_uint64, c_void_p
 from dataclasses import dataclass
 
 import numpy as np
 
 from .capi import (
+    T5D_ALLOCATOR_FLAT_EVALS,
+    T5D_ALLOCATOR_FLAT_WALL_CLOCK,
+    T5D_ALLOCATOR_INTEGRAL,
+    T5D_EFFORT_BINS,
     T5D_LEGALITY_LEGAL,
     T5D_NO_LIMIT,
     T5D_VALUE_LOGITS,
@@ -69,6 +87,10 @@ from .capi import (
     CSearchLimits,
     CSearchParams,
     CSearchSummary,
+    CTimeContext,
+    CTimeParams,
+    CTimePlan,
+    CTimeVerdict,
     ExpandOptions,
     Library,
     MoveRecord,
@@ -188,6 +210,7 @@ class SearchInfo:
     pv_changes: int
     asset_boosted_edges: int
     steered_visits: int  # root visits counted steered (I2)
+    suggestion_edges: int  # root edges Hunt's suggestions raised (hunt_suggest, H43; 0 while it is off)
 
     @property
     def root_finished(self) -> bool:
@@ -489,11 +512,43 @@ class Search:
         self._lib.call("t5d_search_choose_by_visits", self._live(), c_double(temperature), c_double(random), byref(index), error=True)
         return int(index.value)
 
-    def verify(self, index: int) -> int:
-        """Classify root child ``index``'s move exactly (``T5D_LEGALITY_*``); an illegal child
-        is removed and the children's indices change."""
+    def verify(self, index: int, seconds: float = 0.0, *, checks: int = T5D_NO_LIMIT, nodes: int = T5D_NO_LIMIT) -> int:
+        """Classify root child ``index``'s move (``T5D_LEGALITY_*``) within ``checks`` (tier 2's)
+        and ``nodes`` (tier 3's search nodes in all) - ``T5D_NO_LIMIT`` both, the default: exactly
+        (``t5d_search_verify``). The game loops pass their node budget (register H22, section 11.0:
+        the terminal test's budget covers the chosen move's verification too); a move it leaves
+        undecided is ``T5D_LEGALITY_UNKNOWN`` and stays a child. An illegal child is removed and
+        the children's indices change. Deterministic (``t5d_search_verify_budgeted``) - unless
+        ``seconds`` (stage E11, the E11 review's H1): a deadline from now as well
+        (``t5d_search_verify_within``), past which the classification answers
+        ``T5D_LEGALITY_UNKNOWN``; 0 (or 1e9 or more): none; a time already spent: a tiny positive
+        value. A budget outside 0 to ``T5D_NO_LIMIT`` is refused (``ValueError``), never wrapped
+        into the C type (the review of decision 13, L3: -1 read as exact, 2**64 as 0)."""
+        for name, value in (("checks", checks), ("nodes", nodes)):
+            if not 0 <= int(value) <= T5D_NO_LIMIT:
+                raise ValueError(f"{name}: 0 to T5D_NO_LIMIT, not {value}")
         out = c_int32()
-        self._lib.call("t5d_search_verify", self._live(), c_size_t(int(index)), byref(out), error=True)
+        if seconds:
+            self._lib.call(
+                "t5d_search_verify_within",
+                self._live(),
+                c_size_t(int(index)),
+                c_uint64(int(checks)),
+                c_uint64(int(nodes)),
+                c_double(float(seconds)),
+                byref(out),
+                error=True,
+            )
+        else:
+            self._lib.call(
+                "t5d_search_verify_budgeted",
+                self._live(),
+                c_size_t(int(index)),
+                c_uint64(int(checks)),
+                c_uint64(int(nodes)),
+                byref(out),
+                error=True,
+            )
         return int(out.value)
 
     def advance(self, index: int) -> None:
@@ -526,9 +581,245 @@ class Search:
         self._lib.call("t5d_search_digest", self._live(), byref(out))
         return int(out.value)
 
+    # -- stage E11: time management --
+
+    def set_deadline(self, seconds: float) -> None:
+        """The deadline, ``seconds`` from now, at which the rules engine's calls inside a batch stop
+        (answering Unknown, never a verdict - H37); 0: none."""
+        self._lib.call("t5d_search_set_deadline", self._live(), c_double(float(seconds)), error=True)
+
+    def deadline(self) -> tuple[int, float]:
+        """The persistent deadline (``t5d_search_deadline``; stage E11, the E11 review's S2): its time
+        point on the library's steady clock in nanoseconds (``T5D_NO_DEADLINE``: none) - for
+        ``set_deadline_at`` to restore it exactly - and the seconds left until it (0 or less once
+        passed, ``inf`` for none)."""
+        at, left = c_int64(), c_double()
+        self._lib.call("t5d_search_deadline", self._live(), byref(at), byref(left), error=True)
+        return int(at.value), float(left.value)
+
+    def lift_root_listing(self, steady_ns: int | None) -> None:
+        """Exception (1)'s scope (``t5d_search_lift_root_listing``; the E11 review's S4): the root's
+        own listing runs under the deadline ``steady_ns`` (as ``deadline()`` reports one;
+        ``T5D_NO_DEADLINE``: none) in place of the persistent deadline, every other call keeping
+        the persistent one; ``None``: the persistent deadline's again."""
+        lifted = steady_ns is not None
+        self._lib.call(
+            "t5d_search_lift_root_listing", self._live(), c_int32(int(lifted)), c_int64(int(steady_ns) if lifted else 0), error=True
+        )
+
+    def set_deadline_at(self, steady_ns: int) -> None:
+        """The persistent deadline set to a time point ``deadline()`` reported (``T5D_NO_DEADLINE``:
+        none) - the same deadline, not one recomputed from now."""
+        self._lib.call("t5d_search_set_deadline_at", self._live(), c_int64(int(steady_ns)), error=True)
+
+    def run_timed(
+        self,
+        evaluator: int,
+        tm: TimeManager,
+        *,
+        remaining: float,
+        increment: float = 0.0,
+        moves_left: float = math.nan,
+        effort: Sequence[float] | None = None,
+        wall_clock: bool = False,
+        seed: int = 0,
+    ) -> tuple[TimePlan, TimeVerdict]:
+        """One timed decision with a built-in evaluator (``T5D_EVALUATOR_*``): its plan and its last
+        verdict. ``wall_clock`` False: the model clock (deterministic)."""
+        ctx, _keep = time_context(remaining, increment, moves_left, effort)
+        plan, verdict = CTimePlan(), CTimeVerdict()
+        self._lib.call(
+            "t5d_search_run_timed",
+            self._live(),
+            int(evaluator),
+            c_uint64(int(seed)),
+            tm._live(),
+            byref(ctx),
+            int(bool(wall_clock)),
+            byref(plan),
+            byref(verdict),
+            error=True,
+        )
+        return TimePlan.of(plan), TimeVerdict.of(verdict)
+
+
+#: 6o's arms by name (``t5d_time_params.allocator``).
+ALLOCATORS: dict[str, int] = {
+    "integral": T5D_ALLOCATOR_INTEGRAL,
+    "flat_evals": T5D_ALLOCATOR_FLAT_EVALS,
+    "flat_wall_clock": T5D_ALLOCATOR_FLAT_WALL_CLOCK,
+}
+
+
+def time_params(lib: Library | None = None, **overrides) -> CTimeParams:
+    """A ``t5d_time_params`` with the library's defaults and ``overrides`` by field name;
+    ``allocator`` by name (``ALLOCATORS``) or constant, ``boards_per_action`` and
+    ``boards_per_action_ranges`` as sequences. ``proof_volatility`` 1 switches the proof hook on: a
+    proof may extend a decision, never stop it (decision 12; build-log spec issue 180)."""
+    lib = load_library() if lib is None else lib
+    p = CTimeParams()
+    lib.fn.t5d_time_params_default(byref(p))
+    names = {name for name, _ in CTimeParams._fields_}
+    for name, given in overrides.items():
+        if name not in names:
+            raise ValueError(f"t5d_time_params has no field {name!r}")
+        value = given
+        if name == "allocator" and isinstance(given, str):
+            if given not in ALLOCATORS:
+                raise ValueError(f"allocator must be one of {sorted(ALLOCATORS)}")
+            value = ALLOCATORS[given]
+        if name in ("boards_per_action", "boards_per_action_ranges"):
+            array = getattr(p, name)
+            if len(value) != len(array):
+                raise ValueError(f"{name}: {len(array)} values")
+            for i, v in enumerate(value):
+                array[i] = v
+            continue
+        setattr(p, name, value)
+    return p
+
+
+def time_context(remaining: float, increment: float, moves_left: float, effort: Sequence[float] | None):
+    """A ``t5d_time_context`` and the float32 array its ``effort`` points into (keep it alive for
+    the call). ``effort``: the effort head's ``T5D_EFFORT_BINS`` probabilities (E8), or None."""
+    ctx = CTimeContext(float(remaining), float(increment), float(moves_left))
+    if effort is None:
+        return ctx, None
+    array = np.ascontiguousarray(np.asarray(effort, dtype=np.float32).reshape(-1))
+    if array.size != T5D_EFFORT_BINS:
+        raise ValueError(f"effort: {T5D_EFFORT_BINS} probabilities (D4's effort head), not {array.size}")
+    ctx.effort = array.ctypes.data_as(ctypes.POINTER(c_float))
+    ctx.effort_count = array.size
+    return ctx, array
+
+
+@dataclass(frozen=True)
+class TimePlan:
+    """``t5d_time_plan``: a decision's plan."""
+
+    boards: int
+    moves_left_given: bool
+    moves_left_turns: float
+    our_actions: float
+    decisions_left: float
+    seconds_per_evaluation: float
+    usable_seconds: float
+    share: float
+    action_evaluations: float
+    soft_evaluations: float
+    soft_seconds: float
+    hard_seconds: float
+    e7_soft_evaluations: float = 0.0  # E8: the plan before it
+    difficulty_applied: bool = False
+    effort_bin: int = -1
+    censored_mass: float = 0.0
+    wont_resolve: bool = False
+    difficulty_factor: float = 1.0
+    reference_bin: float = 0.0
+
+    @classmethod
+    def of(cls, c: CTimePlan) -> TimePlan:
+        flags = ("moves_left_given", "difficulty_applied", "wont_resolve")
+        return cls(**{name: (bool(getattr(c, name)) if name in flags else getattr(c, name)) for name, _ in CTimePlan._fields_})
+
+
+@dataclass(frozen=True)
+class TimeVerdict:
+    """``t5d_time_verdict``: what a check decided (``stop``: ``T5D_TIME_STOP_*``; ``extensions``:
+    ``T5D_EXTEND_*`` taken), and the time manager's cost scale."""
+
+    stop: int
+    extensions: int
+    work: float
+    target_evaluations: float
+    elapsed_seconds: float
+    predicted_batch_seconds: float
+    kld_gain: float
+    converged: bool
+    scale: float
+
+    @classmethod
+    def of(cls, c: CTimeVerdict) -> TimeVerdict:
+        return cls(**{name: (bool(getattr(c, name)) if name == "converged" else getattr(c, name)) for name, _ in CTimeVerdict._fields_})
+
+
+class TimeManager:
+    """One ``t5d_timeman``: one player's clock through a game (see the module docstring)."""
+
+    def __init__(self, params: CTimeParams | None = None, *, lib: Library | None = None) -> None:
+        self._lib = load_library() if lib is None else lib
+        self.params = time_params(self._lib) if params is None else params
+        out = c_void_p()
+        self._lib.call("t5d_timeman_new", byref(self.params), byref(out), error=True)
+        self._handle = out
+
+    def _live(self) -> c_void_p:
+        if self._handle is None:
+            raise EngineArgumentError("the time manager has been closed")
+        return self._handle
+
+    def close(self) -> None:
+        handle, self._handle = self._handle, None
+        if handle is not None:
+            self._lib.fn.t5d_timeman_destroy(handle)
+
+    def __enter__(self) -> TimeManager:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        with contextlib.suppress(Exception):
+            self.close()
+
+    def begin(
+        self,
+        search: Search,
+        *,
+        remaining: float,
+        increment: float = 0.0,
+        moves_left: float = math.nan,
+        effort: Sequence[float] | None = None,
+    ) -> TimePlan:
+        """Plan and begin a decision at ``search``'s root: ``remaining`` seconds on the clock,
+        ``increment`` after each action, ``moves_left`` turns (NaN: the root's own network output,
+        else the default), ``effort`` the root's effort distribution (E8; None: none)."""
+        ctx, _keep = time_context(remaining, increment, moves_left, effort)
+        out = CTimePlan()
+        self._lib.call("t5d_timeman_begin", self._live(), search._live(), byref(ctx), byref(out), error=True)
+        return TimePlan.of(out)
+
+    def check(self, search: Search, elapsed: float = math.nan) -> TimeVerdict:
+        """Between batches: ``elapsed`` seconds since ``begin`` (NaN: the model clock)."""
+        out = CTimeVerdict()
+        self._lib.call("t5d_timeman_check", self._live(), search._live(), c_double(float(elapsed)), byref(out), error=True)
+        return TimeVerdict.of(out)
+
+    def end(self, search: Search) -> None:
+        self._lib.call("t5d_timeman_end", self._live(), search._live(), error=True)
+
+    def new_game(self) -> None:
+        self._lib.call("t5d_timeman_new_game", self._live())
+
 
 def is_legal(child: RootChild) -> bool:
     return child.legality == T5D_LEGALITY_LEGAL
 
 
-__all__ = ["CACHE_KEYS", "LeafView", "RootChild", "Search", "SearchInfo", "cache_mismatches", "is_legal", "search_params"]
+__all__ = [
+    "ALLOCATORS",
+    "CACHE_KEYS",
+    "LeafView",
+    "RootChild",
+    "Search",
+    "SearchInfo",
+    "TimeManager",
+    "TimePlan",
+    "TimeVerdict",
+    "cache_mismatches",
+    "is_legal",
+    "search_params",
+    "time_context",
+    "time_params",
+]

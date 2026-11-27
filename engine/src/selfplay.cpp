@@ -3,7 +3,9 @@
 #include "t5d/selfplay.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
+#include <cmath>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -53,6 +55,17 @@ const char* game_end_name(GameEnd end) noexcept {
     case GameEnd::Unknown: return "unknown";
     case GameEnd::ActionLimit: return "action_limit";
     case GameEnd::TimeLimit: return "time_limit";
+    case GameEnd::Flag: return "flag";
+  }
+  return "?";
+}
+
+const char* unsettled_name(Unsettled u) noexcept {
+  switch (u) {
+    case Unsettled::None: return "";
+    case Unsettled::Verdict: return "verdict";
+    case Unsettled::Choice: return "choice";
+    case Unsettled::Search: return "search";
   }
   return "?";
 }
@@ -66,6 +79,7 @@ std::string GameRecord::result() const {
 double GameRecord::white_score() const noexcept {
   switch (end) {
     case GameEnd::Checkmate: return winner == 0 ? 1.0 : 0.0;
+    case GameEnd::Flag: return winner == 0 ? 1.0 : 0.0;
     case GameEnd::Stalemate:
     case GameEnd::TurnCap: return 0.5;
     case GameEnd::Unknown:
@@ -82,6 +96,26 @@ SearchParams self_play_search_defaults() {
   return p;
 }
 
+bool detail::cannot_move(bool added_playouts, bool still_edgeless, bool clock_advanced, int& idle) noexcept {
+  if (!added_playouts || still_edgeless) return true;
+  if (clock_advanced) return false;
+  return ++idle >= kNoVisitRounds;
+}
+
+bool detail::DecisionClock::out() const { return clock != nullptr && clock->now() - start >= remaining; }
+
+std::optional<std::chrono::steady_clock::time_point> detail::DecisionClock::within(
+    double budget, std::optional<std::chrono::steady_clock::time_point> game) const {
+  if (clock == nullptr) return game;
+  const auto now = std::chrono::steady_clock::now();
+  const double left = budget - (clock->now() - start);
+  const std::optional<std::chrono::steady_clock::time_point> mine =
+      left > 0 ? deadline_after(now, left, "the match clock") : std::optional(now);
+  if (!mine) return game;
+  if (!game) return mine;
+  return std::min(*game, *mine);
+}
+
 GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayParams& params) {
   const auto t0 = std::chrono::steady_clock::now();
   GameRecord g(start);
@@ -89,6 +123,22 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
   SearchParams sp = params.search;
   sp.turn_cap = params.turn_cap;
   if (params.match_play) sp.root_noise = false;  // §12.3: noise off at match play
+  const MatchClock& mc = params.clock;
+  if (mc.enabled) {
+    if (!params.match_play) {
+      throw std::invalid_argument(
+          "PlayParams::clock: match play only - self-play's budgets are PCR's (12.5), never a clock's");
+    }
+    if (!(std::isfinite(mc.base_seconds) && mc.base_seconds > 0) ||
+        !(std::isfinite(mc.increment_seconds) && mc.increment_seconds >= 0)) {
+      throw std::invalid_argument("PlayParams::clock: base_seconds positive, increment_seconds 0 or more");
+    }
+    validate(mc.time);
+  }
+  if (params.terminal_nodes == 0) {
+    throw std::invalid_argument(
+        "PlayParams::terminal_nodes: 1 or more (UINT64_MAX: exact) - the game loop's node budget (H22)");
+  }
   if (params.guard_final && !sp.proof_channel) {
     throw std::invalid_argument(
         "PlayParams::guard_final: Guard's refutation is a proof, and no proof may change play until the proof "
@@ -126,7 +176,20 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
     if (!deadline) return 0;
     return std::max(std::chrono::duration<double>(time_left(*deadline)).count(), 1e-6);
   };
-  SearchBudget verdict_budget;  // no node limit: a verdict is a proof (H37)
+  // E11: each side's clock and time manager.
+  // (Made from the clock's parameters only when it is on: off, they are not read.)
+  const TimeParams tp = mc.enabled ? mc.time : TimeParams{};
+  std::array<TimeManager, 2> tms{TimeManager(tp), TimeManager(tp)};
+  if (mc.enabled) g.clock_remaining = {mc.base_seconds, mc.base_seconds};
+  WallClock wall;
+  // The match clock: the steady clock, a test's in its place, or none (the model clock).
+  Clock* const clock = mc.model_clock ? nullptr : mc.clock != nullptr ? mc.clock : &wall;
+  // H22 (§11.0): the turn-start verdict within the game loop's node budget -
+  // a verdict is a proof (H37), and one the budget does not reach ends the
+  // game Unknown, never a mate. On a match clock (the E11 review's H1 part 5)
+  // it is the referee's, the same: run before the side's decision starts, it
+  // is charged to neither clock, and an unsettled one ends the game unscored.
+  SearchBudget verdict_budget = SearchBudget::nodes(params.terminal_nodes);
   verdict_budget.max_bytes = sp.mate_bytes;
   for (;;) {
     // A turn start: the rules first, then the cap's convention.
@@ -134,7 +197,10 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
     if (deadline) verdict_budget.max_time = time_left(*deadline);
     const MateResult r = detect_mate(s, sp.detector, verdict_budget);
     g.seconds_verdicts += std::chrono::duration<double>(std::chrono::steady_clock::now() - v0).count();
-    if (r.verdict == Outcome::Unknown && !r.stats.stopped_by_memory && deadline_passed()) {
+    // An unsettled question's end follows the clock, at a verdict as at a choice: TimeLimit
+    // once the deadline has passed, Unknown before it - whatever stopped it, the node budget,
+    // the memory ceiling or the deadline (the review of decision 13, L6).
+    if (r.verdict == Outcome::Unknown && deadline_passed()) {
       g.end = GameEnd::TimeLimit;  // the safety stop, at this turn start
       break;
     }
@@ -148,7 +214,8 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       break;
     }
     if (r.verdict == Outcome::Unknown) {
-      g.end = GameEnd::Unknown;
+      g.end = GameEnd::Unknown;  // unscored (H22): the budget or the memory ceiling stopped it
+      g.unsettled = Unsettled::Verdict;
       break;
     }
     if (params.turn_cap.reached(s)) {
@@ -168,7 +235,13 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
     // count (the network sees it; equal states with other counts are other nodes).
     int moves_made = 0;
     const GameState action_start = s;
+    const int side = index_of(action_start.to_move());
+    // The action stopped: the deadline - or, with unsettled_choice, no child
+    // shown legal within terminal_nodes (H22: the game ends Unknown).
     bool timed_out = false;
+    bool flagged = false;
+    bool unsettled_choice = false;
+    bool unsettled_search = false;  // no move with time left (the E11 review's S1): Unknown, not a flag
     for (bool submitted = false; !submitted;) {
       // The safety stop before every decision, not only at turn starts; a
       // partial action is not recorded (the record ends at the turn start).
@@ -229,13 +302,43 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
       };
       Limits limits{params.playouts};
       limits.seconds = seconds_left();
-      search->run(evaluator, limits);
+      // E11: the decision's start on the match clock (read only when it is charged).
+      const double c0 = mc.enabled && clock != nullptr ? clock->now() : 0.0;
+      std::optional<TimedRun> timed;
+      if (mc.enabled) {
+        // E11: the side's time manager runs the decision on its clock.
+        TimeContext ctx;
+        ctx.remaining_seconds = g.clock_remaining[static_cast<std::size_t>(side)];
+        ctx.increment_seconds = mc.increment_seconds;
+        // The game's safety stop (max_seconds) folded into the run (the E11
+        // review's M2): its slices stop at it, the calls inside them too.
+        timed = run_timed(*search, evaluator, tms[static_cast<std::size_t>(side)], ctx, clock, seconds_left());
+        ++g.timed_decisions;
+        ++g.time_stops[static_cast<std::size_t>(timed->verdict.stop)];
+        g.extensions += static_cast<std::uint64_t>(std::popcount(timed->verdict.extensions));
+        limits.playouts = std::max<std::uint64_t>(sp.batch_size, 1);  // a re-run below: one batch
+      } else {
+        search->run(evaluator, limits);
+      }
       const auto visited = [&] {
         for (const RootChild& c : search->root_children()) {
           if (c.visits > 0) return true;
         }
         return false;
       };
+      // E11, the review's H1 - a clocked decision's steps after its search, on
+      // the match clock (detail::DecisionClock): `budget` seconds of the side's
+      // clock from the decision's start, as a steady-clock deadline (now, once
+      // spent), and the earlier of it and the game's; the side's flag only
+      // when its clock has run out. The model clock has no wall time: none.
+      using SteadyPoint = std::chrono::steady_clock::time_point;
+      const double clock_at_start = mc.enabled ? g.clock_remaining[static_cast<std::size_t>(side)] : 0.0;
+      const detail::DecisionClock dc{clock, c0, timed ? timed->plan.hard_seconds : 0.0, clock_at_start};
+      const auto on_clock = [&](double budget) -> std::optional<SteadyPoint> {
+        return timed ? dc.within(budget, deadline) : deadline;
+      };
+      const auto clock_out = [&] { return timed && dc.out(); };
+      bool out_of_clock = false;  // the side's flag fell before it had a move (H1's second exception, M1)
       // No child to choose and the deadline passed: TimeLimit (the run may
       // have stopped Deadline, or Playouts or Finished first - M1).
       if (!visited() && (search->stats().last_stop == StopReason::Deadline || deadline_passed())) {
@@ -252,31 +355,199 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
           limits.seconds = seconds_left();
           search->run(evaluator, limits);
           if (!visited() && deadline_passed()) return std::nullopt;
+          // A clocked decision never throws for want of a visit (the E11
+          // review's M1 and S1): it searches on, a batch at a time, against
+          // the side's clock, and its flag falls only when that clock runs
+          // out. A search that cannot produce a move with time left
+          // (detail::cannot_move) ends the game unscored (Unsettled::Search).
+          for (int idle = 0; timed && !visited();) {
+            if (deadline_passed()) return std::nullopt;
+            if (clock_out()) {
+              out_of_clock = true;
+              return std::nullopt;
+            }
+            const std::uint64_t p = search->stats().playouts;
+            const bool edgeless = search->root_children().empty();
+            const double read = clock != nullptr ? clock->now() : 0.0;
+            const std::optional<SteadyPoint> stop = on_clock(clock_at_start);
+            limits.seconds = stop ? std::max(std::chrono::duration<double>(time_left(*stop)).count(), 1e-6) : 0.0;
+            search->run(evaluator, limits);
+            if (visited()) break;
+            const bool advanced = clock != nullptr && clock->now() > read;
+            if (detail::cannot_move(search->stats().playouts != p, edgeless && search->root_children().empty(),
+                                    advanced, idle)) {
+              unsettled_search = true;
+              return std::nullopt;
+            }
+          }
         }
         if (params.match_play) return search->choose().index;
         const double t = g.decisions < params.temperature_decisions ? params.temperature : 0.0;
         return search->choose_by_visits(t, uniform());
       };
+      // E11 (the E11 review's L1): a decision's time on the model clock - its
+      // whole work since it began (the timed run, the re-runs and no-visit
+      // rounds after it, Guard's re-search) at its plan's price.
+      const auto model_spent = [&] {
+        const SearchStats& now = search->stats();
+        const double cap = tms[static_cast<std::size_t>(side)].params().playouts_per_evaluation_cap;
+        const double work = std::max(static_cast<double>(now.evaluations - before.evaluations),
+                                     static_cast<double>(now.playouts - before.playouts) / cap);
+        return work * timed->plan.seconds_per_evaluation;
+      };
+      // The decision charged to the side's clock and its flag where its clock
+      // ran out before it had a move (H1, M1): the decision counts, its
+      // charge is its whole time.
+      const auto flag_now = [&] {
+        add_totals();
+        ++g.decisions;
+        const double spent = clock != nullptr ? clock->now() - c0 : model_spent();
+        if (spent > timed->plan.hard_seconds) {
+          ++g.hard_overruns;
+          g.max_overrun_seconds = std::max(g.max_overrun_seconds, spent - timed->plan.hard_seconds);
+        }
+        g.clock_remaining[static_cast<std::size_t>(side)] -= spent;
+        flagged = true;
+      };
       const std::optional<std::size_t> chosen = choose_now();
       if (!chosen) {
+        if (out_of_clock) {
+          flag_now();
+          break;
+        }
         timed_out = true;
         add_totals();
         break;
       }
       std::size_t pick = *chosen;
       // A move is played only once known legal: one the expansion's budget left
-      // unknown is classified exactly first - illegal, it is removed and the
-      // choice made again; still unknown (the memory ceiling, or max_seconds'
-      // deadline), the most visited child known legal is played instead - or,
-      // with none and the deadline passed, the game stops there (TimeLimit).
-      LegalityOptions exact = LegalityOptions::exact();
+      // unknown is classified first, within terminal_nodes (H22: "the same
+      // budget covers the loop's other exact question") - illegal, it is
+      // removed and the choice made again; still unknown (the node budget, the
+      // memory ceiling, or max_seconds' deadline), the most visited child known
+      // legal is played instead - or, with none, the game stops at the action's
+      // turn start: Unknown (H22), or TimeLimit with the deadline passed.
+      LegalityOptions exact = LegalityOptions::nodes(params.terminal_nodes);
       exact.max_bytes = sp.mate_bytes;
-      exact.deadline = deadline;
+      exact.detector = sp.detector;  // the verdict's ceiling and detector (the review of decision 13, L8)
+      // A clocked decision's verification sits inside its hard bound (§8.6;
+      // the E11 review's H1, the main loop's policy: no reserve): it gets what
+      // the bound leaves, then the fallback below.
+      exact.deadline = on_clock(dc.hard);
       std::vector<RootChild> children = search->root_children();
-      // False: the deadline passed with no child known legal.
+      // H1's second exception: no child known legal once the bound's
+      // verification is cut - the children verified in visit order (the most
+      // visited first; an illegal one removed) against the side's REMAINING
+      // CLOCK, within the same node budget (H22), the first shown legal
+      // played; the flag falls when the clock runs out (out_of_clock). False:
+      // none found - the clock out, or every verification stopped by the
+      // budget or the memory ceiling with time left (then the verdict's
+      // witness, or unsettled - never a throw: S1, S7).
+      const auto legal_against_the_clock = [&]() -> bool {
+        LegalityOptions last = exact;
+        last.deadline = on_clock(clock_at_start);
+        std::vector<std::uint64_t> tried;  // by step: an illegal child's removal renumbers the rest
+        for (;;) {
+          std::vector<std::size_t> order(children.size());
+          for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+          std::stable_sort(order.begin(), order.end(),
+                           [&](std::size_t a, std::size_t b) { return children[a].visits > children[b].visits; });
+          bool removed = false;
+          for (const std::size_t i : order) {
+            const std::uint64_t key = step_key(children[i]);
+            if (std::find(tried.begin(), tried.end(), key) != tried.end()) continue;
+            const MoveLegality v = search->verify(i, last);
+            ++g.verified_choices;
+            children = search->root_children();
+            if (v == MoveLegality::Legal) {
+              pick = i;  // a verdict of Legal removes nothing: the index stands
+              return true;
+            }
+            if (v == MoveLegality::Illegal) {
+              removed = true;
+              break;
+            }
+            if (clock_out() || (last.deadline && std::chrono::steady_clock::now() >= *last.deadline)) {
+              if (!deadline_passed()) out_of_clock = true;
+              return false;
+            }
+            tried.push_back(key);  // the memory ceiling: the next child
+          }
+          if (!removed) return false;
+        }
+      };
+      // H22 (review decision 13's X2): the root child that continues the turn-start verdict's
+      // witness - a legal action found within the same budget. While the action's moves so far
+      // are its prefix, its next move (or, once they are all of it, the submission); under the
+      // flat form the turn that is the whole witness. A step the root has not instantiated
+      // (progressive widening lists only those) becomes a child of its own - known legal,
+      // unvisited, the generator's own moves - played outside the tree (off_tree: match play
+      // re-roots on its moves). None: the moves have left the witness.
+      // Moves compared as the C API's records match them - squares, boards and promotion (the
+      // detector's witness need not carry the generator's other fields).
+      const auto same = [](const Move& a, const Move& b) {
+        return a.from_timeline == b.from_timeline && a.from_half_turn == b.from_half_turn &&
+               a.from_square == b.from_square && a.to_timeline == b.to_timeline &&
+               a.to_half_turn == b.to_half_turn && a.to_square == b.to_square && a.promotes() == b.promotes() &&
+               (!a.promotes() || a.promotion == b.promotion);
+      };
+      const auto generated = [&](const GameState& at, const Move& m) {
+        MoveList moves;
+        generate_moves(at, moves);
+        for (const Move& x : moves) {
+          if (same(x, m)) return x;
+        }
+        throw std::logic_error("play: the verdict's witness holds a move the generator does not offer");
+      };
+      bool off_tree = false;
+      const auto witness_step = [&]() -> std::optional<std::size_t> {
+        const std::vector<Move>& w = r.witness;
+        if (w.empty()) return std::nullopt;
+        const bool flat = sp.split == TurnSplit::Flat;
+        if (flat) {
+          for (std::size_t i = 0; i < children.size(); ++i) {
+            const std::vector<Move>& t = children[i].moves;
+            if (t.size() == w.size() && std::equal(t.begin(), t.end(), w.begin(), same)) return i;
+          }
+        } else {
+          if (action.size() > w.size() || !std::equal(action.begin(), action.end(), w.begin(), same)) {
+            return std::nullopt;
+          }
+          const bool whole = action.size() == w.size();
+          for (std::size_t i = 0; i < children.size(); ++i) {
+            RootChild& c = children[i];
+            if (whole ? c.submit : (!c.submit && c.moves.size() == 1 && same(c.moves[0], w[action.size()]))) {
+              c.legality = MoveLegality::Legal;  // known legal: a step of the verdict's legal action
+              return i;
+            }
+          }
+        }
+        RootChild step;  // not instantiated: a child of its own
+        if (flat) {
+          GameState at = s;
+          for (const Move& m : w) {
+            step.moves.push_back(generated(at, m));
+            at.apply(step.moves.back());
+          }
+        } else if (action.size() == w.size()) {
+          step.submit = true;
+        } else {
+          step.moves.push_back(generated(s, w[action.size()]));
+        }
+        step.legality = MoveLegality::Legal;
+        children.push_back(std::move(step));
+        off_tree = true;
+        return children.size() - 1;
+      };
+      // False: the deadline passed (no choice after it, M1; it is checked as each verification
+      // starts), or no child is known legal and the witness does not continue - unsettled_choice.
       const auto make_legal = [&]() -> bool {
+        off_tree = false;
         while (children.at(pick).legality != MoveLegality::Legal) {
-          const MoveLegality v = search->verify(pick, exact);
+          if (deadline_passed()) return false;
+          const bool unsettled = params.unsettle_verification_for_tests &&
+                                 params.unsettle_verification_for_tests(g.verified_choices);  // tests only
+          const MoveLegality v = unsettled ? MoveLegality::Unknown : search->verify(pick, exact);
           ++g.verified_choices;
           children = search->root_children();
           if (v == MoveLegality::Legal) break;
@@ -296,13 +567,32 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
           }
           if (best == children.size()) {
             if (deadline_passed()) return false;
-            throw std::logic_error("play: no root child could be shown legal (the memory ceiling)");
+            // A clocked decision searches against its clock first (H1's
+            // second exception: the most visited child shown legal, the
+            // search's own choice); the verdict's witness - a legal action
+            // and no more - follows, and with neither the choice is unsettled
+            // (the E11 review's S7: this order, not the merge's).
+            if (timed && clock != nullptr) {
+              if (legal_against_the_clock()) break;
+              if (out_of_clock || deadline_passed()) return false;
+            }
+            if (const std::optional<std::size_t> w = witness_step(); w.has_value()) {
+              pick = *w;  // known legal: a step of the verdict's legal action
+              ++g.witness_moves;
+              break;
+            }
+            unsettled_choice = true;
+            return false;
           }
           pick = best;
         }
         return true;
       };
       if (!make_legal()) {
+        if (out_of_clock) {
+          flag_now();
+          break;
+        }
         timed_out = true;
         add_totals();
         break;
@@ -322,7 +612,14 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
           go.threads = 1;
         } else {
           if (params.guard_nodes > 0) budget.max_nodes = params.guard_nodes;
-          budget.max_time = std::chrono::nanoseconds(static_cast<std::int64_t>(params.guard_ms * 1e6));
+          double guard_seconds = params.guard_ms / 1000.0;
+          if (timed && clock != nullptr) {
+            // E11 (the E11 review's L8): Guard's scan is no exception to the
+            // hard bound - it gets what the bound leaves (the proof channel
+            // on, experiments only; the synchronous mode's is node-budgeted).
+            guard_seconds = std::min(guard_seconds, std::max(dc.hard - (clock->now() - c0), 1e-6));
+          }
+          budget.max_time = std::chrono::nanoseconds(static_cast<std::int64_t>(guard_seconds * 1e9));
         }
         ++g.guard_runs;
         GuardResult gr = guard(action_start, full, budget, go);
@@ -347,6 +644,12 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
         ++g.guard_rejections;
         Limits again{params.guard_research_playouts > 0 ? params.guard_research_playouts : params.playouts};
         again.seconds = seconds_left();
+        if (timed && clock != nullptr) {
+          // E11: no reserve is held for Guard (offline, H42; issue 306) - its
+          // re-search draws on what the hard bound leaves.
+          const double left = timed->plan.hard_seconds - (clock->now() - c0);
+          again.seconds = again.seconds > 0 ? std::min(again.seconds, std::max(left, 1e-6)) : std::max(left, 1e-6);
+        }
         search->run(evaluator, again);
         const std::optional<std::size_t> rechosen = choose_now();
         if (!rechosen) {
@@ -359,6 +662,10 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
           timed_out = true;
           break;
         }
+      }
+      if (out_of_clock) {  // Guard's search again found no child known legal before the flag fell
+        flag_now();
+        break;
       }
       add_totals();
       if (timed_out) break;  // Guard's search again found no child known legal in time
@@ -387,6 +694,22 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
         g.decision_log.push_back(std::move(d));
       }
       ++g.decisions;
+      if (timed) {
+        // E11: the decision charged to the side's clock - its whole wall time
+        // (search, choice, verification), or on the model clock its whole work
+        // (L1).
+        const double spent = clock != nullptr ? clock->now() - c0 : model_spent();
+        if (spent > timed->plan.hard_seconds) {
+          ++g.hard_overruns;
+          g.max_overrun_seconds = std::max(g.max_overrun_seconds, spent - timed->plan.hard_seconds);
+        }
+        double& left = g.clock_remaining[static_cast<std::size_t>(side)];
+        left -= spent;
+        if (left <= 0) {
+          flagged = true;
+          break;
+        }
+      }
       const RootChild& c = children.at(pick);
       if (sp.split == TurnSplit::Flat) {
         for (const Move& m : c.moves) {
@@ -405,14 +728,30 @@ GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayPar
         play_checked(s, m, scratch);
         action.push_back(m);
       }
-      if (params.match_play) search->advance(pick);
+      if (params.match_play) {
+        if (off_tree) {
+          search->advance_moves(c.moves);  // a witness step the tree did not hold (X2)
+        } else {
+          search->advance(pick);
+        }
+      }
       if (!submitted) ++moves_made;
+    }
+    if (flagged) {
+      // The side's flag fell during its action: the action is not recorded.
+      s = action_start;
+      g.end = GameEnd::Flag;
+      g.winner = 1 - side;
+      break;
     }
     if (timed_out) {
       s = action_start;
-      g.end = GameEnd::TimeLimit;
+      g.end = unsettled_choice || unsettled_search ? GameEnd::Unknown : GameEnd::TimeLimit;
+      if (unsettled_choice) g.unsettled = Unsettled::Choice;
+      if (unsettled_search) g.unsettled = Unsettled::Search;  // the E11 review's S1: unscored, not a flag
       break;
     }
+    if (mc.enabled) g.clock_remaining[static_cast<std::size_t>(side)] += mc.increment_seconds;
     g.actions.push_back(std::move(action));
   }
   g.final_state = s;

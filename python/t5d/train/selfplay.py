@@ -2,10 +2,22 @@
 
 Register G9: PyTorch hosts the network and drives the engine's search through the C API, so the
 generator is Python. It plays as ``engine.netplay``'s self-play does - a turn start judged first
-(E4's exhaustive detector, then I11's cap), a fresh search per decision sharing the previous
-one's evaluation cache (C14), root noise on, a chosen child made known legal before it is played
-- and writes, per decision, the record ``train.records`` defines (register I15, spec section
-12.8). ``netplay.play_game`` is unchanged: it plays and writes a 5dpgn, and writes no record.
+(E4's exhaustive detector within the game loop's node budget, ``GeneratorConfig.terminal_nodes``;
+then I11's cap), a fresh search per decision sharing the previous one's evaluation cache (C14),
+root noise on, a chosen child made known legal within the same budget before it is played - and
+writes, per decision, the record ``train.records`` defines (register I15, spec section 12.8).
+``netplay.play_game`` plays the same way and writes a 5dpgn, and no record.
+
+* **The unscored ending (register H22, review decision 13)**: a turn start whose verdict the budget
+  does not reach ends the game "unknown" - never a mate. A decision with no child shown legal within
+  it plays the next step of that verdict's witness while the action's moves are its prefix (review
+  decision 13's X2; a "verified_fallback"; a step the root had not instantiated is recorded as a
+  further child, unvisited), and otherwise ends the game "unknown" too. The record's ``end`` is
+  "unknown" and its Termination says which question went unanswered (``netplay.UNSETTLED_NOTES``);
+  an unsettled choice drops the action under way (its decisions, their positions and resignation
+  events), the record ending at that action's turn start (a partial action has no place in format
+  version 2). ``train.targets`` masks such a game's outcome-derived targets (I15) and keeps its
+  search-derived ones. The budget enters the header through ``generator_config``.
 
 * **D2's arms**: the board-move split (``"ply"``), the tree form (``"tree"``) and the flat form
   (``"flat"``). Under the flat form a decision is a whole turn: its root children are turns (record
@@ -66,8 +78,8 @@ one's evaluation cache (C14), root noise on, a chosen child made known legal bef
   record names its origin in the optional header key ``seeded_start`` (``train.records``), and
   ``replay_positions`` sets the start up from it. The generator's test-scale caps (``cap_turns``
   6, ``cap_boards`` 80) end a late or large stored position at once as ``turn_cap``: whoever seeds
-  such positions raises them - and the turn-start verdict has no node budget yet (H22, review
-  decision 13), which large positions wait on.
+  such positions raises them - and a turn-start verdict a large position's budget cannot settle
+  ends the game unscored (H22, review decision 13; ``terminal_nodes``).
 
 Nothing here trains (the untrained build's rule): the generator only plays and records.
 """
@@ -78,6 +90,7 @@ import math
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field, replace
+from functools import partial
 
 import numpy as np
 
@@ -86,6 +99,7 @@ from ..engine.capi import (
     MOVE_DTYPE,
     T5D_LEGALITY_ILLEGAL,
     T5D_LEGALITY_LEGAL,
+    T5D_NO_LIMIT,
     T5D_SPLIT_BOARD_MOVE,
     T5D_SPLIT_FLAT,
     T5D_SPLIT_TREE,
@@ -94,7 +108,7 @@ from ..engine.convert import Position, relations_for
 from ..engine.evaluator import Evaluation, Evaluator, policy_source, run_search
 from ..engine.expansion import Move
 from ..engine.game import Game, relation_bits
-from ..engine.netplay import turn_start_verdict, write_record
+from ..engine.netplay import TERMINAL_NODES, UNSETTLED_NOTES, TurnWitness, turn_start_verdict, write_record
 from ..engine.search import RootChild, Search, search_params
 from ..net.config import NetConfig
 from ..net.quant import TRUNK_QUANT_FIELDS, trunk_format
@@ -205,6 +219,10 @@ class GeneratorConfig:
     cap_turns: int = 6  # I11 (0: none)
     cap_boards: int = 80
     max_actions: int = 200  # a safety stop, not a rule (scored like I11's cap: unscored, "action_limit")
+    #: Register H22 (review decision 13): the node budget of each turn start's verdict and of a chosen
+    #: move's verification (``netplay.TERMINAL_NODES``, a PLACEHOLDER - build-log issue 413; 1 to ``T5D_NO_LIMIT``, exact). A
+    #: question it leaves unsettled ends the game unscored ("unknown"; its outcome targets masked, I15).
+    terminal_nodes: int = TERMINAL_NODES
     seed: int = 1
     window_k: int = 8
     root_noise: bool = True
@@ -228,6 +246,8 @@ class GeneratorConfig:
             )
         if self.playouts < 1 or self.batch_size < 1 or self.max_actions < 1:
             raise ValueError("playouts, batch_size and max_actions must be positive")
+        if not 1 <= self.terminal_nodes <= T5D_NO_LIMIT:
+            raise ValueError("terminal_nodes: 1 to T5D_NO_LIMIT (exact) - the game loop's node budget (H22)")
         pcr = self.pcr
         if not 0.0 <= pcr.full_fraction <= 1.0 or not 1 <= pcr.cheap_cap(self.playouts) <= self.playouts:
             raise ValueError("PCR: full_fraction in [0, 1], and the cheap cap between 1 and the full cap (I5)")
@@ -385,11 +405,26 @@ def network_info(evaluator, net_cfg: NetConfig, *, seed: int | None = None, swa_
     }
 
 
-def _choose(search: Search, temperature: float, random: float, rerun: Callable[[], None]) -> tuple[int, str, int]:
+def _choose(
+    search: Search,
+    temperature: float,
+    random: float,
+    rerun: Callable[[], None],
+    *,
+    nodes: int = T5D_NO_LIMIT,
+    witness: Callable[[Search], int | None] | None = None,
+) -> tuple[int | RootChild | None, str, int]:
     """The decision's child: sampled from the visits at ``temperature`` (<= 0: the most visited),
-    then made known legal - a chosen unknown child is classified exactly first (illegal: removed
-    and the choice made again; still unknown: the most visited child known legal). The pick, how
-    it was chosen (``records.CHOICE_CODES``) and the children found illegal on the way."""
+    then made known legal - a chosen unknown child is classified first within ``nodes`` (the game
+    loop's budget, H22; illegal: removed and the choice made again; still unknown: the most visited
+    child known legal, and with none the next step of the turn-start verdict's witness -
+    ``witness(search)``, ``netplay.TurnWitness``; review decision 13's X2). The pick, how it was
+    chosen (``records.CHOICE_CODES``: a witness step is a "verified_fallback", a move known legal
+    played in the chosen one's place) and the children found illegal on the way. The pick is a child
+    index, or for a witness step a ``RootChild`` - the child marked known legal, or one of its own
+    where the root had not instantiated the step (recorded as a further child, unvisited); None (and
+    no choice) when the chosen move was not shown legal, no other is known legal and the witness does
+    not continue - the game ends unscored."""
     illegal = 0
 
     def choose_now() -> int:
@@ -400,7 +435,7 @@ def _choose(search: Search, temperature: float, random: float, rerun: Callable[[
     choice = "sampled" if temperature > 0 else "most_visited"
     pick = choose_now()
     while search.child(pick).legality != T5D_LEGALITY_LEGAL:
-        verdict = search.verify(pick)
+        verdict = search.verify(pick, nodes=nodes)
         if verdict == T5D_LEGALITY_LEGAL:
             break
         if verdict == T5D_LEGALITY_ILLEGAL:
@@ -409,7 +444,12 @@ def _choose(search: Search, temperature: float, random: float, rerun: Callable[[
             continue
         legal = [c for c in search.children() if c.legality == T5D_LEGALITY_LEGAL]
         if not legal:
-            raise RuntimeError("no root child could be shown legal (the memory ceiling)")
+            step = None if witness is None else witness(search)
+            if step is None:
+                return None, "", illegal  # H22: the game ends unscored
+            if isinstance(step, int):  # an instantiated child: known legal as the witness's step (X2) - recorded so
+                step = replace(search.child(step), legality=T5D_LEGALITY_LEGAL)
+            return step, "verified_fallback", illegal  # a step of the verdict's legal action (X2)
         pick, choice = max(legal, key=lambda c: c.visits).index, "verified_fallback"
         break
     return pick, choice, illegal
@@ -544,8 +584,10 @@ def generate_game(
     short-term horizons) - the game's targets are built at generation, each decision's
     prior-to-target divergence recorded under it and the configuration named in the header; the
     reply prototype's targets too when ``keep_positions``. ``on_decision``: called with the live
-    search, the decision's record and its input once each decision is recorded, before its child
-    is played (the tests hold the record to the live search)."""
+    search, the decision's record and its input for each decision of an action once the action is
+    kept - played to its submission, or resigned - its searches held open until then; never for the
+    decisions of an action an unsettled choice drops (H22; the review of decision 13, L7). The tests
+    hold the record to the live search."""
     cfg.validate()
     if target_config is None:
         target_config = TargetConfig(short_term_horizons=tuple(net_cfg.short_term_horizons))
@@ -568,7 +610,22 @@ def generate_game(
     positions: list[Position] = []
     actions: list[list[Move]] = []
     shared: Search | None = None
+    #: on_decision's calls for the action under way - its live searches held open - made once the action
+    #: is kept, never for an action an unsettled choice drops (the review of decision 13, L7).
+    held: list[tuple[Search, DecisionRecord, Position]] = []
+
+    def release(call: bool) -> None:
+        for s_, d_, p_ in held:
+            if call:
+                on_decision(s_, d_, p_)
+        for s_, _, _ in held:
+            if s_ is not shared:
+                s_.close()
+        held.clear()
+
     end, winner = "", None
+    unsettled = ""  # H22: an "unknown" end's question - "verdict" or "choice" (netplay.UNSETTLED_NOTES)
+    turn_start: Game | None = None  # the action's turn start, while its moves are played one by one
     # The searches' parameters (each decision's seed and root temperature are its own, recorded per decision).
     searches = {"full": params_dict(search_parameters(game, cfg, relations, seed=0, noise=cfg.root_noise))}
     if cfg.pcr.enabled:
@@ -579,17 +636,24 @@ def generate_game(
     resigned = False
     try:
         while True:
-            verdict = turn_start_verdict(game, cfg)
+            verdict = turn_start_verdict(game, cfg)  # within cfg.terminal_nodes (H22)
             if verdict is not None:
                 end = verdict
                 if verdict == "checkmate":
                     winner = 1 - game.info().to_move
+                if verdict == "unknown":
+                    unsettled = "verdict"  # unscored, never a mate
                 break
             if len(actions) >= cfg.max_actions:
                 end = "action_limit"
                 break
             action: list[Move] = []
             a = len(actions)
+            first = len(decisions)  # the action's first decision (dropped with it if a choice stays unsettled)
+            if not flat:
+                turn_start = game.copy()
+            witness = TurnWitness(turn_start if turn_start is not None else game, cfg)
+            step = partial(witness.step, played=action, flat=flat)
             while True:
                 d = len(decisions)
                 ginfo = game.info()
@@ -600,7 +664,7 @@ def generate_game(
                 root_t = root_temperature(cfg, turn0 + a)
                 params = search_parameters(game, cfg, relations, seed=seed, noise=noise, root_temperature=root_t)
                 search = Search(game, params=params, share=shared)
-                if shared is not None:
+                if shared is not None and not any(shared is h[0] for h in held):
                     shared.close()  # the cache lives on in the new search
                 shared = search
                 stop = _run(search, evaluator, cfg, full=full, cap=cap, regs=regs)
@@ -624,9 +688,20 @@ def generate_game(
                 if resigning:
                     pick, choice, illegal = -1, "resigned", 0
                 else:
-                    pick, choice, illegal = _choose(search, t, decision_random(cfg.seed, d, SALT_CHOICE), rerun)
+                    pick, choice, illegal = _choose(
+                        search, t, decision_random(cfg.seed, d, SALT_CHOICE), rerun, nodes=cfg.terminal_nodes, witness=step
+                    )
+                    if pick is None:  # H22: no move shown legal within the budget - the game ends unscored
+                        unsettled = "choice"
+                        break
                 info = search.info()
                 children = search.children()
+                if isinstance(pick, RootChild):  # a witness step (X2): recorded known legal - a further child if not instantiated
+                    if pick.index < len(children):
+                        children[pick.index] = pick
+                    else:
+                        children.append(pick)
+                    pick = pick.index
                 best = search.choose_by_visits(0.0, 0.5)
                 index = candidate_index(position)
                 playable = playable_boards(game, position)
@@ -680,7 +755,7 @@ def generate_game(
                 if keep_positions:
                     positions.append(position)
                 if on_decision is not None:
-                    on_decision(search, decisions[-1], position)
+                    held.append((search, decisions[-1], position))
                 if resigning:
                     resigned = True
                     end, winner = "resign", 1 - position.acting_player
@@ -698,14 +773,30 @@ def generate_game(
                 game.apply(child.moves[0])
                 action.append(child.moves[0])
             if resigned:
+                release(True)
+                break
+            if unsettled:  # the action under way is not recorded: its decisions go, the game back at its turn start
+                release(False)
+                del decisions[first:]
+                del positions[first:]
+                events[:] = [e for e in events if e["decision"] < first]
+                if turn_start is not None:
+                    game.close()
+                    game, turn_start = turn_start, None
+                end = "unknown"
                 break
             actions.append(action)
+            release(True)
+            if turn_start is not None:
+                turn_start.close()
+                turn_start = None
         snap = game.snapshot()
         final = game.expand(square_features="none")
         active = sorted({int(p) for p, live in zip(final.timeline.tolist(), final.active.tolist(), strict=True) if live})
         decided = "1-0" if winner == 0 else "0-1"
         result = {"checkmate": decided, "resign": decided, "stalemate": "1/2-1/2"}.get(end, "*")
         termination = end + (" (self-play's convention, I11: scored as a draw; not a game rule)" if end == "turn_cap" else "")
+        termination += UNSETTLED_NOTES.get(unsettled, "")
         # The start as the record names it. A seeded game's 5dpgn (I22) is the continuation from its
         # start's 5DFEN boards - as lossy as 5DFEN is; its exact start is header["seeded_start"].
         if picked is not None:
@@ -764,11 +855,16 @@ def generate_game(
             "proof_refs": [],
             "target_config": None,
         }
+        if unsettled:  # H22: an "unknown" end's question (``records``: an optional header key, as seeded_start)
+            header["unsettled"] = unsettled
         if picked is not None:  # I22: the game's origin (``records``: the optional header key)
             header["seeded_start"] = seeded_start_header(picked, turn0, start_snap, len(stored))
     finally:
+        release(False)
         if shared is not None:
             shared.close()
+        if turn_start is not None:
+            turn_start.close()
         game.close()
     record = GameRecord(header=header, decisions=decisions)
     targets = build_targets(record, target_config, positions=positions if keep_positions else None)

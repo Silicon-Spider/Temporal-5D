@@ -173,6 +173,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--cap-turns", type=int, help="I11's turn cap (default: the generator's)")
     parser.add_argument("--cap-boards", type=int, help="I11's board cap (default: the generator's)")
+    parser.add_argument("--terminal-nodes", type=int, help="H22: the game loop's node budget (default: the generator's)")
     parser.add_argument("--seed", type=int, default=1, help="the run's seed: every game's seed, and the network's weights")
     parser.add_argument(
         "--token-budget", type=int, default=TOKEN_BUDGET, help="padded tokens per forward: positions x the longest (a placeholder)"
@@ -204,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.no_settling:
         overrides.append(("settling", 0))
     fields: dict = dict(variant=args.variant, split=args.split, batch_size=args.leaves, search_overrides=tuple(overrides))
-    for name in ("playouts", "cap_turns", "cap_boards"):
+    for name in ("playouts", "cap_turns", "cap_boards", "terminal_nodes"):
         if getattr(args, name) is not None:
             fields[name] = getattr(args, name)
     base = GeneratorConfig(**fields)
@@ -260,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
                     result = record.header["result"]
                     entry.update(
                         end=result["end"],
+                        unsettled=record.header.get("unsettled", ""),  # H22: an "unknown" end's question
                         winner=result["winner"],
                         actions=result["actions"],
                         decisions=len(record.decisions),

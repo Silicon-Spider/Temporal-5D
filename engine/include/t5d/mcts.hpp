@@ -1106,6 +1106,14 @@ class EvalCache {
   /// (a cache shared by a flat search and another arm's).
   const Evaluation* find(std::uint64_t key, int moves_made, std::uint64_t epoch, const GameState& state,
                          std::uint64_t candidates, bool compare_origins, bool board_logits = false) const;
+  /// Stage E11: the value categorical of an entry for `state` with
+  /// `moves_made` at `epoch`, whatever its candidate list - the time
+  /// manager's overlap signal reads a root child's own categorical, an
+  /// estimate of the position (two entries of one state differ only where a
+  /// deadline cut one's classification) - or nullptr (none, or none with a
+  /// categorical).
+  const std::array<float, kValueBins>* find_value(std::uint64_t key, int moves_made, std::uint64_t epoch,
+                                                  const GameState& state, bool compare_origins) const;
   /// Stores it (unless full, or held already); `candidates`: its expansion's
   /// candidate_digest; `new_boards`: the boards the step into the state made -
   /// its own, the rest shared with its predecessors; `board_logits`: whether
@@ -1174,8 +1182,14 @@ struct SearchStats {
   std::uint64_t verified_legal = 0;    ///< (c) unknown edges verified legal
   std::uint64_t verified_illegal = 0;  ///< (c) ... verified illegal and removed
   std::uint64_t verified_unknown = 0;  ///< (c) ... still unknown after verification
+  /// (c) ... of which the deadline cut the verification: verified again outside
+  /// it, not counted verified (the E11 review's S5)
+  std::uint64_t verifications_cut = 0;
   std::uint64_t mate_checks = 0;       ///< turn starts given to the detector
   std::uint64_t unknown_verdicts = 0;  ///< ... that answered Unknown (H37: not terminal)
+  /// ... checked again because the deadline had stopped the check (S5): each
+  /// such node's earlier unknown verdict replaced by the new one's
+  std::uint64_t rechecked_turn_starts = 0;
   std::uint64_t checkmates = 0;        ///< terminal nodes found
   std::uint64_t stalemates = 0;
   std::uint64_t turn_caps = 0;         ///< nodes the turn cap ended (I11)
@@ -1530,6 +1544,57 @@ class Search {
   /// decision stabilises", §8.6). For a root carried by advance, counted from
   /// the re-root. 0 before any child is visited.
   std::uint32_t root_best_since() const noexcept;
+  /// Stage E11 (§8.6's overlap signal): root child `index`'s own network
+  /// categorical (Evaluation::value), from the root player's view (its bins
+  /// reversed where the child's acting player is the other) - read from the
+  /// evaluation cache, so none where the cache does not hold it (no cache, an
+  /// entry evicted or purged, an evaluation without the categorical, a child
+  /// not yet evaluated or one the tree form expanded on inherited priors).
+  /// Throws std::invalid_argument for an index out of range.
+  std::optional<std::array<float, kValueBins>> root_child_value(std::size_t index) const;
+
+  // -- stage E11: the hard bound inside a batch ------------------------------------------
+
+  /// A wall-clock deadline for the rules engine's calls the search makes inside
+  /// a batch (t5d/timeman.hpp's hard bound): the turn starts' mate checks
+  /// (detect_mate) and the flat form's fallback listing (SearchBudget::
+  /// max_time), the leaves' legality classification and the verification of
+  /// unknown edges (LegalityOptions::deadline). Past it they stop and answer
+  /// Unknown - never a verdict (H37): a turn start whose check stopped is not
+  /// terminal - until checked again when selection next reaches it outside the
+  /// deadline (the E11 review's S5) - and a move left unknown is flagged (its
+  /// verification made once outside the deadline: none is started past it, and
+  /// one the deadline cut is made again - S5; a flat node whose fallback
+  /// listing it cut before a turn is re-listed later - issue 406). The flat
+  /// form's turn generator is node-budgeted only (generator_nodes; build-log
+  /// spec issue 467). PERSISTENT: it holds across run() calls and the step
+  /// API's batches until set again; inside run() the rules engine's calls get
+  /// the earlier of it and run()'s own Limits::seconds (THE DEADLINE, above),
+  /// and run() restores it on return - one mechanism (the E11 review's M2). It
+  /// does not stop run() between batches (Limits::seconds does). nullopt (the
+  /// default): none - the search's calls are budgeted by nodes alone, as
+  /// before; a set deadline makes the search depend on the clock (never in the
+  /// synchronous mode's reproducible runs).
+  void set_deadline(std::optional<std::chrono::steady_clock::time_point> deadline) noexcept;
+  std::optional<std::chrono::steady_clock::time_point> deadline() const noexcept;
+  /// Stage E11 (exception (1)'s scope, the E11 review's S4): while lifted, the
+  /// root's own listing - its expansion (the legal-moves filter's
+  /// classification of its moves) and, under the flat form, its fallback
+  /// listing - runs under `deadline` (with run()'s own Limits::seconds) in
+  /// place of the persistent deadline; every other call keeps the persistent
+  /// one: the children's turn-start checks and expansions, the verification of
+  /// unknown edges, a node's listing below the root. run_timed lifts it, to
+  /// the caller's deadline, for a slice before any root child has a visit -
+  /// the hard bound off for the root's listing alone, so that a root it would
+  /// cut is listed (a move needs a visit). Not lifted by default, nor after
+  /// unlift_root_listing(); it holds across run() calls and re-roots (it
+  /// follows the root) until then.
+  void lift_root_listing(std::optional<std::chrono::steady_clock::time_point> deadline) noexcept;
+  void unlift_root_listing() noexcept;
+  /// The deadline the root's own listing runs under now: the lifted one while
+  /// lifted, else the persistent deadline (inside run(), with its own
+  /// Limits::seconds). For tests and diagnostics.
+  std::optional<std::chrono::steady_clock::time_point> root_listing_deadline() const noexcept;
   /// E5/E9: the child to play, by index into root_children(). Throws
   /// std::invalid_argument if the root has no visited child.
   Choice choose() const;

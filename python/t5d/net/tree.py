@@ -400,7 +400,8 @@ class SearchTree:
     def __init__(self, evaluator: CachedEvaluator, root: Multiverse, *, evaluates=None) -> None:
         self.evaluator = evaluator
         #: C27: ``evaluates(parent, move, universe) -> bool``, the gate decision on the edge into a
-        #: new node (``universe`` its multiverse): False makes the node inner. None: every node.
+        #: new node (``universe`` its multiverse): False makes the node inner; anything but a bool
+        #: is refused (``TypeError``). None: every node.
         self.evaluates = evaluates
         self.root = Node(root)
         self.root.epoch = evaluator.root_epoch(root.state())
@@ -413,7 +414,13 @@ class SearchTree:
         key = (move[0], *move[1:2], *(tuple(move[2]) if len(move) > 2 else ()))
         if key not in node.children:
             universe = node.universe.apply(move)
-            inner = self.evaluates is not None and not self.evaluates(node, move, universe)
+            inner = False
+            if self.evaluates is not None:
+                decision = self.evaluates(node, move, universe)
+                if not isinstance(decision, (bool, np.bool_)):
+                    # Read by truthiness, a gate returning None would make every node inner.
+                    raise TypeError(f"evaluates must return a bool (the gate decision), not {decision!r}")
+                inner = not decision
             node.children[key] = Node(universe, node, move, node.epoch, branched=node.universe.branches(move), inner=inner)
         return node.children[key]
 

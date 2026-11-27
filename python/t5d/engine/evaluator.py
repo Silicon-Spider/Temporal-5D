@@ -53,20 +53,20 @@ from __future__ import annotations
 import hashlib
 import math
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Protocol, runtime_checkable
 
 import numpy as np
 import torch
 
-from ..net.cache import CachedEvaluator, Epoch, state_digest
+from ..net.cache import CachedEvaluator, Epoch, input_digest
 from ..net.model import NetOutput, T5DNet
 from ..net.state import PositionState, collate, relayout, to_piece_centric
-from .capi import T5D_SPLIT_FLAT, T5D_VALUE_LOGITS, T5D_VALUE_PROBABILITIES
+from .capi import T5D_SPLIT_FLAT, T5D_TIME_STOP_NONE, T5D_TIME_STOP_SEARCH, T5D_VALUE_LOGITS, T5D_VALUE_PROBABILITIES
 from .convert import Position, to_position
 from .errors import EngineInternalError
-from .search import LeafView, Search
+from .search import LeafView, Search, TimeManager, TimePlan, TimeVerdict
 
 PositionLike = Position | PositionState
 
@@ -258,6 +258,16 @@ def _check_policy(model: T5DNet, policy: str) -> None:
         raise ValueError("an optimistic evaluator needs a network with D9's head (NetConfig.optimistic_policy)")
 
 
+def _refuse_ladder(cached: CachedEvaluator) -> None:
+    """The engine path refuses the refresh ladder (BUILD_LOG issue 271): see ``CachedNetworkEvaluator``."""
+    if cached.config.node_refresh or cached.config.complexity_refresh:
+        raise NotImplementedError(
+            "the engine's search has no refresh ladder: it opens one epoch per search and refreshes no node, so "
+            "CacheConfig.node_refresh (C3a rung 1) and complexity_refresh (C24) would be ignored on this path - they run "
+            "in the search-tree fixture (net/tree.py) only (BUILD_LOG issue 271)"
+        )
+
+
 def policy_source(evaluator) -> str:
     """The prior an evaluator delivers (``POLICY_SOURCES``): its ``policy``, or ``"normal"`` for
     one that names none."""
@@ -336,22 +346,26 @@ class CachedNetworkEvaluator:
 
     The engine's search opens one epoch per search and never refreshes a node, so a cached
     evaluator configured for C3a's node refreshes (``CacheConfig.node_refresh``) or C24's
-    (``complexity_refresh``) is refused here: the refresh ladder runs in the search-tree fixture
-    (``net/tree.py``) only (BUILD_LOG issue 271)."""
+    (``complexity_refresh``) is refused here - at construction and again at every ``start``, which
+    also refuses a cached evaluator swapped in afterwards: the refresh ladder runs in the
+    search-tree fixture (``net/tree.py``) only (BUILD_LOG issue 271).
+
+    ``start`` reuses the current epoch only for a root whose whole network input is the epoch's
+    anchor's - its moves and edges included (``input_digest``; BUILD_LOG issue 274) - and, when it
+    opens a new one, has the cached evaluator drop the root refresh the new search replaces
+    (``CachedEvaluator.release``: only one it made), so the store holds the live search's epoch and
+    the causal one, never every past search's (issue 273)."""
 
     def __init__(self, cached: CachedEvaluator, *, policy: str = "normal", max_batch: int = 32) -> None:
         if cached.model.cfg.piece_centric:
             raise NotImplementedError("the cached path refuses a piece-centric network (A5; BUILD_LOG issue 252)")
         _check_policy(cached.model, policy)
-        if cached.config.node_refresh or cached.config.complexity_refresh:
-            raise NotImplementedError(
-                "the engine's search has no refresh ladder: it opens one epoch per search and refreshes no node, so "
-                "CacheConfig.node_refresh (C3a rung 1) and complexity_refresh (C24) would be ignored on this path - they run "
-                "in the search-tree fixture (net/tree.py) only (BUILD_LOG issue 271)"
-            )
+        _refuse_ladder(cached)
         self.policy = policy
         self.cached = cached
         self.epoch: Epoch | None = None
+        #: ``input_digest`` of the position the current epoch was opened at (``start``'s shortcut).
+        self._started: str | None = None
         #: C26's dense mode: the dense path itself (see the class docstring).
         self.dense = NetworkEvaluator(cached.model, max_batch=max_batch, scope="dense", policy=policy)
         #: Positions evaluated in each mode (C26): "dense" (a search rooted under N*) and "cached".
@@ -368,21 +382,29 @@ class CachedNetworkEvaluator:
         return state
 
     def start(self, root: PositionLike) -> Epoch:
-        """Open a search at ``root``: its epoch (the current one again when ``root`` is the
-        current epoch's anchor - the same search continuing). Under C26's phase form a root under
+        """Open a search at ``root``: its epoch - the current one again when ``root``'s network
+        input is the one the current epoch was opened at, moves and edges included (the same search
+        continuing; BUILD_LOG issue 274); else a new one, and the root refresh it replaces dropped
+        from the store (``CachedEvaluator.release``; issue 273). Under C26's phase form a root under
         N* boards gets the dense epoch - one object, with no anchor, so this asks the cached
         evaluator again, at no cost."""
+        _refuse_ladder(self.cached)
         state = self._fit(state_of(root))
-        if self.epoch is not None and self.epoch.anchor == state_digest(state):
+        started = input_digest(state)
+        if self.epoch is not None and self.epoch.anchor is not None and self._started == started:
             return self.epoch
         with torch.no_grad():
-            self.epoch = self.cached.root_epoch(state)
-        return self.epoch
+            epoch = self.cached.root_epoch(state)
+        old, self.epoch, self._started = self.epoch, epoch, started
+        if old is not None and old is not epoch:
+            self.cached.release(old)
+        return epoch
 
     def __call__(self, positions: Sequence[PositionLike]) -> list[Evaluation]:
         if self.epoch is None:
             raise RuntimeError("no search is open: call start(root) first")
         if self.epoch.mode == "dense":  # C26: a search rooted under N* is the dense search
+            self.cached._check_format()  # as every cached epoch and evaluation does (G8's switch in place)
             results = self.dense(positions)
             self.positions_by_mode["dense"] += len(positions)
             return results
@@ -789,6 +811,141 @@ def run_search(
     return stats, driver
 
 
+@dataclass
+class TimedSearch:
+    """One timed decision (``run_timed_search``): its plan, its last verdict (``stop``: why it
+    ended - ``T5D_TIME_STOP_SEARCH`` where the search stopped itself, ``search_stop`` then saying
+    how: ``"finished"`` or ``"exhausted"``), the seconds it took by its clock, and the serve
+    loop's statistics over its slices."""
+
+    plan: TimePlan
+    verdict: TimeVerdict
+    seconds: float
+    stats: ServeStats
+    search_stop: str | None = None
+    slices: int = 0
+
+
+#: Slices before any root child has a visit, in a row, that leave none visited before
+#: ``run_timed_search`` gives up on the exception (a move needs a visit; the E11 review's S3) - the
+#: engine's ``kNoProgressSlices``, a placeholder (build-log spec issue 482).
+NO_PROGRESS_SLICES = 16
+
+
+def run_timed_search(
+    search: Search,
+    evaluator: Evaluator,
+    tm: TimeManager,
+    *,
+    remaining: float,
+    increment: float = 0.0,
+    moves_left: float = math.nan,
+    effort: Sequence[float] | None = None,
+    model_clock: bool = False,
+    clock: Callable[[], float] | None = None,
+    regs_per_board: int = 2,
+    global_regs: int = 16,
+    value_kind: int = T5D_VALUE_LOGITS,
+) -> TimedSearch:
+    """One decision of ``search`` on a clock (stage E11; ``t5d/timeman.hpp``'s ``run_timed`` with
+    Python as the evaluator): ``tm.begin``, then slices - each ``serve`` over a ``CStepDriver`` of
+    ``batch_size`` playouts, the engine's own ``Search::run`` slice, so a deterministic evaluator
+    builds the tree the engine's ``run_timed`` builds - with ``tm.check`` before each, until a
+    stop; then ``tm.end`` - however the run returns (the E11 review's S2). On the wall clock the
+    search's deadline is the hard bound for the run - the earlier of it and one the caller set
+    (the rules engine's calls inside a batch stop at it; a 0 s bound a deadline already passed,
+    never 0 - none: the E11 review's L3) - but not inside a slice run before any root child has
+    a visit (the exception, a move needs a visit: the root's listing completes - M1) for the root's
+    own listing alone, which runs under the caller's (``Search.lift_root_listing``; S4: every other
+    call keeps the bound); the caller's deadline is restored after, exactly (``Search.deadline`` and
+    ``set_deadline_at``; S2), as the engine's ``run_timed`` restores it; ``model_clock``: the
+    cost model's clock (elapsed NaN), deterministic. ``effort``: the root's effort distribution
+    for E8 (off unless the time manager's ``difficulty_weighting``). ``clock``: a clock of the
+    driver's in seconds (a test's virtual clock) in place of the wall clock - the engine's
+    ``run_timed`` with a ``Clock``: the checks and the decision's seconds read it, and the search
+    is given no deadline (that is the steady clock's). Match play's: self-play takes no clock (its
+    budgets are PCR's), so no self-play guard is needed here - and none of D9's flat-form refusal
+    is relaxed."""
+    if model_clock and clock is not None:
+        raise ValueError("run_timed_search: model_clock or a clock, not both")
+    if int(search.params.split) == T5D_SPLIT_FLAT and policy_source(evaluator) != "normal":
+        raise ValueError(FLAT_OPTIMISTIC)
+    start_epoch(search, evaluator, regs_per_board=regs_per_board, global_regs=global_regs)
+    batch = 1 if search.params.synchronous else max(int(search.params.batch_size), 1)  # the engine's slice
+    before = search.info()
+    plan = tm.begin(search, remaining=remaining, increment=increment, moves_left=moves_left, effort=effort)
+    now = time.perf_counter if clock is None else clock
+    steady = clock is None and not model_clock  # the wall clock: the search's deadline is its own
+    t0 = now()
+    stats = ServeStats()
+    out_stop: str | None = None
+    slices = 0
+    # The caller's deadline, restored exactly when the run returns (S2), and the hard bound as the
+    # search's deadline - the earlier of the two; a 0 s bound (a clock at the overhead) is a
+    # deadline already passed, never 0 - which means none (the review's L3).
+    held, held_left = search.deadline()
+    held_end = time.perf_counter() + held_left  # when the caller's deadline passes (inf: never)
+    if steady and max(plan.hard_seconds, 1e-9) < held_left:
+        search.set_deadline(max(plan.hard_seconds, 1e-9))
+    lifted = False  # the forced slice's: the root's own listing under the caller's deadline (M1, S4)
+    idle = 0  # forced slices in a row that left no root child visited (S3)
+    try:
+        while True:
+            verdict = tm.check(search, math.nan if model_clock else now() - t0)
+            if verdict.stop != T5D_TIME_STOP_NONE:
+                break
+            if time.perf_counter() >= held_end:
+                # The caller's deadline passed (S3): stop, as the engine's run_timed does.
+                out_stop = "deadline"
+                verdict = replace(verdict, stop=T5D_TIME_STOP_SEARCH)
+                break
+            found = search.children()
+            edgeless = not found
+            forced = not any(c.visits > 0 for c in found)  # the engine's condition (S2)
+            # The exception (a move needs a visit): until a root child has one, the root's own
+            # listing runs without the hard bound - under the caller's deadline - so that it
+            # completes (the review's M1); every other call keeps the bound (S4) - the engine's
+            # run_timed's condition, no root child visited (S2).
+            if steady and forced != lifted:
+                search.lift_root_listing(held if forced else None)
+                lifted = forced
+            driver = CStepDriver(search, playouts=batch, regs_per_board=regs_per_board, global_regs=global_regs, value_kind=value_kind)
+            st = serve(driver, evaluator, batch_size=batch)
+            slices += 1
+            stats.rounds += st.rounds
+            stats.leaves += st.leaves
+            stats.largest_batch = max(stats.largest_batch, st.largest_batch)
+            stats.batch_sizes.extend(st.batch_sizes)
+            stats.collect_seconds += st.collect_seconds
+            stats.evaluate_seconds += st.evaluate_seconds
+            stats.deliver_seconds += st.deliver_seconds
+            if driver.stop in ("finished", "exhausted"):
+                out_stop = driver.stop
+                verdict = replace(verdict, stop=T5D_TIME_STOP_SEARCH)
+                break
+            # No progress (S3): a forced slice after which no root child has a visit - one that
+            # leaves a root with no edge as it found it, or NO_PROGRESS_SLICES of them in a row.
+            if forced:
+                after = search.children()
+                if not any(c.visits > 0 for c in after):
+                    idle += 1
+                    if (edgeless and not after) or idle >= NO_PROGRESS_SLICES:
+                        out_stop = "exhausted"
+                        verdict = replace(verdict, stop=T5D_TIME_STOP_SEARCH)
+                        break
+    finally:
+        search.lift_root_listing(None)
+        search.set_deadline_at(held)
+        tm.end(search)
+    if model_clock:
+        after = search.info()
+        work = max(after.evaluations - before.evaluations, (after.playouts - before.playouts) / tm.params.playouts_per_evaluation_cap)
+        seconds = work * plan.seconds_per_evaluation
+    else:
+        seconds = now() - t0
+    return TimedSearch(plan=plan, verdict=verdict, seconds=seconds, stats=stats, search_stop=out_stop, slices=slices)
+
+
 class UniformEvaluator:
     """Logits 0 for every move, no submit logit (the search's placeholder share), WDL logits
     (0, 0, 0) - the value exactly 0, the draw probability 1/3 - and the categorical's mass on
@@ -824,11 +981,13 @@ __all__ = [
     "POLICY_SOURCES",
     "SearchDriver",
     "ServeStats",
+    "TimedSearch",
     "UniformEvaluator",
     "check_evaluation",
     "engine_epoch",
     "policy_source",
     "run_search",
+    "run_timed_search",
     "start_epoch",
     "serve",
     "state_of",

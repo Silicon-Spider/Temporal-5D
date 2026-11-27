@@ -88,17 +88,20 @@ than N* boards runs dense; one whose root has N* or more runs cached, with the r
 network serves both" (section 7.10). The root decides, once per search: ``root_epoch`` applies
 ``CacheConfig.mode`` to the root's board count (every board - the T0 board and inactive
 timelines included) and returns either the evaluator's one dense epoch (``dense_epoch``) or a
-root refresh (C3 - the phase form requires it). Every node of the search carries the root's
+root refresh (C3 - the phase form requires it). In a fresh search every node carries the root's
 epoch, so its mode: a transposition or a cache hit never mixes a dense and a cached evaluation of
 one state, which a per-node switch would do whenever a line crossed N*. A dense epoch's nodes are
 evaluated by the network's own dense pass (``evaluate``: the full model over the position under
 the dense scope - no B16, which exists only under the block-causal scope, so it is the refresh
 pass's function); it has no anchor, no history and no store: below N* "there is no cache to
 refresh" (section 7.9), so ``prepare`` and ``refresh`` refuse it. The dense epoch is independent
-of the root - a dense evaluation is a function of the state alone - so every search below N*
-shares it, and the engine's evaluation cache serves dense evaluations across searches (C14). Board
-count never falls, so a game crosses N* once; the first cached search starts with its root
-refresh, and carried nodes keep the statistics their dense evaluations gave them (section 8.7).
+of the root - a dense evaluation is a function of the state alone, up to its last bits, which
+depend on the batch it was evaluated in (BUILD_LOG issue 262) - so every search below N* shares
+it, and the engine's evaluation cache serves dense evaluations across searches (C14). Board count
+never falls, so a game crosses N* once; the first cached search starts with its root refresh, and
+carried nodes keep the statistics their dense evaluations gave them (section 8.7) - so a search
+carried across N* holds nodes of both modes, and under graph search a new path can transpose into
+a carried node evaluated dense (BUILD_LOG issue 264).
 N* is ``CacheConfig.phase_boards``, placeholder 50. The conditioning-offset hook (C3's training,
 parked) applies the same predicate to the conditioning root when it is built.
 
@@ -109,11 +112,13 @@ our submoves supersede there is computed when the network next runs, by the next
 ``evaluate``, which computes every frozen board without an entry, in topological order, in that
 node's epoch. The deferral is exact by construction: an entry's key is its epoch's and a digest of
 the board with the acting player (A7) and of its past's digests; ``compute_board`` reads only the
-board's own tokens, its causal past's entries (its ancestry, closed under future moves - C23) and
-geometry in a frame centred on itself; and ``put`` never overwrites. So each entry - a board with
-its past, a perspective and an epoch - is computed once, at the first evaluated node that reads it,
-and shared below it: "once per board and epoch", per perspective (BUILD_LOG issue 267). The
-refresh triggers are checked only at evaluated nodes (``tree.py``).
+board's own tokens, its causal past's entries (its ancestry, closed under future moves - C23),
+under C20's ``past_and_epoch_history`` reading the epoch's history boards' entries too (their
+digests are in the key, as the past's are), and geometry in a frame centred on itself; and ``put``
+never overwrites. So each entry - a board with its past, a perspective and an epoch - is computed
+once, at the first evaluated node that reads it, and shared below it: "once per board and epoch",
+per perspective (BUILD_LOG issue 267). The refresh triggers are checked only at evaluated nodes
+(``tree.py``).
 
 **Storage precision (C15, G1).** The cache stores frozen K/V in the network's own format,
 ``NetConfig.frozen_kv_format`` (``kvformat.py``): ``"match"`` (default) stores them exactly
@@ -172,7 +177,7 @@ import itertools
 import math
 import numbers
 import struct
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 
 import numpy as np
 import torch
@@ -255,6 +260,11 @@ class CacheConfig:
         return "dense" if self.phase_form and int(n_boards) < self.phase_boards else "cached"
 
     def validate(self) -> None:
+        for name in ("root_refresh", "node_refresh", "complexity_refresh", "phase_form"):
+            # A switch is a bool: "no" or 0 would read as on or off by truthiness, and mode() would
+            # answer for a configuration nobody wrote.
+            if not isinstance(getattr(self, name), (bool, np.bool_)):
+                raise ValueError(f"{name} must be a bool, not {getattr(self, name)!r}")
         if isinstance(self.phase_boards, bool) or not isinstance(self.phase_boards, numbers.Integral) or self.phase_boards < 1:
             raise ValueError("phase_boards (C26's N*) must be a positive integer")
         if self.phase_form and not self.root_refresh:
@@ -410,6 +420,31 @@ def state_digest(state: PositionState) -> str:
     return h.hexdigest()
 
 
+def input_digest(state: PositionState) -> str:
+    """A digest of a position's whole network input, as hex: every field of the state - the boards
+    and their flags, the candidate moves, the edges (the move graph and the typed relations), the
+    lineage, the action's flags and counts, the register counts. ``state_digest`` names an anchor in
+    an epoch's key and leaves the moves and edges out; a root refresh's dense pass reads them, so
+    ``CachedNetworkEvaluator.start`` reuses its epoch only for a root whose input is this one
+    (BUILD_LOG issue 274)."""
+    h = hashlib.blake2b(digest_size=16)
+    for f in fields(state):
+        value = getattr(state, f.name)
+        h.update(f.name.encode("utf-8"))
+        if value is None:
+            h.update(b"\x00none")
+        elif isinstance(value, np.ndarray):
+            h.update(f"{value.dtype.str}{value.shape}".encode())
+            h.update(np.ascontiguousarray(value).tobytes())
+        elif isinstance(value, (bool, np.bool_)):
+            h.update(b"\x01" if value else b"\x00")
+        elif isinstance(value, numbers.Integral):
+            h.update(struct.pack("<q", int(value)))
+        else:
+            raise TypeError(f"input_digest: no digest for the field {f.name}={value!r}")
+    return h.hexdigest()
+
+
 def topological_order(frozen: np.ndarray, deps: dict[int, list[int]], state: PositionState) -> list[int]:
     """The frozen boards with every board after the boards it reads; ties in ``(p, h)``
     order (canonical, so that every path computes a node's boards in one order)."""
@@ -499,12 +534,23 @@ class CachedEvaluator:
         #: round the refusal above and mix formats in one store, so every epoch and evaluation
         #: checks it (``_check_format``).
         self._format = (trunk_format(cfg), cfg.frozen_kv_format)
-        self.config = CacheConfig() if config is None else config
-        self.config.validate()
+        config = CacheConfig() if config is None else config
+        config.validate()
+        self._config = config  # read-only (``config``): validated here, and callers' refusals read it
         self.store = KVStore() if store is None else store
         self._epochs = itertools.count()
+        #: The keys of the refreshed epochs this evaluator made: the ones ``release`` may drop - a
+        #: store shared with another evaluator holds that evaluator's epochs too (BUILD_LOG issue 274).
+        self._made: set[str] = set()
         # C26: the one dense epoch every search rooted under N* shares (``dense_epoch``).
         self._dense_epoch = Epoch("dense", "dense")
+
+    @property
+    def config(self) -> CacheConfig:
+        """The cache's switches - fixed at construction: ``CacheConfig.validate`` ran on them then,
+        and ``CachedNetworkEvaluator``'s refusal of the refresh ladder reads them (BUILD_LOG issue 271),
+        so a configuration swapped in afterwards would get past both. Build a new evaluator instead."""
+        return self._config
 
     def _check_format(self) -> None:
         """Refuse a network whose format changed since the cache took it (``__init__``)."""
@@ -584,7 +630,22 @@ class CachedEvaluator:
                 kv = torch.stack([torch.stack([k[0, :, sl], v[0, :, sl]]) for k, v in captured])
                 entry = self._entry(kv, out.trunk[0, sl], (), "refresh")
                 self.store.put((epoch.key, _history_digest(board_ident(view, int(b), acting=True))), entry)
+        self._made.add(epoch.key)
         return epoch
+
+    def release(self, epoch: Epoch) -> int:
+        """Drop a past search's root refresh from the store - its history and every entry computed
+        under it - and return how many entries went (BUILD_LOG issue 273; section 7.9: epochs "die
+        with section 8.7's garbage collection"). Only a root epoch this evaluator made: its key
+        carries this evaluator's counter, so no later search of this evaluator is given it again, and
+        an epoch another evaluator made in a shared store is that evaluator's (issue 274). Anything
+        else - the causal epoch, which later searches share, the dense epoch, which stores nothing,
+        a node refresh, another evaluator's epoch - is kept (0). The caller must hold no node in the
+        epoch: ``CachedNetworkEvaluator.start`` calls it for the epoch its new search replaces."""
+        if epoch.kind != "root" or not epoch.refreshed or epoch.key not in self._made:
+            return 0
+        self._made.discard(epoch.key)
+        return self.store.drop_epoch(epoch.key)
 
     # -- planning --
 

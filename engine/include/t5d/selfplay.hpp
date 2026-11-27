@@ -16,9 +16,11 @@
 //    final rule (E5, E9). Root noise is off (§12.3's match configuration).
 //
 // A game is a sequence of ACTIONS. Every turn start is first judged by E4's
-// exhaustive detector (H37): checkmate (the side to move loses) or stalemate
-// (a draw, rulebook C10) ends the game; an Unknown verdict (the detector's
-// memory ceiling) ends it unjudged. Then SELF-PLAY'S TURN CAP (I11): a
+// detector within the game loop's node budget (H22, PlayParams::terminal_nodes;
+// H37: a verdict only from an exhaustive search): checkmate (the side to move
+// loses) or stalemate (a draw, rulebook C10) ends the game; a verdict the
+// budget or the memory ceiling stops ends it Unknown - unscored, never a mate.
+// Then SELF-PLAY'S TURN CAP (I11): a
 // convention defined from the state (TurnCap), scored as a draw and counted -
 // never a game rule. Every move the search chooses is checked pseudo-legal
 // before it is played and every submission checked legal (T5, C4/R1): a
@@ -42,6 +44,28 @@
 // proof - it rejects the chosen action and searches again. No reserve is held
 // for it while Guard is offline (build-log spec issue 306).
 //
+// MATCH PLAY'S CLOCK (stage E11, t5d/timeman.hpp; PlayParams::clock, off): each
+// side a clock of base seconds plus an increment after each of its actions
+// (Fischer's, a reading - the 5D match clock is unspecified: build-log spec
+// issue 456), each side's decisions run by its own TimeManager (run_timed)
+// instead of fixed playouts. A decision is charged its whole wall time - the
+// search, the choice and the exact verification of a chosen move - or, on the
+// model clock, its work at the cost model's price (deterministic). A side whose
+// clock runs out has lost on time (GameEnd::Flag: scored, not a rule - "*" in
+// the record) - only then: a decision whose search cannot produce a move with
+// time left ends the game unscored (GameEnd::Unknown, Unsettled::Search; the
+// E11 review's S1). After the search a decision keeps inside its hard bound
+// (the chosen move verified within what it leaves, the most visited child
+// known legal played where that is cut) but for two exceptions: a root with no
+// visited child searches on until one has a visit, and where no child is known
+// legal the children are verified in visit order against the side's remaining
+// clock, within the game loop's node budget - none shown legal with time left:
+// the turn-start verdict's witness, if the moves played continue it (the E11
+// review's S7: after the clock's search), else unscored (Unsettled::Choice),
+// never a throw. The turn-start verdict is charged to
+// neither side (issue 456). Self-play never runs a clock: its budgets are
+// PCR's (§12.5).
+//
 // SELF-PLAY RUNS WITHOUT THE ASSET MAP (the E10 review; build-log spec issues
 // 179, 189): PlayParams' default search has asset_map OFF - a named placeholder
 // - until I2's steered-visit definition is validated (the review measured the
@@ -53,8 +77,10 @@
 #ifndef T5D_SELFPLAY_HPP
 #define T5D_SELFPLAY_HPP
 
+#include <array>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -64,6 +90,7 @@
 #include "t5d/mcts.hpp"
 #include "t5d/move.hpp"
 #include "t5d/state.hpp"
+#include "t5d/timeman.hpp"
 
 namespace t5d::mcts {
 
@@ -71,16 +98,56 @@ enum class GameEnd : std::uint8_t {
   Checkmate = 0,  ///< E4's detector: the side to move is checkmated
   Stalemate,      ///< E4's detector: a draw (C10)
   TurnCap,        ///< I11's convention: scored as a draw
-  Unknown,        ///< the detector could not decide (H37): the game stops unjudged
+  Unknown,        ///< unscored (H22): a question the game loop's budget left unsettled (GameRecord::unsettled)
   ActionLimit,    ///< PlayParams::max_actions: a safety stop, not a rule
   TimeLimit,      ///< PlayParams::max_seconds: a safety stop, not a rule
+  Flag,           ///< stage E11: the side to move's clock ran out (PlayParams::clock) - a loss, not a rule;
+                  ///< only a clock run out: a search that cannot move with time left is Unknown (Unsettled::Search)
 };
 const char* game_end_name(GameEnd end) noexcept;
+
+/// Register H22 (§11.0; review decision 13, 2026-11-15): which of the game
+/// loop's two exact questions an Unknown game ended on - the turn start's
+/// verdict, or the choice: the chosen move was not shown legal within the
+/// budget, no other is known legal, and the moves played have left the
+/// verdict's witness (on a match clock also where every child's verification
+/// against the side's clock stopped, the budget or the memory ceiling, with
+/// time left). Stage E11 (the E11 review's S1, in decision 13's family):
+/// Search - a clocked decision's search could not produce a move with time
+/// left on the side's clock (no root child visited, and detail::cannot_move),
+/// never a flag, never a throw. None for every other end.
+enum class Unsettled : std::uint8_t { None = 0, Verdict, Choice, Search };
+const char* unsettled_name(Unsettled u) noexcept;  ///< "", "verdict", "choice", "search"
+
+/// H22: the game loop's node budget for its exact questions, in search nodes
+/// (SearchBudget's - deterministic, never a time limit). A PLACEHOLDER (build-log
+/// issue 413): the spec gives no figure; it is SearchParams::mate_nodes' default, the budget
+/// each fresh search's own root check runs under, so that the loop and its
+/// searches cannot disagree (a test holds the two equal); Python's
+/// netplay.TERMINAL_NODES is the same.
+inline constexpr std::uint64_t kTerminalNodes = 2'000'000;
 
 /// Self-play's search parameters: the search's defaults with root Dirichlet
 /// noise ON (E1, §8.4) and the asset map OFF (a named placeholder: I2's steered
 /// visits are unvalidated - issues 179, 189; the header comment).
 SearchParams self_play_search_defaults();
+
+/// Stage E11: match play's clock (the header comment). Every number a named
+/// placeholder.
+struct MatchClock {
+  bool enabled = false;
+  double base_seconds = 60;      ///< each side's time at the start (a placeholder no driver reads: issue 456)
+  double increment_seconds = 0;  ///< added after each of a side's actions (issue 456)
+  TimeParams time{};             ///< each side's time manager (6o's arms: allocator, signals)
+  /// The model clock (run_timed with no clock): deterministic - for tests and
+  /// reproducible runs; the wall clock otherwise.
+  bool model_clock = false;
+  /// A clock in place of the steady clock (tests: a virtual one; not owned,
+  /// unused with model_clock): each decision is run (run_timed), charged and
+  /// its Guard re-search bounded by it; the search is given no in-batch
+  /// deadline (that is the steady clock's).
+  Clock* clock = nullptr;
+};
 
 struct PlayParams {
   /// The searches' parameters - root Dirichlet noise ON by default (E1,
@@ -88,8 +155,24 @@ struct PlayParams {
   SearchParams search = self_play_search_defaults();
   /// Playouts per decision (the node budget).
   std::uint64_t playouts = 64;
-  /// I11 - handed to the search too, so that it scores capped positions as the
-  /// game will.
+  /// H22 (§11.0): the node budget of the game loop's two exact questions -
+  /// each turn start's verdict (detect_mate) and the verification of a chosen
+  /// move the expansion's budget left unknown (LegalityOptions' search nodes;
+  /// tier 2's checks unlimited) - under the memory ceiling search.mate_bytes. A
+  /// verdict it does not reach ends the game Unknown (never a mate, H37); a
+  /// verification it leaves unknown gives way to the most visited child known
+  /// legal - with none, to the next step of the turn-start verdict's witness
+  /// while the action's moves are its prefix (review decision 13's X2;
+  /// GameRecord::witness_moves) - and otherwise the game ends Unknown at the
+  /// action's turn start (the action under way is not recorded). UINT64_MAX:
+  /// exact (the behaviour before the ruling); 0 refused. Deterministic, unlike
+  /// max_seconds. A PLACEHOLDER (kTerminalNodes; build-log issue 413).
+  std::uint64_t terminal_nodes = kTerminalNodes;
+  /// I11 - handed to the search too, which scores a capped position as a draw.
+  /// The game ends a capped turn start as the rules come first: a verdict the
+  /// game loop's budget does not settle ends it Unknown, not TurnCap - where
+  /// the search, valuing that position, reads the cap as a draw (values only:
+  /// the game's targets are masked; the review of decision 13, L9).
   TurnCap turn_cap{};
   /// false: self-play (fresh searches, visit sampling); true: match play.
   bool match_play = false;
@@ -112,7 +195,7 @@ struct PlayParams {
   /// exact verification it stops gives way to the most visited child known
   /// legal - or, with none, ends the game there. 0, or 1e9 or more (+infinity
   /// included; t5d/mcts.hpp's THE DEADLINE): none - and then the verdicts and
-  /// verifications have no time limit, as no node limit (H37). NaN or a
+  /// verifications have no time limit, only terminal_nodes (H22). NaN or a
   /// negative value: refused. Not deterministic - for tools, never for
   /// training games.
   /// What it does not reach bounds its overshoot: the flat form's turn
@@ -148,11 +231,20 @@ struct PlayParams {
   /// Stage E10, H44: record each decision for the offline audit lane
   /// (GameRecord::decision_log). Off by default (memory).
   bool decision_log = false;
+  /// Stage E11: match play's clock - off (fixed playouts per decision). On,
+  /// match play only (refused in self-play); `playouts` is then unread.
+  MatchClock clock{};
   /// TESTS ONLY: applied to each refutation's certificate Guard's hook is about
   /// to have E4 check (guard_final) - the seam that feeds it a certificate E4
   /// rejects, so the "only confirmed refutations count" gate is exercised.
   /// Null (the default): none.
   std::function<void(std::shared_ptr<const ProofCertificate>&)> guard_certificate_hook_for_tests;
+  /// TESTS ONLY: asked before each chosen move's verification with the number
+  /// the game has made so far (GameRecord::verified_choices); true: none is
+  /// made and the move stays Unknown, as if the budget had run out - the seam
+  /// that leaves a choice unsettled after a given number of verifications (H22;
+  /// the review of decision 13, F5). Null (the default): none.
+  std::function<bool(std::uint64_t)> unsettle_verification_for_tests;
 };
 
 /// Stage E10, H44: one decision as the offline audit lane reads it - its
@@ -188,10 +280,16 @@ struct GameRecord {
   /// D2's arm the game was searched under (the audit lane's log names it).
   TurnSplit split = TurnSplit::BoardMove;
   GameEnd end = GameEnd::Unknown;
+  /// An Unknown game's question (H22); None otherwise.
+  Unsettled unsettled = Unsettled::None;
   /// 0 white, 1 black, -1 none (no optional: g++ 13/14 warn on copying one).
   int winner = -1;
-  /// Searches run: under the board-move split one per move and one per
-  /// submission (the tree form too); under the flat form one per turn.
+  /// Moves (or submissions) played: under the board-move split one per move
+  /// and one per submission (the tree form too); under the flat form one per
+  /// turn. A decision whose choice stayed unsettled (H22) is not counted -
+  /// its search's work is, in playouts and the rest; the decisions of an
+  /// action dropped with it stay counted here and in decision_log (the audit
+  /// lane's readers skip a decision past the last recorded action).
   std::uint64_t decisions = 0;
   std::uint64_t playouts = 0;
   std::uint64_t evaluations = 0;
@@ -201,9 +299,13 @@ struct GameRecord {
   /// tree carried across decisions (C12) under match play; 0 in self-play,
   /// where every decision's search is fresh (C14).
   std::uint64_t reused_visits = 0;
-  /// Chosen children the legality budget had left unknown, classified exactly
-  /// before they were played (a move is never played unverified).
+  /// Chosen children the legality budget had left unknown, classified within
+  /// terminal_nodes before they were played (a move is never played
+  /// unverified: H22's budget, review decision 13).
   std::uint64_t verified_choices = 0;
+  /// Moves played as steps of the turn-start verdict's witness, where no root
+  /// child was known legal (H22; review decision 13's X2).
+  std::uint64_t witness_moves = 0;
   double seconds = 0;
   // Where the time went (the searches' SearchStats, summed; and the game's own
   // turn-start verdicts and exact verifications of chosen moves).
@@ -228,13 +330,25 @@ struct GameRecord {
   std::uint64_t guard_runs = 0;
   std::uint64_t guard_refutations = 0;
   std::uint64_t guard_rejections = 0;  ///< refuted actions rejected and searched again
+  /// Stage E11, match play's clock (PlayParams::clock): each side's time left
+  /// at the end (White, Black; NaN: no clock), the timed decisions and why
+  /// each stopped (by TimeStop), the extensions they took, and the decisions
+  /// charged more than their hard bound, with the largest excess (seconds).
+  std::array<double, 2> clock_remaining{std::numeric_limits<double>::quiet_NaN(),
+                                        std::numeric_limits<double>::quiet_NaN()};
+  std::uint64_t timed_decisions = 0;
+  std::array<std::uint64_t, kTimeStops> time_stops{};
+  std::uint64_t extensions = 0;
+  std::uint64_t hard_overruns = 0;
+  double max_overrun_seconds = 0;
   /// Stage E10, H44: each decision as the offline audit lane reads it
   /// (PlayParams::decision_log; empty otherwise) - tools/audit.hpp's events.
   std::vector<DecisionLog> decision_log;
 
   bool cap_bound() const noexcept { return end == GameEnd::TurnCap; }
   /// The 5dpgn result: "1-0", "0-1", "1/2-1/2" (stalemate), or "*" (not ended
-  /// by the rules - the turn cap included, which self-play SCORES as a draw).
+  /// by the rules - the turn cap included, which self-play SCORES as a draw,
+  /// and a flag, scored as the other side's win).
   std::string result() const;
   /// Self-play's score from White's view: 1, 0.5 or 0 (the cap a draw); -1 if unscored.
   double white_score() const noexcept;
@@ -242,6 +356,45 @@ struct GameRecord {
 
 /// Plays one game from `start` (a turn start).
 GameRecord play_game(const GameState& start, Evaluator& evaluator, const PlayParams& params);
+
+namespace detail {
+
+/// Stage E11 (the E11 review's S1): batches without a root child's visit, on a
+/// clock that did not advance across them (the model clock, a test's), before
+/// a clocked decision's search is called unable to move. A PLACEHOLDER
+/// (build-log spec issue 480); on a clock that advances, the side's clock ends
+/// the loop instead (its flag). netplay's _NO_VISIT_ROUNDS is the same.
+inline constexpr int kNoVisitRounds = 16;
+
+/// A clocked decision's no-visit loop, after a batch that left no root child
+/// visited: whether the decision's search cannot produce a move with time left
+/// (the game then ends unscored, Unsettled::Search) - the batch added no
+/// playout, or found a root with no edge and left it so, or it is the
+/// kNoVisitRounds-th such batch on a clock that did not advance across it
+/// (`idle` counts those; a batch on a clock that advanced is not counted).
+bool cannot_move(bool added_playouts, bool still_edgeless, bool clock_advanced, int& idle) noexcept;
+
+/// Stage E11 (the E11 review's H1; its S7 tests the parts through this, as
+/// netplay's _DecisionClock): a clocked decision's time after its search, on
+/// the match clock - the clock (null: the model clock, which has no wall
+/// time), the decision's start on it, its hard bound and the side's clock at
+/// its start, in seconds.
+struct DecisionClock {
+  Clock* clock = nullptr;
+  double start = 0;
+  double hard = 0;
+  double remaining = 0;
+  /// The side's clock has run out - its flag; never on the model clock, never
+  /// for the hard bound alone.
+  bool out() const;
+  /// `budget` seconds of the side's clock from the decision's start as a
+  /// steady-clock deadline - now, once spent - and the earlier of it and
+  /// `game` (the game's own deadline); on the model clock `game` alone.
+  std::optional<std::chrono::steady_clock::time_point> within(
+      double budget, std::optional<std::chrono::steady_clock::time_point> game) const;
+};
+
+}  // namespace detail
 
 }  // namespace t5d::mcts
 

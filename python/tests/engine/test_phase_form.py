@@ -19,14 +19,17 @@ refresh (C3). "The dense search" is read as the same network's dense pass, batch
   (``_PerNodeSwitch``: each leaf's mode by its own board count) builds another search on every arm.
 * Rooted at or above N* (R6b): every node cached - the search is the cached path's with the root
   refresh, bit for bit; every leaf the two-level reference anchored at the root; the root leaf the
-  dense pass (issue 259's anchor); the other leaves more than 1e-3 from it; the search not the dense
-  one.
+  dense pass (issue 259's anchor), within ``ROOT_DENSE_BOUND``; every other leaf more than 1e-3 from
+  its own dense pass; the search not the dense one.
 * The boundary (R6c), one evaluator across crossings (R6d), the evaluation cache shared across the
-  crossing (R6e, C14), a carried search crossing it (R6f, C12), whole games crossing it (R6g), F1 in
-  BF16 (R6h, slow).
-* Units: N*'s placeholder is ``token_counts.N_STAR``'s; the dense epoch's engine number; the dense
-  dispatch is ``NetworkEvaluator``'s, bit for bit, with either prior and the leave logits; its
-  ``max_batch``; the start shortcut; A5 still refused first.
+  crossing (R6e, C14), a carried search crossing it (R6f, C12 - under graph search a cached path
+  transposes into a carried node evaluated dense, BUILD_LOG issue 264, pinned), whole games crossing
+  it (R6g), F1 in BF16 (R6h, slow).
+* Units: N*'s placeholder is ``token_counts.N_STAR``'s; the dense epoch's engine number, and every
+  root refresh's its own; the dense dispatch is ``NetworkEvaluator``'s, bit for bit, with either
+  prior and the leave logits; its ``max_batch``, by default the dense evaluator's; it checks the
+  network's format; the start shortcut; the refusal of node refreshes, after construction too; the
+  store keeps only the live search's epoch (issue 273); A5 still refused first.
 
 FP32, 2 layers, random weights at initialisation scale, the v1 defaults (B15, B16, A6, A7); the
 verification ladder off in every search (from Python it never changes the tree, H41, and it costs
@@ -57,9 +60,9 @@ from t5d.engine.evaluator import (
     state_of,
 )
 from t5d.net import NetConfig, build_model, synthetic_state
-from t5d.net.cache import CacheConfig, CachedEvaluator, reference_output, state_digest
+from t5d.net.cache import CacheConfig, CachedEvaluator, KVStore, reference_output, state_digest
 from tests.engine.helpers import ENGINE_VARIANTS, requires_engine
-from tests.engine.test_cached_variants import THREE_VARIANTS, _evals_close, _logit_gap, _search_root
+from tests.engine.test_cached_variants import ROOT_DENSE_BOUND, THREE_VARIANTS, _evals_close, _logit_gap, _search_root
 
 R1, R2 = "past_and_epoch_history", "causal_past"
 SEEDS = (0, 1)
@@ -95,7 +98,7 @@ COUNTS = (
     "generated_turns",
 )
 #: The largest gaps met (printed at the module's end under ``-s``).
-GAPS = {"cached leaf vs reference": 0.0, "cached root leaf vs dense": 0.0, "cached leaf vs dense (smallest max)": math.inf}
+GAPS = {"cached leaf vs reference": 0.0, "cached root leaf vs dense": 0.0, "cached leaf vs dense (smallest)": math.inf}
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -302,7 +305,7 @@ def _check_cached(root: Game, model, n_star: int, flags: dict, what, against_den
     number = engine_epoch(ev.epoch)
     assert {v[2] for v in p.views} == {number} and number != engine_epoch(ev.cached.dense_epoch), what
     dense = _dense(model)
-    far = 0.0
+    assert len(p.evals) > 1, what
     for i, (pos, out) in enumerate(zip(p.positions, p.evals, strict=True)):
         state = state_of(pos)
         ref = _split(reference_output(model, state, anchor=anchor), [state])[0]
@@ -310,11 +313,11 @@ def _check_cached(root: Game, model, n_star: int, flags: dict, what, against_den
         gap = _logit_gap(out, dense([pos])[0])
         if i == 0:  # a fresh search's first leaf is its root: the refresh pass is the dense pass
             assert state_digest(state) == state_digest(anchor), what
-            assert gap < 1e-4, (what, "the root leaf is the dense pass", gap)
+            assert gap < ROOT_DENSE_BOUND, (what, "the root leaf is the dense pass", gap)
             GAPS["cached root leaf vs dense"] = max(GAPS["cached root leaf vs dense"], gap)
-        far = max(far, gap)
-    assert len(p.evals) > 1 and far > 1e-3, (what, "the cached leaves are not the dense pass", far)
-    GAPS["cached leaf vs dense (smallest max)"] = min(GAPS["cached leaf vs dense (smallest max)"], far)
+        else:  # every other leaf: cached, conditioned on the root, not its own dense pass
+            assert gap > 1e-3, (what, i, "a cached leaf is not the dense pass", gap)
+            GAPS["cached leaf vs dense (smallest)"] = min(GAPS["cached leaf vs dense (smallest)"], gap)
     if against_dense:
         _, _, d_digest = _search(root, _dense(model), playouts, **flags)
         assert p_digest != d_digest, (what, "the search is not the dense one")
@@ -479,27 +482,74 @@ def test_a_shared_cache_across_the_crossing():
 # --- R6f: a carried search crossing N* (C12) ----------------------------------------------------------
 
 
-@requires_engine
-@pytest.mark.parametrize("arm", ["ply-tree", "tree-form", "tree-form-no-gates"])
-def test_a_carried_search_crossing_n_star(arm):
-    """Match play carries the search (C12). Rooted under N* (the root's boards + 1) the search is
-    dense; advanced onto its most visited child - for the tree form onto a child it inherited (never
-    evaluated) - the new root has N* boards or more, and the next run opens the root refresh: the
-    search's epoch moves from the dense number to the new epoch's, the root's visits are kept, no
-    position is evaluated dense any more, and every new leaf is the two-level reference anchored at
-    the new root; under the tree form the inherited root is the first new leaf, evaluated once."""
+#: R6f's searches: (variant, network seed, search seed, playouts before the crossing, after it). The
+#: graph arm's are larger, so that a line after the crossing meets a carried node (``_into_dense``);
+#: their order is the order they are tried in, until one meets one.
+CARRIED = [("Standard - Two Timelines", 6, 3, 48, 24)]
+CARRIED_GRAPH = [
+    ("Misc - Timeline Battleground", 7, 4, 256, 128),
+    ("Standard - Two Timelines", 7, 4, 256, 128),
+    ("Very Small - Open", 7, 4, 256, 128),
+]
+
+
+def _boards(state) -> set:
+    """A position's boards by coordinates and contents (a position's boards are its predecessor's and
+    the ones its move made)."""
+    p, h = state.timeline, state.half_turn
+    return {(int(p[b]), int(h[b]), state.piece[b].tobytes(), state.colour[b].tobytes()) for b in range(state.n_boards)}
+
+
+def _into_dense(s, ev, dense: _Recorder, cached: _Recorder) -> int:
+    """Under graph search, after the crossing: a node the cached search made (evaluated in the root
+    refresh's epoch, never before) one move from a state the dense search evaluated and the cached
+    one never did; the search advanced onto that node, its child by that move is the carried node -
+    the edge made after the crossing, the node before it: a cached path transposed into a node
+    evaluated dense - and that node holds the dense evaluation (its WDL the dense pass's, not the
+    cached path's), never evaluated again. How many such children the node has (0: no candidate)."""
+    first = lambda views: {v[:2]: i for i, v in reversed(list(enumerate(views)))}  # noqa: E731
+    d_at, c_at = first(dense.views), first(cached.views)
+    children = {c.child_key: c.index for c in s.children() if c.child_key}
+    dense_only = {k: _boards(state_of(dense.positions[i])) for k, i in d_at.items() if k not in c_at}
+    pairs = []
+    for made, i in c_at.items():
+        if made in d_at or made[0] not in children:
+            continue
+        boards = _boards(state_of(cached.positions[i]))
+        pairs += [(made, x) for x, xb in dense_only.items() if x[1] == made[1] + 1 and boards < xb and len(xb - boards) in (1, 2)]
+    if not pairs:
+        return 0
+    made = pairs[0][0]
+    want = {x[0]: x for m, x in pairs if m == made}
+    s.advance(children[made[0]])
+    linked = [c for c in s.children() if c.child_key in want]
+    for c in linked:
+        i = d_at[want[c.child_key]]
+        state = state_of(dense.positions[i])
+        with torch.no_grad():
+            now = _split(ev.cached.evaluate(state, ev.epoch), [state])[0]
+        wdl = np.asarray(c.network_wdl)
+        softmax = lambda x: np.exp(x - x.max()) / np.exp(x - x.max()).sum()  # noqa: E731
+        assert c.evaluated and np.abs(wdl - softmax(np.asarray(dense.evals[i].wdl_logits, np.float64))).max() < 1e-5, "the dense evaluation"
+        assert np.abs(wdl - softmax(np.asarray(now.wdl_logits, np.float64))).max() > 1e-4, "not the cached path's"
+    return len(linked)
+
+
+def _carried_crossing(arm: str, variant: str, model_seed: int, search_seed: int, before_playouts: int, after_playouts: int) -> int:
+    """R6f at one root: the dense search, the advance across N*, the cached search after it - and
+    under graph search ``_into_dense``'s count."""
     from t5d.engine.search import Search, search_params
 
-    model = _model(6)
-    with _search_root("Standard - Two Timelines") as root:
+    model = _model(model_seed)
+    with _search_root(variant) as root:
         n = root.info().boards
         ev = _phase(model, n + 1)
-        with Search(root, params=search_params(seed=3, **QUIET, **ARMS[arm])) as s:
-            _drive(s, ev, playouts=48)
+        with Search(root, params=search_params(seed=search_seed, **QUIET, **ARMS[arm])) as s:
+            dense = _drive(s, ev, playouts=before_playouts)
             dense_number = s.info().epoch
             assert dense_number == engine_epoch(ev.cached.dense_epoch)
             kids = [c for c in s.children() if not c.submit and c.visits > 1]
-            if arm != "ply-tree":
+            if arm.startswith("tree-form"):
                 kids = [c for c in kids if not c.evaluated]
                 assert kids, (arm, "an inherited child with visits")
             pick = max(kids, key=lambda c: c.visits)
@@ -507,7 +557,7 @@ def test_a_carried_search_crossing_n_star(arm):
             before = s.info()
             assert before.root_visits >= pick.visits > 1
             dense_before = ev.positions_by_mode["dense"]
-            rec = _drive(s, ev, playouts=24)
+            rec = _drive(s, ev, playouts=after_playouts)
             after = s.info()
             anchor = rec.started[-1]
             assert anchor.n_boards >= n + 1 and ev.epoch.kind == "root" and after.epoch == engine_epoch(ev.epoch) != dense_number
@@ -517,9 +567,37 @@ def test_a_carried_search_crossing_n_star(arm):
                 state = state_of(pos)
                 ref = _split(reference_output(model, state, anchor=anchor), [state])[0]
                 GAPS["cached leaf vs reference"] = max(GAPS["cached leaf vs reference"], _evals_close(out, ref, (arm, i)))
-            if arm != "ply-tree":
+            if arm.startswith("tree-form"):
                 assert rec.views[0][0] == before.root_key and after.root_evaluated and not before.root_evaluated
                 assert [v[0] for v in rec.views].count(before.root_key) == 1
+            return _into_dense(s, ev, dense, rec) if arm == "ply-graph" else 0
+
+
+@requires_engine
+@pytest.mark.parametrize("arm", ["ply-tree", "ply-graph", "tree-form", "tree-form-no-gates"])
+def test_a_carried_search_crossing_n_star(arm):
+    """Match play carries the search (C12). Rooted under N* (the root's boards + 1) the search is
+    dense; advanced onto its most visited child - for the tree form onto a child it inherited (never
+    evaluated) - the new root has N* boards or more, and the next run opens the root refresh: the
+    search's epoch moves from the dense number to the new epoch's, the root's visits are kept, no
+    position is evaluated dense any more, and every new leaf is the two-level reference anchored at
+    the new root; under the tree form the inherited root is the first new leaf, evaluated once.
+
+    Under graph search (``ply-graph``) the re-root keeps the carried nodes in the graph's table, keyed
+    by state and moves made, not by epoch, so the behaviour BUILD_LOG issue 264 records is pinned: a
+    node the cached search made after the crossing transposes into a carried node evaluated dense,
+    which is not evaluated again - the cached search reads that state's dense evaluation
+    (``_into_dense``). Section 7.10's "transpositions never mix a dense and a cached evaluation of
+    one state", read strictly, forbids it: a spec conflict for the user. If the strict reading is
+    ruled, the engine drops or re-evaluates the carried nodes' table entries at the crossing, and
+    this arm's assertion turns round. Tried on ``CARRIED_GRAPH``'s searches in order until one meets
+    such a node."""
+    met = 0
+    for spec in CARRIED_GRAPH if arm == "ply-graph" else CARRIED:
+        met += _carried_crossing(arm, *spec)
+        if met:
+            break
+    assert met or arm != "ply-graph", "no search met a cached path transposing into a node evaluated dense"
 
 
 # --- R6g: games crossing N* ---------------------------------------------------------------------------
@@ -677,6 +755,17 @@ def test_the_dense_epochs_engine_number():
     assert a.epoch is a.cached.dense_epoch and a.epoch is not b.epoch and a.epoch.key == b.epoch.key == "dense"
 
 
+def test_every_root_refresh_has_its_own_engine_number():
+    """``engine_epoch`` hashes the epoch's whole key: two root refreshes - of two roots, or of one root
+    twice - carry different engine numbers, so a shared evaluation cache (C14) never serves one
+    refresh's evaluations to another; the dense number is none of them."""
+    model = _model(7)
+    a, b = synthetic_state(70, 6, n_timelines=3), synthetic_state(71, 7, n_timelines=3)
+    cached = _phase(model, 1).cached
+    numbers = [engine_epoch(cached.root_epoch(s)) for s in (a, b, a)]
+    assert len(set(numbers)) == 3 and engine_epoch(_phase(model, 1000).cached.dense_epoch) not in numbers
+
+
 @pytest.mark.parametrize("policy", ["normal", "optimistic"])
 def test_the_dense_dispatch_is_the_dense_evaluator(policy):
     """Under N* the evaluator's evaluations are ``NetworkEvaluator(scope="dense")``'s bit for bit on the
@@ -700,16 +789,60 @@ def test_the_dense_dispatch_is_the_dense_evaluator(policy):
         assert ev.positions_by_mode == {"dense": len(states), "cached": 0} and _empty(ev.cached.store)
 
 
+def test_the_default_max_batch_is_the_dense_evaluators():
+    """Built with defaults, the phase form's dense mode batches as the default dense evaluator does -
+    one forward for 9 positions - so a default-built search under N* is the default dense search."""
+    from t5d.train.smoke import with_actions
+
+    model = _model(8)
+    states = with_actions([synthetic_state(90 + i, 3 + i % 3, n_timelines=2) for i in range(9)])
+    ev = CachedNetworkEvaluator(CachedEvaluator(model, CacheConfig(root_refresh=True, phase_form=True, phase_boards=1000)))
+    dense = NetworkEvaluator(model, scope="dense")
+    ev.start(states[0])
+    got, want = ev(states), dense(states)
+    assert ev.dense.max_batch == dense.max_batch and ev.dense.batches == dense.batches == 1
+    assert all(_same(a, b) for a, b in zip(got, want, strict=True))
+
+
 def test_the_engine_path_refuses_node_refreshes():
     """The engine's search opens one epoch per search and refreshes no node (BUILD_LOG issue 271), so
     its evaluator refuses a cached evaluator configured for node refreshes - C3a's rung 1 or C24's -
-    rather than ignore them; the root refresh and the phase form are its own and accepted."""
+    rather than ignore them; the root refresh and the phase form are its own and accepted. The
+    refusal holds after construction: the cached evaluator's configuration cannot be swapped, and a
+    cached evaluator swapped in for another is refused at ``start``."""
     model = _model(9)
     for cfg in (CacheConfig(node_refresh=True), CacheConfig(complexity_refresh=True), CacheConfig(root_refresh=True, node_refresh=True)):
         with pytest.raises(NotImplementedError, match="issue 271"):
             CachedNetworkEvaluator(CachedEvaluator(model, cfg))
     for cfg in (CacheConfig(), CacheConfig(root_refresh=True), CacheConfig(root_refresh=True, phase_form=True)):
         CachedNetworkEvaluator(CachedEvaluator(model, cfg))
+    ev = CachedNetworkEvaluator(CachedEvaluator(model, CacheConfig(root_refresh=True)))
+    with pytest.raises(AttributeError):
+        ev.cached.config = CacheConfig(root_refresh=True, node_refresh=True)
+    ev.cached = CachedEvaluator(model, CacheConfig(root_refresh=True, node_refresh=True))
+    with pytest.raises(NotImplementedError, match="issue 271"):
+        ev.start(synthetic_state(72, 5, n_timelines=2))
+    assert ev.epoch is None
+
+
+def test_the_dense_dispatch_checks_the_networks_format():
+    """Every epoch and evaluation checks the network's format (G8's switch in place; spec issue 238),
+    the dense dispatch too: a network switched to another trunk format after ``start`` is refused
+    before the dense evaluator runs it."""
+    from t5d.train.smoke import with_actions
+
+    model = build_model(NetConfig(n_layers=1, trunk_dtype="fp32", attn_scope="block_causal"), seed=0).eval()
+    states = with_actions([synthetic_state(60 + i, 3, n_timelines=2) for i in range(2)])
+    ev = CachedNetworkEvaluator(CachedEvaluator(model, CacheConfig(root_refresh=True, phase_form=True, phase_boards=1000)))
+    ev.start(states[0])
+    ev(states)
+    model.set_trunk_quant("fp8_e4m3")
+    try:
+        with pytest.raises(RuntimeError, match="format changed"):
+            ev(states)
+        assert ev.dense.batches == 1, "refused before the dense evaluator ran"
+    finally:
+        model.set_trunk_quant("none")
 
 
 def test_a5_is_refused_first_under_the_phase_form():
@@ -720,3 +853,37 @@ def test_a5_is_refused_first_under_the_phase_form():
     model = build_model(NetConfig(trunk_dtype="fp32", n_layers=1, piece_centric=True), seed=0)
     with pytest.raises(NotImplementedError, match="issue 252"):
         CachedNetworkEvaluator(SimpleNamespace(model=model))
+
+
+def test_the_store_keeps_only_the_live_search():
+    """``start`` drops the root refresh its new search replaces (BUILD_LOG issue 273): one evaluator
+    following play - cached, cached, dense, cached, a new game cached - holds after each start only the
+    live epoch's entries (none under a dense search), and the shared causal epoch's are kept. Only
+    epochs it made: in a store shared with another evaluator (issue 274), the other's root refresh
+    stays, and so does an epoch the evaluator holds without having made it."""
+    model = _model(10)
+    roots = [synthetic_state(110 + i, n, n_timelines=2) for i, n in enumerate((8, 9, 4, 10, 8))]
+    ev = _phase(model, 6)  # the 4-board root is dense
+    for i, root in enumerate(roots):
+        epoch = ev.start(root)
+        ev([root, roots[(i + 1) % len(roots)]])
+        keys = {k[0] for k in ev.cached.store.entries}
+        assert keys == (set() if epoch.mode == "dense" else {epoch.key}), (i, keys)
+        assert ev.cached.store.computed["supersession"] + ev.cached.store.computed["refresh"] > 0
+    assert [ev.positions_by_mode[m] > 0 for m in ("dense", "cached")] == [True, True]
+    shared = KVStore()
+    a = CachedNetworkEvaluator(CachedEvaluator(model, CacheConfig(root_refresh=True), shared))
+    b = CachedNetworkEvaluator(CachedEvaluator(model, CacheConfig(root_refresh=True), shared))
+    ea, eb = a.start(roots[0]), b.start(roots[1])
+    a.start(roots[2])
+    keys = {k[0] for k in shared.entries}
+    assert ea.key not in keys and eb.key in keys and a.epoch.key in keys
+    b.epoch = a.epoch  # an epoch b did not make
+    b.start(roots[3])
+    assert a.epoch.key in {k[0] for k in shared.entries}, "another evaluator's epoch is kept"
+    causal = CachedNetworkEvaluator(CachedEvaluator(model))
+    first = causal.start(roots[0])
+    causal(roots[:2])
+    causal.start(roots[1])
+    assert causal.epoch is first or causal.epoch.key == first.key == "causal"
+    assert {k[0] for k in causal.cached.store.entries} == {"causal"}, "the shared causal epoch is kept"

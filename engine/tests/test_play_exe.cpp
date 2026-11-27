@@ -11,6 +11,7 @@
 #include <iterator>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #if !defined(_WIN32)
@@ -143,6 +144,16 @@ TEST(play_exe_records_replay_through_the_gate_adapter) {
                                               {});
   REQUIRE(solved.header("Engine") != nullptr);
   CHECK(solved.header("Engine")->find(", proof channel ON") != std::string::npos);
+  // H13, H43 (6e's switches): the asset map on by default and Hunt's suggested
+  // lines off; --hunt-suggest --no-assets the reverse, and the game replays.
+  CHECK(plain.header("Engine")->find("asset map") != std::string::npos);
+  CHECK(plain.header("Engine")->find("hunt suggestions") == std::string::npos);
+  const t5d::PgnRecord suggested = play_and_gate({"--variant", "Very Small - Open", "--hunt-suggest", "--no-assets", "--match",
+                                                  "--synchronous", "--playouts", "16", "--cap-turns", "4", "--seed", "2"},
+                                                 {});
+  REQUIRE(suggested.header("Engine") != nullptr);
+  CHECK(suggested.header("Engine")->find("hunt suggestions") != std::string::npos);
+  CHECK(suggested.header("Engine")->find("asset map") == std::string::npos);
   // Root noise: on in self-play by default (E1, §8.4), --no-noise turns it off,
   // match play has none.
   CHECK(plain.header("Engine")->find("root noise") != std::string::npos);
@@ -153,6 +164,48 @@ TEST(play_exe_records_replay_through_the_gate_adapter) {
     REQUIRE(quiet.header("Engine") != nullptr);
     CHECK(quiet.header("Engine")->find("root noise") == std::string::npos);
   }
+}
+
+TEST(play_exe_plays_match_play_on_a_clock) {
+  // Stage E11: --match --time, on the wall clock and on the model clock, under
+  // each of 6o's arms and with the signals off; the records replay through the
+  // gate, and the Engine header names the clock.
+  const t5d::PgnRecord wall = play_and_gate({"--variant", "Standard - Two Timelines", "--match", "--time", "4",
+                                             "--increment", "0.05", "--cap-turns", "4", "--no-hunt", "--no-settling"},
+                                            {});
+  REQUIRE(wall.header("Engine") != nullptr);
+  CHECK(wall.header("Engine")->find("clock 4 s + 0.05 s per action (integral allocator, signals on, wall clock)") !=
+        std::string::npos);
+  for (const auto& [arm, name] : {std::pair{"flat-evals", "flat_evals"}, std::pair{"flat-wall-clock", "flat_wall_clock"}}) {
+    const t5d::PgnRecord r = play_and_gate(
+        {"--match", "--time", "3", "--allocator", arm, "--model-clock", "--cap-turns", "3", "--split", "flat"}, {});
+    // The arm parsed is the arm named (on the model clock the two flat arms play alike).
+    REQUIRE(r.header("Engine") != nullptr);
+    CHECK(r.header("Engine")->find(std::string("(") + name + " allocator") != std::string::npos);
+  }
+  const t5d::PgnRecord off = play_and_gate(
+      {"--variant", "Very Small - Open", "--match", "--time", "3", "--no-signals", "--model-clock", "--cap-turns", "4"},
+      {});
+  // E8 behind its flag: the built-in evaluators predict no effort, so it is inert - the record
+  // says it was on.
+  const t5d::PgnRecord e8 = play_and_gate({"--variant", "Very Small - Open", "--match", "--time", "3",
+                                           "--difficulty-weighting", "--model-clock", "--cap-turns", "3"},
+                                          {});
+  REQUIRE(e8.header("Engine") != nullptr);
+  CHECK(e8.header("Engine")->find("model clock, difficulty weighting)") != std::string::npos);
+  REQUIRE(off.header("Engine") != nullptr);
+  CHECK(off.header("Engine")->find("signals off, model clock") != std::string::npos);
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::path(T5D_TEST_SCRATCH) / "play-exe";
+  fs::create_directories(dir);
+  // The clock is match play's, and its options need it.
+  CHECK_EQ(run(T5D_PLAY_EXE, {"--time", "5"}, {}, dir / "o.txt", dir / "e.txt"), 2);
+  CHECK(read_all(dir / "e.txt").find("--match") != std::string::npos);
+  CHECK_EQ(run(T5D_PLAY_EXE, {"--match", "--no-signals"}, {}, dir / "o.txt", dir / "e.txt"), 2);
+  CHECK_EQ(run(T5D_PLAY_EXE, {"--match", "--difficulty-weighting"}, {}, dir / "o.txt", dir / "e.txt"), 2);
+  CHECK_EQ(run(T5D_PLAY_EXE, {"--match", "--time", "0"}, {}, dir / "o.txt", dir / "e.txt"), 2);
+  CHECK_EQ(run(T5D_PLAY_EXE, {"--match", "--time", "5", "--allocator", "sideways"}, {}, dir / "o.txt", dir / "e.txt"),
+           2);
 }
 
 TEST(play_exe_takes_its_rules_through_the_shared_option_reader) {
@@ -182,6 +235,18 @@ TEST(play_exe_takes_its_rules_through_the_shared_option_reader) {
   CHECK_EQ(run(T5D_PLAY_EXE, {"--rules", "nonsense"}, {}, dir / "o.txt", dir / "e.txt"), 2);
 }
 
+TEST(play_exe_refuses_hunt_suggest_outside_match_play) {
+  // The E11 review's L9: Hunt's suggestions steer match play only - self-play
+  // does not steer as built (register I2).
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::path(T5D_TEST_SCRATCH) / "play-exe";
+  fs::create_directories(dir);
+  CHECK_EQ(run(T5D_PLAY_EXE, {"--variant", "Very Small - Open", "--hunt-suggest", "--playouts", "4"}, {}, dir / "o.txt",
+               dir / "e.txt"),
+           2);
+  CHECK(read_all(dir / "e.txt").find("--hunt-suggest: match play only") != std::string::npos);
+}
+
 TEST(play_exe_command_line) {
   namespace fs = std::filesystem;
   const fs::path dir = fs::path(T5D_TEST_SCRATCH) / "play-exe";
@@ -205,7 +270,8 @@ TEST(play_exe_command_line) {
        {std::vector<std::string>{"--max-actions", "4294967296"}, std::vector<std::string>{"--cap-turns", "2147483648"},
         std::vector<std::string>{"--cap-boards", "18446744073709551615"}, std::vector<std::string>{"--max-seconds", "nan"},
         std::vector<std::string>{"--max-seconds", "-1"}, std::vector<std::string>{"--playouts", "0"},
-        std::vector<std::string>{"--temperature", "inf"}, std::vector<std::string>{"--batch", "0"}}) {
+        std::vector<std::string>{"--temperature", "inf"}, std::vector<std::string>{"--batch", "0"},
+        std::vector<std::string>{"--terminal-nodes", "0"}}) {
     CHECK_EQ(run(T5D_PLAY_EXE, bad, {}, dir / "o.txt", dir / "e.txt"), 2);
     CHECK(read_all(dir / "e.txt").find("range") != std::string::npos ||
           read_all(dir / "e.txt").find("finite") != std::string::npos);
@@ -254,4 +320,41 @@ TEST(play_exe_max_seconds_ends_with_its_record) {
   REQUIRE_EQ(run(T5D_PLAY_EXE, far, {}, dir / "far.5dpgn", dir / "far-stderr.txt"), 0);
   CHECK(read_all(dir / "far.5dpgn") == read_all(dir / "none.5dpgn"));
   CHECK(read_all(dir / "far.5dpgn").find("action_limit") != std::string::npos);
+}
+
+TEST(play_exe_terminal_nodes_ends_an_unsettled_game_unscored_h22) {
+  // Register H22 (§11.0): --terminal-nodes is the game loop's node budget. Within one node the
+  // start's verdict is unknown: the game ends there, unscored - "*", no action, the Termination
+  // naming the question, the summary too, and a TerminalNodes header the budget (not the default:
+  // the review of decision 13, L5). The default budget and an exact one (UINT64_MAX) play the same
+  // game at this size (the ladder off: one thread, deterministic): their records differ only by
+  // the exact one's TerminalNodes header.
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::path(T5D_TEST_SCRATCH) / "play-exe";
+  fs::create_directories(dir);
+  const std::vector<std::string> base{"--variant", "Standard", "--seed", "5", "--max-actions", "2", "--playouts", "16",
+                                      "--no-hunt", "--no-settling", "--no-assets"};
+  std::vector<std::string> one = base;
+  one.insert(one.end(), {"--terminal-nodes", "1"});
+  REQUIRE_EQ(run(T5D_PLAY_EXE, one, {}, dir / "one.5dpgn", dir / "one-stderr.txt"), 0);
+  const t5d::PgnRecord rec = t5d::read_pgn(read_all(dir / "one.5dpgn"));
+  REQUIRE(rec.header("Termination") != nullptr);
+  CHECK(*rec.header("Termination") ==
+        "unknown (the turn start's verdict stayed unknown within the game loop's budget, H22: unscored; never a mate)");
+  CHECK(*rec.header("Result") == "*");
+  REQUIRE(rec.header("TerminalNodes") != nullptr);
+  CHECK(*rec.header("TerminalNodes") == "1");
+  CHECK(rec.actions.empty());
+  CHECK(read_all(dir / "one-stderr.txt").find("0 actions, unknown (verdict), result *") != std::string::npos);
+  std::vector<std::string> exact = base;
+  exact.insert(exact.end(), {"--terminal-nodes", "18446744073709551615"});
+  REQUIRE_EQ(run(T5D_PLAY_EXE, base, {}, dir / "budgeted.5dpgn", dir / "budgeted-stderr.txt"), 0);
+  REQUIRE_EQ(run(T5D_PLAY_EXE, exact, {}, dir / "exact.5dpgn", dir / "exact-stderr.txt"), 0);
+  std::string exact_record = read_all(dir / "exact.5dpgn");
+  const std::size_t at = exact_record.find("[TerminalNodes \"18446744073709551615\"]");
+  REQUIRE(at != std::string::npos);
+  exact_record.erase(at, exact_record.find('\n', at) + 1 - at);  // the header's line, whatever its ending
+  CHECK(read_all(dir / "budgeted.5dpgn").find("TerminalNodes") == std::string::npos);
+  CHECK(read_all(dir / "budgeted.5dpgn") == exact_record);
+  CHECK(read_all(dir / "budgeted.5dpgn").find("action_limit") != std::string::npos);
 }

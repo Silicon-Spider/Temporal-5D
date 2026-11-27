@@ -4,8 +4,11 @@ cached path behind ``CacheConfig.phase_form`` (off by default) - its one predica
 the search-tree fixture (``tree.py``) under a dense root and a cached one. Section 15.2's row
 through the engine's own search is ``tests/engine/test_phase_form.py``.
 
-* The defaults: off, N* = 50 (a placeholder); validation refuses an N* that is no positive integer
-  and the phase form without C3's root refresh, which section 7.10 runs at or above N*.
+* The defaults: off, N* = 50 (a placeholder); validation refuses an N* that is no positive integer,
+  a switch that is no bool, and the phase form without C3's root refresh, which section 7.10 runs at
+  or above N*; the configuration is fixed at construction.
+* The dense epoch checks the network's format, as every epoch does; ``release`` drops a root
+  refresh the evaluator made and nothing else (BUILD_LOG issues 273, 274).
 * The predicate at its boundary: dense exactly under N*; never with the flag off.
 * ``root_epoch``: under N* the evaluator's one dense epoch - nothing computed, nothing stored; at or
   above N* the root refresh, bit for bit the cached path's without the phase form.
@@ -83,6 +86,42 @@ def test_off_by_default_and_validated():
         CachedEvaluator(model, CacheConfig(phase_form=True))
     CachedEvaluator(model, _phase(1))
     CachedEvaluator(model, CacheConfig(phase_boards=np.int64(7)))
+    for flag in ("root_refresh", "node_refresh", "complexity_refresh", "phase_form"):
+        for bad in ("no", 0, 1, None):
+            with pytest.raises(ValueError, match=f"{flag} must be a bool"):
+                CachedEvaluator(model, dataclasses.replace(_phase(1), **{flag: bad}))
+    CachedEvaluator(model, CacheConfig(root_refresh=np.bool_(True), phase_form=np.bool_(True)))
+
+
+def test_the_configuration_is_fixed_at_construction():
+    """The evaluator's configuration is read-only: ``validate`` ran on it at construction, so one
+    swapped in afterwards - the phase form without the root refresh, say - would never be checked."""
+    ev = CachedEvaluator(_model(0), _phase(10))
+    with pytest.raises(AttributeError):
+        ev.config = CacheConfig(phase_form=True)
+    assert ev.config == _phase(10)
+
+
+@pytest.mark.parametrize("call", ["root_epoch", "evaluate"])
+def test_the_dense_epoch_checks_the_networks_format(call):
+    """``test_quant``'s switched-network refusal in the dense epoch: every epoch and evaluation checks
+    the network's format, the dense ones included."""
+    model = build_model(NetConfig(n_layers=1, trunk_dtype="fp32", attn_scope="block_causal"), seed=0).eval()
+    ev = CachedEvaluator(model, _phase(1000))
+    root = _root("standard", 0).state()
+    epoch = ev.root_epoch(root)
+    assert epoch is ev.dense_epoch
+    with torch.no_grad():
+        ev.evaluate(root, epoch)
+    model.set_trunk_quant("fp8_e4m3")
+    try:
+        with pytest.raises(RuntimeError, match="format changed"), torch.no_grad():
+            if call == "root_epoch":
+                ev.root_epoch(root)
+            else:
+                ev.evaluate(root, epoch)
+    finally:
+        model.set_trunk_quant("none")
 
 
 def test_the_one_predicate_at_its_boundary():
@@ -229,3 +268,26 @@ def test_a5_is_still_refused_under_the_phase_form():
     for cfg in (CacheConfig(), _phase(50)):
         with pytest.raises(NotImplementedError, match="issue 252"):
             CachedEvaluator(model, cfg)
+
+
+def test_release_drops_only_a_root_refresh_it_made():
+    """``release`` (BUILD_LOG issue 273): a root refresh this evaluator made goes from the store - its
+    history and the entries computed under it - and only once; the causal epoch, the dense epoch, a
+    node refresh and another evaluator's root refresh in a shared store are kept (issue 274)."""
+    model = _model(2)
+    root = _root("standard", 2)
+    child = root.apply(("physical", sorted(root.heads())[0]))
+    ev = CachedEvaluator(model, CacheConfig(root_refresh=True, node_refresh=True))
+    other = CachedEvaluator(model, CacheConfig(root_refresh=True), ev.store)
+    mine, theirs = ev.root_epoch(root.state()), other.root_epoch(child.state())
+    with torch.no_grad():
+        ev.evaluate(child.state(), mine)
+    node = ev.refresh(child.state(), mine)
+    keys = lambda: {k[0] for k in ev.store.entries}  # noqa: E731
+    assert keys() == {mine.key, theirs.key, node.key} and ev.store.computed["supersession"] > 0
+    n = len(ev.store.epoch_keys(mine.key))
+    assert ev.release(theirs) == 0 and ev.release(node) == 0 and ev.release(ev.dense_epoch) == 0
+    assert ev.release(mine) == n > 0 and keys() == {theirs.key, node.key} and ev.release(mine) == 0
+    causal = CachedEvaluator(model)
+    epoch = causal.root_epoch(root.state())
+    assert causal.release(epoch) == 0 and {k[0] for k in causal.store.entries} == {"causal"}
