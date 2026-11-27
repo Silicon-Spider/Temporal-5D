@@ -29,17 +29,23 @@
 #include <vector>
 
 #include "t5d/certificate.hpp"
+#include "t5d/check.hpp"
 #include "t5d/guard.hpp"
 #include "t5d/ladder.hpp"
 #include "t5d/mcts.hpp"
 #include "t5d/movegen.hpp"
+#include "t5d/prover.hpp"
 #include "t5d/search.hpp"
 #include "t5d/selfplay.hpp"
+#include "t5d/timeman.hpp"
 #include "t5d/variants.hpp"
 #include "test_framework.hpp"
 #include "test_play.hpp"
 #include "test_positions.hpp"
 #include "test_support.hpp"
+#include "test_store_checks.hpp"
+#include "test_rulesets.hpp"
+#include "test_mate_refs.hpp"
 #include "test_v3_support.hpp"
 
 using namespace t5d;
@@ -648,6 +654,240 @@ TEST(ladder_settling_proofs_survive_tt_churn_6f) {
   }
 }
 
+// ---- 6f under TT churn through the wired settling path (build-log spec issue 402, part 5) ------
+//
+// MT-03 drove the bare prover as a settling scan runs it (test_prover.cpp's
+// churn tests); this drives the scan itself - VerificationLadder's settling
+// job, as the search asks it: full df-pn (prove_only off), the settling class,
+// one thread by nodes (the synchronous mode), the game's one prover kept
+// across its scans - with its transposition table cut to 1 or 2 entries, over
+// stores the test owns (use_settling_stores_for_tests) so that their facts can
+// be held to the game tree. On the root, on its proof's continuation and on a
+// sequence of related roots sharing the stores ("on PV changes"); every
+// verdict checked against the references (Tally), H19 at each root
+// (exports_hold), a sample of each solved store's facts against the game tree
+// (check_store; a Draw as E4's stalemate).
+
+namespace {
+
+using t5d_test::check_store;
+using t5d_test::exports_hold;
+using t5d_test::StoreCheck;
+
+struct SettlingChurn {
+  t5d_test::Tally tally;
+  StoreCheck store;
+  int roots = 0;
+  int compared = 0;   // decided under churn and with the default TT
+  int answered = 0;   // asked again in a later decision, answered from the stores
+  int related = 0;    // a proof's continuation, answered from the stores
+  int sequences = 0;  // a sequence's roots asked again after it
+  int facts = 0;      // disproven roots whose stored game fact stood in for the disproof
+};
+
+// The settling scans' ladder (the wired path) for positions like `s`, its
+// settling table `tt` entries (0: the default), at `depth`, over the stores.
+LadderOptions settling_options(std::size_t tt, int depth) {
+  LadderOptions lo = ladder_options(sync_params());
+  if (tt > 0) lo.settling.tt_entries = tt;
+  lo.settling.depth = depth;
+  return lo;
+}
+
+ProveResult as_result(const LadderVerdict& v) {
+  ProveResult r;
+  r.status = v.status;
+  r.proof = v.proof;
+  r.stats = v.stats;
+  return r;
+}
+
+// One settling question in a decision of its own, answered inline.
+LadderVerdict settle(VerificationLadder& ladder, LadderJob job, const GameState& s, int depth, std::uint64_t nodes) {
+  ladder.begin_decision();
+  ladder.ask(job, s, {}, depth, 0, nodes);
+  std::vector<LadderVerdict> got = ladder.take();
+  REQUIRE_EQ(got.size(), std::size_t{1});
+  return std::move(got[0]);
+}
+
+// The attacker's next turn start along a proof: its first action, then a
+// defence (E4's first listed legal action - every defence of a proof is
+// proven, and exported the moment it is).
+std::optional<GameState> continuation(const GameState& s, const std::vector<Move>& first) {
+  GameState t = s;
+  for (const Move& m : first) t.apply(m);
+  if (!t.obligations_met() || !royals_safe(t)) return std::nullopt;
+  t.submit();
+  const ActionList list = list_legal_actions(t, 1, Detector::Hypercuboid, SearchBudget::nodes(2'000'000));
+  if (list.actions.empty()) return std::nullopt;
+  return list.actions.front().result;
+}
+
+void settling_position(const GameState& s, int depth, std::uint64_t nodes, SettlingChurn& c) {
+  VerificationLadder reference(settling_options(0, depth), s.rules(), s.multiverse().ruleset());
+  const LadderVerdict v0 = settle(reference, LadderJob::RootSettling, s, depth, nodes);
+  for (const std::size_t tt : {std::size_t{1}, std::size_t{2}}) {
+    const LadderOptions lo = settling_options(tt, depth);
+    MemorySolvedStore proofs;
+    DisproofStore disproofs;
+    VerificationLadder ladder(lo, s.rules(), s.multiverse().ruleset());
+    ladder.use_settling_stores_for_tests(&proofs, &disproofs);
+    const LadderVerdict v = settle(ladder, LadderJob::RootSettling, s, depth, nodes);
+    ++c.roots;
+    const ProveResult r = as_result(v);
+    if (!c.tally.add(r, s, lo.settling)) CHECK(false);
+    if (v.status != ProofStatus::Unknown && v0.status != ProofStatus::Unknown) {
+      ++c.compared;
+      if (v.status != v0.status) {
+        std::fprintf(stderr, "  tt %zu: %s, the default TT %s at %s\n", tt, proof_status_name(v.status),
+                     proof_status_name(v0.status), t5d_test::describe_position(s).c_str());
+        CHECK(false);
+      }
+    }
+    exports_hold(r, s, lo.settling, proofs, disproofs, &c.facts);
+    check_store(proofs, 6, c.store);
+    if (v.status == ProofStatus::Unknown) continue;
+    // Asked again in the next decision (the same prover, its table churned):
+    // answered from the stores, nothing expanded.
+    const LadderVerdict again = settle(ladder, LadderJob::RootSettling, s, depth, nodes);
+    ++c.answered;
+    CHECK(again.status == v.status);
+    CHECK(again.stats.store_hits >= 1);
+    CHECK_EQ(again.stats.expansions, std::uint64_t{0});
+    if (v.status == ProofStatus::Proven) {
+      CHECK(again.proof.distance <= v.proof.distance);
+      REQUIRE(v.certificate != nullptr);
+      CHECK(check_certificate(*v.certificate, s, v.proof.distance).verdict == CertificateVerdict::Confirmed);
+    }
+    // The proof's continuation - the attacker to move again after its action
+    // and a defence, a PV change's question - answered from the stores too.
+    if (v.status == ProofStatus::Proven && v.proof.distance >= 3) {
+      const std::optional<GameState> next = continuation(s, v.first_action);
+      REQUIRE(next.has_value());
+      const LadderVerdict vn = settle(ladder, LadderJob::PvSettling, *next, v.proof.distance - 2, nodes);
+      ++c.related;
+      CHECK(vn.status == ProofStatus::Proven);
+      CHECK(vn.stats.store_hits >= 1);
+      CHECK_EQ(vn.stats.expansions, std::uint64_t{0});
+    }
+  }
+}
+
+// A sequence of related roots - consecutive turn starts of a random game -
+// asked of one ladder (the game's one prover, its 1-entry table, the shared
+// stores), each in a decision of its own; then every root it decided, asked
+// again, is answered from the stores alone.
+void settling_sequence(const std::vector<GameState>& positions, int depth, std::uint64_t nodes, SettlingChurn& c) {
+  if (positions.empty()) return;
+  const LadderOptions lo = settling_options(1, depth);
+  MemorySolvedStore proofs;
+  DisproofStore disproofs;
+  VerificationLadder ladder(lo, positions.front().rules(), positions.front().multiverse().ruleset());
+  ladder.use_settling_stores_for_tests(&proofs, &disproofs);
+  std::vector<std::pair<const GameState*, ProofStatus>> decided;
+  for (std::size_t i = 0; i < positions.size(); ++i) {
+    const GameState& s = positions[i];
+    // The roots alternate as the search asks them: a turn-start root, then
+    // the opponent's turn start (a PV change's scan).
+    const LadderJob job = i % 2 == 0 ? LadderJob::RootSettling : LadderJob::PvSettling;
+    const LadderVerdict v = settle(ladder, job, s, depth, nodes);
+    const ProveResult r = as_result(v);
+    if (!c.tally.add(r, s, lo.settling)) CHECK(false);
+    exports_hold(r, s, lo.settling, proofs, disproofs, &c.facts);
+    if (v.status != ProofStatus::Unknown) decided.emplace_back(&s, v.status);
+  }
+  for (const auto& [s, status] : decided) {
+    const LadderVerdict again = settle(ladder, LadderJob::RootSettling, *s, depth, nodes);
+    ++c.sequences;
+    CHECK(again.status == status);
+    CHECK_EQ(again.stats.expansions, std::uint64_t{0});
+  }
+  check_store(proofs, 20, c.store);
+}
+
+void settling_churn(int turns, std::uint64_t nodes, SettlingChurn& c) {
+  c.tally.work_cap = nodes;
+  using namespace t5d_test::v3;
+  // The constructed mates, both Q4 readings, at depth 3.
+  for (const RuleOptions& rules : {guide_literal_q4(), RuleOptions{}}) {
+    for (const GameState& s : {mate_in_one(rules), mate_in_two(rules), cross_board_mate(rules)}) {
+      settling_position(s, 3, 2'000'000, c);
+    }
+  }
+  // Random play under every ruleset (both Q4 readings).
+  std::uint64_t seed = 8300;
+  for (const RuleOptions& base : t5d_test::every_ruleset()) {
+    if (base.moves_after_shift != RuleOptions{}.moves_after_shift) continue;  // both below
+    for (const bool shift : {false, true}) {
+      RuleOptions rules = base;
+      rules.moves_after_shift = shift;
+      const std::vector<GameState> positions =
+          t5d_test::playable(t5d_test::sparse_positions(rules, 1, turns, seed++));
+      for (const GameState& s : positions) settling_position(s, 3, nodes, c);
+      settling_sequence(positions, 3, nodes, c);
+    }
+  }
+}
+
+void settling_churn_print(const SettlingChurn& c) {
+  c.tally.print("settling under TT churn");
+  std::fprintf(stderr,
+               "  %d roots under churn; %d decided both ways and compared; %d asked again and answered from the "
+               "stores, %d continuations and %d sequence roots answered from them; %d disproven roots stood for "
+               "by a confirmed game fact; store entries %d (%d confirmed, %d beyond the game tree)\n",
+               c.roots, c.compared, c.answered, c.related, c.sequences, c.facts, c.store.entries, c.store.confirmed,
+               c.store.beyond);
+}
+
+}  // namespace
+
+TEST(ladder_settling_scans_keep_their_facts_in_the_stores_under_tt_churn_6f) {
+  SettlingChurn c;
+  settling_churn(2, 10'000, c);
+  settling_churn_print(c);
+  // Deterministic (the synchronous mode, by nodes): 924 proven, 1,920 disproven, 1,900 compared,
+  // 404 continuations, 944 sequence roots, 3,542 store entries confirmed (2026-11-24); a margin.
+  CHECK(c.tally.proven > 800);
+  CHECK(c.tally.disproven > 1700);
+  CHECK(c.compared > 1700);
+  CHECK(c.related > 350);
+  CHECK(c.sequences > 850);
+  CHECK(c.store.confirmed > 3200);
+  // At most 1% beyond the game tree's budget - its overflow alone (22 of 3,564 measured).
+  CHECK(c.store.beyond * 100 <= c.store.entries);
+}
+
+TEST(long_ladder_settling_scans_keep_their_facts_in_the_stores_under_tt_churn_6f) {
+  SettlingChurn c;
+  settling_churn(5, 60'000, c);
+  settling_churn_print(c);
+  // Deterministic: 2,622 proven, 4,284 disproven, 4,608 compared, 556 continuations, 2,298 sequence
+  // roots, 6,820 store entries confirmed (2026-11-24, 5.5 minutes); a margin.
+  CHECK(c.tally.proven > 2300);
+  CHECK(c.tally.disproven > 3800);
+  CHECK(c.compared > 4100);
+  CHECK(c.related > 500);
+  CHECK(c.sequences > 2000);
+  CHECK(c.store.confirmed > 6000);
+  // At most 16% beyond the game tree's budget - its overflow alone (1,032 of 7,852 measured, 13.1%;
+  // a 1.2x margin, as the prover's long twin).
+  CHECK(c.store.beyond * 100 <= c.store.entries * 16);
+}
+
+TEST(ladder_settling_stores_for_tests_are_refused_where_they_cannot_hold) {
+  // The seam's guards: the synchronous mode only, before the first scan.
+  const GameState s = t5d_test::v3::mate_in_two();
+  MemorySolvedStore proofs;
+  DisproofStore disproofs;
+  LadderOptions async = ladder_options(SearchParams{});
+  VerificationLadder threaded(async, s.rules(), s.multiverse().ruleset());
+  CHECK_THROWS_AS(threaded.use_settling_stores_for_tests(&proofs, &disproofs), std::logic_error);
+  VerificationLadder ladder(settling_options(1, 3), s.rules(), s.multiverse().ruleset());
+  settle(ladder, LadderJob::RootSettling, s, 3, 200'000);
+  CHECK_THROWS_AS(ladder.use_settling_stores_for_tests(&proofs, &disproofs), std::logic_error);
+}
+
 // ---- Guard's hook: off, and refused without the proof channel --------------------------------
 
 TEST(ladder_guards_hook_is_off_by_default_and_rejects_a_refuted_action_when_on) {
@@ -682,6 +922,124 @@ TEST(ladder_guards_hook_is_off_by_default_and_rejects_a_refuted_action_when_on) 
   CHECK(on.guard_refutations >= 1);
   CHECK(on.guard_rejections >= 1);
   CHECK(!(on.actions[0].size() == 1 && on.actions[0][0] == rook_away));
+}
+
+// ---- Guard on a match clock (the E11 review's L1 and L8; the proof channel on here only) ------
+
+namespace {
+
+// A clock the test moves (MatchClock::clock's seam).
+class TestClock final : public Clock {
+ public:
+  double t = 0;
+  double now() override { return t; }
+};
+
+// An evaluator's answers, the clock charged `per_leaf` seconds a leaf.
+class Charging final : public Evaluator {
+ public:
+  Charging(Evaluator& inner, TestClock& clock, double per_leaf) : inner_(inner), clock_(clock), per_leaf_(per_leaf) {}
+  void evaluate(std::span<const EvalRequest> batch, std::span<Evaluation> out) override {
+    inner_.evaluate(batch, out);
+    clock_.t += per_leaf_ * static_cast<double>(batch.size());
+  }
+
+ private:
+  Evaluator& inner_;
+  TestClock& clock_;
+  double per_leaf_;
+};
+
+// Guard's experiment as ladder_guards_hook_..._when_on sets it up: the flat
+// form (a decision is the whole action), the favourite Rc5-a5 refuted by
+// Black's mate in one, the ladder off, the proof channel on.
+PlayParams guard_on(bool synchronous) {
+  PlayParams pp;
+  pp.search = sync_params();
+  pp.search.synchronous = synchronous;
+  pp.search.split = TurnSplit::Flat;
+  pp.search.hunt = pp.search.settling = false;
+  pp.search.asset_map = false;
+  pp.search.proof_channel = true;
+  pp.guard_final = true;
+  pp.guard_research_playouts = 64;
+  pp.max_actions = 1;
+  pp.match_play = true;
+  return pp;
+}
+
+}  // namespace
+
+TEST(ladder_the_model_clock_charges_guards_research_with_the_decision) {
+  // The E11 review's L1: on the model clock a decision is charged its WHOLE
+  // work at its plan's price - here Guard's re-search after its timed run
+  // too (Guard refutes the favourite, which is rejected and searched again).
+  // One flat decision, so the charge is computable from the game's totals;
+  // charging the timed run's work alone (L1's fault) leaves the re-search out.
+  // The plan is about one evaluation (a thousand actions left, no floor, the
+  // signals off), so the timed run is the forced slices' two playouts - as
+  // Guard's own test holds its search to two, the in-tree solver not yet
+  // having seen Black's mate - while the clock holds the re-search's charge.
+  const GameState s = blunder_position();
+  Favouring ev(blunder(s));
+  PlayParams pp = guard_on(true);
+  pp.clock.enabled = true;
+  pp.clock.model_clock = true;
+  pp.clock.base_seconds = 150;
+  pp.clock.time.cost_seconds_per_evaluation = 0.1;
+  pp.clock.time.moves_left_default_turns = 2000;
+  pp.clock.time.min_evaluations = 0;
+  pp.clock.time.signals = false;
+  const GameRecord g = play_game(s, ev, pp);
+  REQUIRE_EQ(g.timed_decisions, std::uint64_t{1});
+  REQUIRE_EQ(g.actions.size(), std::size_t{1});
+  REQUIRE(g.guard_rejections >= 1);  // the premise: work after the timed run
+  const double work = std::max(static_cast<double>(g.evaluations),
+                               static_cast<double>(g.playouts) / pp.clock.time.playouts_per_evaluation_cap);
+  const TimeManager tm(pp.clock.time);
+  const double price = tm.seconds_per_evaluation(static_cast<double>(s.multiverse().board_count()));
+  CHECK(std::abs((pp.clock.base_seconds - g.clock_remaining[0]) - work * price) <= 1e-9);
+  CHECK(g.playouts > 2);  // the timed run's two (the forced slices) and the re-search's
+}
+
+TEST(ladder_guards_scan_gets_no_more_than_the_hard_bound_leaves) {
+  // The E11 review's L8: on a match clock Guard's scan after the search gets
+  // no more than the hard bound leaves - here nothing (the forced slices,
+  // one leaf each at 20 s a leaf, spent it), so Guard stops before its first
+  // depth and the favourite is played unrefuted. Without the clock the same
+  // scan, given guard_ms, refutes it (the premise). The asynchronous mode (the
+  // synchronous mode's scan is node-budgeted, never timed), batches of one:
+  // two playouts, as Guard's own test, so the in-tree solver has not seen the
+  // mate.
+  const GameState s = blunder_position();
+  const Move rook_away = blunder(s);
+  Favouring fav(rook_away);
+  {
+    TestClock clock;
+    Charging ev(fav, clock, 20.0);
+    PlayParams pp = guard_on(false);
+    pp.search.batch_size = 1;
+    pp.clock.enabled = true;
+    pp.clock.clock = &clock;
+    pp.clock.base_seconds = 120;
+    const GameRecord g = play_game(s, ev, pp);
+    REQUIRE_EQ(g.actions.size(), std::size_t{1});
+    CHECK(g.hard_overruns >= 1);  // the premise: the bound spent before Guard
+    CHECK(g.guard_runs >= 1);
+    CHECK_EQ(g.guard_refutations, std::uint64_t{0});
+    CHECK(g.actions[0].size() == 1 && g.actions[0][0] == rook_away);
+  }
+  {
+    TestClock clock;
+    Charging ev(fav, clock, 20.0);
+    PlayParams pp = guard_on(false);
+    pp.search.batch_size = 1;
+    pp.playouts = 2;  // as Guard's own test: the in-tree solver has not seen the mate
+    const GameRecord g = play_game(s, ev, pp);
+    REQUIRE_EQ(g.actions.size(), std::size_t{1});
+    CHECK(g.guard_refutations >= 1);
+    CHECK(!(g.actions[0].size() == 1 && g.actions[0][0] == rook_away));
+  }
 }
 
 // ---- Self-play with the defaults -------------------------------------------------------------

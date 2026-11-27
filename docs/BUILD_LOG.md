@@ -783,9 +783,12 @@ pushed after every commit, taking main by merge, never rebase (re-check with `gi
   switches on every driver, and H1 part 5 under decision 13 (a clocked turn start's verdict on the
   node budget, uncharged, unsettled ending the game unscored); issues 452-483, edits 331-346. A
   flag falls only when a clock has run out; a search that cannot move with time left ends the game
-  unscored (issue 480). For the user: issues 453, 456, 472. Next: MT-03's settling-scan part
-  through the ladder, and two tests the round left weak (L1's charge on a decision with work after
-  its timed run; L8's capped Guard scan).
+  unscored (issue 480). For the user: issues 453, 456, 472. **Round 3 merged the same day**:
+  MT-03's settling-scan part (issue 402's part 5: 6f under TT churn through the ladder's wired
+  settling path, with a `long_` twin and a tests-only store hook,
+  `VerificationLadder::use_settling_stores_for_tests`) and round 2's two weak tests made strong
+  (L1's charge on a decision with work after its timed run, L8's capped Guard scan). The lane is
+  idle.
 - `lane/audit` (from main 01ebbe5, 2026-11-01) - the done-means audit merged (2026-11-08): section 15.2 row by row, section 15.4 invariant by invariant, the committed-class rows and section 15.5 clause by clause, checked adversarially by a five-agent workflow and corrected (section "Done-means audit"; issues 535-538, edits 364-366).
 - `lane/fix535` (from main d8a54d3, 2026-11-02) - issue 535 resolved by issue 600 and merged (2026-11-09, with its review round: no HIGH; 3 MEDIUM and 14 LOW fixed, all 24 surviving mutants killed, the normal path bit-identical to 03eca7a on the review's three twins): the flat form, a node's creation and a re-root exception-safe under an allocation failure, gather's request list and run's buffer inside their rollbacks, the tree form's inheritance and re-evaluation rolled back, the ladder's verdict take and the asset map's lookup safe under `std::bad_alloc`. Issues 603 (this machine's g++ 16.2 breaks `std::deque`'s exception safety under its default `-fassume-sane-operators-new-delete`) and 604 (a `std::bad_alloc` in a synchronous ladder job reported as a contradiction) are the main loop's, in the quiet-machine block. The lane is idle.
 - `lane/net` - A5 (piece-centric tokens, dense scope only, behind its flag, off) merged with
@@ -1406,6 +1409,8 @@ threads reach at least one thread's sum (one retry on a shared machine).
 | 2026-11-23 | The review round's final tree (issue 411's truth sources; main af0c19b merged) | lane/engine e79ea70 | dev-r, 24 logical; load 26% before, 18% after | 32 | 293 / 293 / 293 | 318 / 317 / 318 | none | pass x3 |
 | 2026-11-23 | the engine lane into main (issue 411's truth sources, issue 412; the main loop's merge battery) | main 4e9267e + lane/engine 76501de, merged tree before the commit | dev-r, 24 logical; the net lane's fixer running | 32 | 293 | 317 / 315 / 315 | none | pass x3 |
 | 2026-11-24 | the search lane into main (E11/E8 with both review rounds; `mcts.cpp`'s deadline, root-listing lift and re-check; the main loop's merge battery) | main b18a7b3 + lane/search 485921e, merged tree before the commit | dev-r, 24 logical; both lanes held to reading and writing; load not read (the probe printed nothing) | 32 | 293 / 293 / 293 | 312 / 314 / 317 | none | pass x3 |
+| 2026-11-27 | the search lane's round 3 into main (MT-03's settling-scan test; `ladder.cpp`'s tests-only store hook; the main loop's merge battery) | main 5e77028 + lane/search ae054fb, merged tree before the commit | dev-r, 24 logical; the engine lane's checks, the net lane and a mutation pass running beside it; load 2% before, 10% after | 32 | 293 / 293 / 293 | 315 / 312 / 312 | none | pass x3 |
+| 2026-11-24 | Round 3 of lane/search (the ladder's tests-only settling-store seam, `ladder.hpp`/`ladder.cpp`; no scanner, prover or search file) | lane/search 22d980e, inside its checks after the whole `--werror --test` run | dev-r, 24 logical; the engine lane's E12 work beside; load 9 / 13 / 20% before, 7 / 7 / 28% after | 32 | 293 / 293 / 293 | 313 / 312 / 317 | none | pass x3 |
 
 ## Environment
 
@@ -2702,7 +2707,7 @@ without widening with E2+E3}. All 8 use the default rules (R8).
 | Synchronous mode (H15) bit-reproducible | `mcts_synchronous_mode_is_bit_reproducible` (every `kConfig`), `ladder_synchronous_mode_is_bit_reproducible_with_the_wiring_on` (ply/flat), `capi_search_step_api_reproduces_the_cpp_search` (ply/flat/tree), the provers' one-thread tests (prover, Guard, Hunt), the Python step-loop tests | green |
 | Provers' proofs on constructed mates against the gate's references (caveat: E4's naive detector checks only the distance-1 mates) | Hunt: `hunt_proves_the_constructed_mates_and_exports_only_through_the_gate` (lines replayed to E4's checkmate), `hunt_claims_nothing_but_proofs_h37`. The settling scans' prover: `prover_constructed_mates_are_proven` (5 mates x both Q4 readings x both classes, E4's naive detector). The settling scans as wired: `ladder_hunts_mate_is_played_with_the_proof_channel_on`, `ladder_a_proof_whose_certificate_e4_rejects_never_enters`. The solver: `mcts_solver_agrees_with_the_brute_force_game_tree_under_both_q4_readings` (ply/flat). Certificates: `prover_lines_and_certificates_are_confirmed_by_e4_alone` | green, reading "the gate's references" as E4's gated detectors and the brute-force references; the solver's game-tree comparison leaves out the tree form (MT-01 adds it) |
 | The solver against df-pn and the oracles' mate verdicts (H41) | nothing on main | **waiting**: MT-01 (`mcts_solver_agrees_with_df_pn_*`, `t5d-solver-check`) and MT-02's engine side (`t5d-proof-records`) on `lane/engine`, not merged; MT-02's harness side - the records in the corpus, a quiet `golden --write` - waits for the user (issue 405 on that branch) and the quiet machine |
-| Proof export under TT churn (6f) | `ladder_settling_proofs_survive_tt_churn_6f` (the wired settling path, a 16-entry TT, mate in two); the retired scanner's churn test | **waiting**: MT-03 (`prover_proofs_survive_tt_churn_h19`, `prover_threads_survive_tt_churn`, `hunt_finds_its_mates_under_tt_churn`, with `long_` twins) on `lane/engine`; no Hunt churn test on main |
+| Proof export under TT churn (6f) | The prover: `prover_proofs_survive_tt_churn_h19`, `prover_threads_survive_tt_churn` (MT-03; `long_` twins). Hunt: `hunt_finds_its_mates_under_tt_churn` (`long_` twin; Hunt's working store - issue 403). The settling scans as wired: `ladder_settling_scans_keep_their_facts_in_the_stores_under_tt_churn_6f` (`long_` twin; the ladder's settling job, a 1- or 2-entry table, the root, its proof's continuation and sequences of related roots sharing the stores, each store's facts held to the game tree - issue 402's part 5, 2026-11-24) and `ladder_settling_proofs_survive_tt_churn_6f` (a 16-entry table, mate in two) | **green** on `lane/search` (round 3, 2026-11-24; green on main once it merges) |
 | Turn structure | The checker: a submit edge into a turn start, a move edge into a mid-action node (ply split and tree form); every flat edge into a turn start; moves made by edge kind; no game end during an action; no turn start a dead end; inherited nodes only under the tree form, never evaluated. `mcts_graph_dead_ends_have_no_legal_completion`, `mcts_graph_invariants_hold_in_random_searches` (the brute-force reference; ply split), `mcts_tree_form_keeps_the_turn_structure_and_prunes_dead_ends_unscored`, `mcts_tree_form_evaluates_exactly_where_a_gate_fires`, `mcts_flat_a_stopped_generator_is_never_proven_lost` (one root). Audit: `mcts_tree_form_dead_ends_have_no_legal_completion_in_random_searches` (both Q4 readings, the reference: 1,451 dead ends checked) and `mcts_flat_form_no_node_with_turns_still_to_generate_is_proven_lost` (every node of 78 flat searches) | green with the audit's tests |
 | The provers fully untrained, on the material estimate | by construction: the prover, Guard and Hunt take no evaluator; their only static input is `ProverOptions::values` (H50). `test_assets.cpp`, the ladder's asset-map test, `test_steering.py::test_the_ladder_is_on_by_default_and_its_proofs_withheld` | green (no test asserts it directly; none is needed while they take no evaluator) |
 
@@ -2982,9 +2987,8 @@ placeholders consolidated for the user".
   (M5-M8, L1, L4-L13) on `lane/search` now, phase 2 (merge main once `lane/engine`'s issue 406 is
   on it, reconcile the two deadline mechanisms - M2 - then H1, M1, M3, M4, L2, L3, and the
   reviewers' survivors re-run) on the main loop's word - all done, with a second review round, and
-  merged 2026-11-24; next MT-03's settling-scan part, through the ladder (main has only
-  `ladder_settling_proofs_survive_tt_churn_6f`: a 16-entry TT, one position), and the second
-  round's two weak tests (L1, L8).
+  merged 2026-11-24; MT-03's settling-scan part, through the ladder, and the second round's two
+  weak tests (L1, L8) merged the same day. Nothing left on the lane but the user's questions.
 - **Engine**, after the search lane's merge: register E12, the Gumbel root search, from the
   hand-over's plan (its experiment waits for I21's ranking).
 - **Gate** (`lane/gate`):
@@ -6859,6 +6863,24 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     solver searches (MT-01's df-pn check, `t5d-solver-check`, `t5d-proof-records`): with the
     proof channel on, its proofs entered the tree as injected proofs no solved subtree
     supports (four tests failed on the merged tree until then).
+    **Part 5 written (2026-11-24, `lane/search`, round 3):** the same test through the wired
+    settling path - `VerificationLadder`'s settling job, as the search asks it (full df-pn,
+    the settling class, the synchronous mode's one thread by nodes, the game's one prover
+    kept across its scans), its table cut to 1 or 2 entries
+    (`ladder_settling_scans_keep_their_facts_in_the_stores_under_tt_churn_6f`, and its
+    `long_` twin). The ladder's settling prover keeps its stores to itself and they list
+    nothing (a `ConcurrentSolvedStore`), so a TESTS-ONLY seam
+    (`VerificationLadder::use_settling_stores_for_tests`, synchronous mode only, before the
+    first scan) builds it over stores the test owns - the brief's "external solved and
+    disproof stores" - which the test holds to the game tree as MT-03's does (its checks moved
+    to `tests/test_store_checks.hpp`, unchanged). On the root (against the default table's
+    verdict and the references; H19 at the root; asked again in the next decision: answered
+    from the stores, nothing expanded), on its proof's continuation (the attacker's next turn
+    start after its first action and a defence, asked as a PV change's scan: proven from the
+    stores) and on sequences of related roots sharing the stores (consecutive turn starts of
+    random games, alternately a root's and a PV change's scan; each decided root asked again
+    after the sequence: answered from the stores). Measured: 2,040 roots under churn - 924 proven, 1,920 disproven, 210 unknown (2,838 confirmed by the references); 1,900 compared with the default table and asked again, all answered from the stores; 404 continuations and 944 sequence roots answered from them; 3,564 store entries held to the game tree, 3,542 confirmed and 22 beyond its budget (33 s); the long twin
+    (5.5 minutes): 4,894 roots - 2,622 proven, 4,284 disproven, 429 unknown; 4,608 compared and answered again; 556 continuations, 2,298 sequence roots; 7,852 store entries, 6,820 confirmed, 1,032 beyond the game tree's budget (13.1%).
 403. **Hunt exposes no store; H19 for Hunt is read as its working store** (§13.1 6f; §11.3;
     register H19, H43; brief MT-03 "conflicts with code"). `Hunt::hunt` builds a fresh
     prover with stores of its own and returns the proof, its line and certificate; nothing
@@ -12111,3 +12133,11 @@ entry changes in the same edit as its code, which the standing rule defers to up
     **For the main loop:** the clocked no-child order (S7: the clock's search before decision 13's
     witness) to confirm; issue 481 (the proof channel's solved root, and the unclocked loop's
     throw with no visited child) open; issues 480 and 482 are placeholders.
+- **2026-11-24 - Round 3 of `lane/search`** (the main loop's message after round 2's merge; issues
+  484-499 and edits 347-359 this round's block). Main merged first (M23).
+  - **(a) MT-03's part 5** (issue 402): 6f's TT-churn test through the wired settling path; the
+    ladder's tests-only store seam; MT-03's store checks shared (`test_store_checks.hpp`); the
+    done-means audit's "Proof export under TT churn (6f)" row now green on this lane.
+  - **(b) Round 2's two weak tests**: L1 on Guard's re-search under the model clock (work after the
+    timed run), L8 on Guard's capped scan on a test clock; each fix mutated back - L1's (the model clock's charge the timed run's work alone) KILLED by ladder_the_model_clock_charges_guards_research_with_the_decision, L8's (Guard's scan given guard_ms uncapped) KILLED by ladder_guards_scan_gets_no_more_than_the_hard_bound_leaves, each the other test passing, the file restored and rebuilt.
+  - **The checks.** Checks on 22d980e: engine 876 of 876 (`--werror`); the long twin added (`long_ladder_settling_scans_keep_their_facts_in_the_stores_under_tt_churn_6f`) passed, its figures as measured; the Lazy SMP test x3, owed by the ladder's seam (1 thread 293 each run, 5 threads 313 / 312 / 317; the engine lane's E12 work beside, load 9 / 13 / 20% before, 7 / 7 / 28% after - the table); verify ok (exit 0; its note of 17 problems in the required sets of the proof channel's tiers, which it does not fail on, as before); gate commit "oracle layer [commit]: ok", SMOKE TEST - PASSED (baseline 41 compared, 0 declined), proof channel DISABLED. No Python changed (no ruff or pytest owed); no truth source (the nightly not owed).

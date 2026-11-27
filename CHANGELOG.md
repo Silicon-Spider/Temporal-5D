@@ -10,6 +10,85 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-24 - Build log: the current state at the search lane's third round
+
+`docs/BUILD_LOG.md`: `lane/search`'s line under "Now" and "Work items, by lane" say round 3 merged.
+That is MT-03's settling-scan part and L1's and L8's tests. The lane is idle apart from the user's
+questions. The Lazy SMP timing log gains the merge battery's row.
+
+Spec: no part of the spec describes the build log's bookkeeping.
+
+### 2026-11-24 - Round 3 of lane/search, verified: the checks
+
+The round's two items (MT-03's part 5; round 2's two weak tests), checked on its final tree.
+Checks on 22d980e: engine 876 of 876 (`--werror`); the long twin added (`long_ladder_settling_scans_keep_their_facts_in_the_stores_under_tt_churn_6f`) passed, its figures as measured; the Lazy SMP test x3, owed by the ladder's seam (1 thread 293 each run, 5 threads 313 / 312 / 317; the engine lane's E12 work beside, load 9 / 13 / 20% before, 7 / 7 / 28% after - the table); verify ok (exit 0; its note of 17 problems in the required sets of the proof channel's tiers, which it does not fail on, as before); gate commit "oracle layer [commit]: ok", SMOKE TEST - PASSED (baseline 41 compared, 0 declined), proof channel DISABLED. No Python changed (no ruff or pytest owed); no truth source (the nightly not owed).
+
+Spec: none - checks and their record. No proposed edit; no measured figure.
+
+### 2026-11-24 - Round 2's two weak tests made strong: L1's charge and L8's capped Guard
+
+Round 2 left two LOW fixes without a test that tells the fix from its fault.
+- **L1** (the model clock charges a decision's whole work): its test was a decision with nothing
+  after its timed run, where the old charge and the new agree. Now
+  (`ladder_the_model_clock_charges_guards_research_with_the_decision`): Guard's experiment on the
+  model clock - the flat form, the favourite Rc5-a5 refuted by Black's mate in one, rejected and
+  searched again - so the one decision does work after its timed run; its charge equals the
+  decision's whole work at the plan's price, which the timed run's work alone (L1's fault) falls
+  short of. The plan is about one evaluation (a thousand actions left, no floor, the signals off),
+  so the timed run is the forced slices' two playouts: as Guard's own test holds its search to two,
+  the in-tree solver has not yet seen the mate (with more, it avoids the favourite and Guard has
+  nothing to refute).
+- **L8** (Guard's scan gets no more than the hard bound leaves) had no test. Now
+  (`ladder_guards_scan_gets_no_more_than_the_hard_bound_leaves`): the same experiment on a test
+  clock, asynchronous (the synchronous mode's scan is node-budgeted), batches of one leaf at 20 s a
+  leaf - the forced slices' two playouts spend the hard bound - so Guard runs, stops before its
+  first depth, refutes nothing, and the favourite is played; without the clock the same scan,
+  given guard_ms, refutes it (the premise).
+- Both beside Guard's own test in `test_ladder.cpp`, the proof channel on in these tests only.
+- Each fix mutated back: L1's (the model clock's charge the timed run's work alone) KILLED by
+  `ladder_the_model_clock_charges_guards_research_with_the_decision`, L8's (Guard's scan given
+  guard_ms, uncapped) KILLED by `ladder_guards_scan_gets_no_more_than_the_hard_bound_leaves` - each
+  the other test passing, the file restored and rebuilt after.
+
+Spec: none - tests (§8.6's hard bound as built, issue 458; Guard H42, offline). No proposed edit; no
+measured figure.
+
+### 2026-11-24 - 6f under TT churn through the wired settling path (MT-03's part 5)
+
+Section 13.1's 6f ("verify the proof-export invariant under TT churn for Hunt and the settling
+scans") for the settling scans as the ladder runs them - build-log spec issue 402's part 5, which
+waited on E10's merge. MT-03 drove the bare prover as a settling scan would; this drives the scan
+itself.
+- **The test** (`ladder_settling_scans_keep_their_facts_in_the_stores_under_tt_churn_6f`, and a
+  `long_` twin): `VerificationLadder`'s settling job - full df-pn (prove_only off), the settling
+  class, one thread by nodes (the synchronous mode), the game's one prover kept across its scans -
+  with its transposition table cut to 1 or 2 entries. On the root: the verdict against the default
+  table's and the references (Tally), H19 at the root (proofs in the solved store, disproofs or a
+  confirmed game fact in the disproof store), certificates confirmed by E4, the root asked again in
+  the next decision answered from the stores with nothing expanded. On the proof's continuation: the
+  attacker's next turn start after its first action and a defence, asked as a PV change's scan,
+  proven from the stores. On sequences of related roots sharing the stores (consecutive turn starts
+  of random games under every ruleset and both Q4 readings, alternately a root's and a PV change's
+  scan), each decided root asked again after the sequence and answered from the stores. A sample of
+  each solved store's facts held to the brute-force game tree (a Draw to E4's stalemate). Measured:
+  2,040 roots under churn - 924 proven, 1,920 disproven, 210 unknown (2,838 confirmed by the references); 1,900 compared with the default table and asked again, all answered from the stores; 404 continuations and 944 sequence roots answered from them; 3,564 store entries held to the game tree, 3,542 confirmed and 22 beyond its budget (33 s); the long twin (5.5 minutes): 4,894 roots - 2,622 proven, 4,284 disproven, 429 unknown; 4,608 compared and answered again; 556 continuations, 2,298 sequence roots; 7,852 store entries, 6,820 confirmed, 1,032 beyond the game tree's budget (13.1%).
+- **An engine change, tests only** (`t5d/ladder.hpp`, `ladder.cpp`):
+  `VerificationLadder::use_settling_stores_for_tests(proofs, disproofs)` builds the game's settling
+  prover over stores the test owns. The prover's own stores list nothing (a
+  `ConcurrentSolvedStore`; the disproof store has no listing at all), so without it no test could
+  hold the scans' stored facts to the game tree. Synchronous mode only (the scans then run on the
+  caller's thread), before the first scan; refused otherwise (tested). Nothing outside the tests
+  calls it, and it is no permanent store (H19, H23).
+- **MT-03's store checks** (`check_store`, `exports_hold`, `loss_confirmed`, `root_class`,
+  `stalemate_now`) moved unchanged from `test_prover.cpp` into `tests/test_store_checks.hpp`, shared
+  by both tests.
+- The build log's done-means audit: the "Proof export under TT churn (6f)" row is green on this
+  lane (the prover's, Hunt's and the wired settling scans' tests); issue 402 records part 5.
+
+Spec: §13.1 6f and §11.3 (H19), register H17 and H1 v3's settling scans - tested as built, nothing
+to propose. A ladder source changed (a tests-only seam): the Lazy SMP test runs at the round's end.
+No proposed edit; no measured figure for MEASUREMENTS (test counts only).
+
 ### 2026-11-24 - Build log: the current state at the search lane's merge
 
 `docs/BUILD_LOG.md`:
