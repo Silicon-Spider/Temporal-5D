@@ -10,6 +10,31 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-28 - Decision 7's review: the mutation pass's candidate tests adopted (TP-1)
+
+The mutation pass's 77 mutants left 14 real gaps. Its candidate tests kill all 14 and are adopted
+into `tests/net/test_cache_a5.py`, under names that say what they pin:
+- **S8:** test 1's `board_tokens` check compared `board_tokens` with itself (circular). It is now
+  pinned to the layout's board ranges.
+- **F3-F6, C9:** `test_the_flex_block_mask_is_lossless_under_a5`, A5's version of
+  `test_displacement.py`'s check. Every allowed pair's block is computed, at block sizes 2, 8 and 32,
+  with dense heads, with routing heads, and with no structure at all (flex's scope-only branch). Eager
+  flex on the CPU ignores the block mask, so the attention-paths test could not see a lossy one. Its
+  docstring now says it checks flex's mask function only, and points here.
+- **E2:** `test_transient_tokens_carry_the_global_inputs_with_no_global_registers`.
+- **V1, V2:** `test_the_engines_cached_evaluator_converts_strictly_after_a_relayout`. The relayout
+  then the A5 conversion, strict.
+- **B1, B2, B8:** `test_the_bench_counts_every_a5_token_once`. The live and frozen counts partition
+  the tokens, and the frozen count is the pieces and registers.
+- **B5:** `test_the_bench_reads_recorded_query_tokens`.
+- **K13:** `test_runs_cap_each_block_at_attn_block_boards`.
+- `test_the_fp8_forward_rounds_own_tokens_on_their_own_scale` is adopted too. It is a unit pin of
+  the FP8 rounding (M1 and M2, which the end-to-end FP8 test catches only through its tolerance).
+
+The re-run of the 14 gaps and of B4, B6 and B9 is in the next entry.
+
+Spec: §15.2 (the rows' tests); register A5, C17. No spec text changes.
+
 ### 2026-11-28 - Decision 7's review: the cache bench runs A5's jobs, an engine test checks what it claims, the cost probe's guard, the bench's process list (NC-1, NC-2)
 
 - **NC-1:** the cache bench now takes `piece_centric` through its four jobs, `run()` and the CLI

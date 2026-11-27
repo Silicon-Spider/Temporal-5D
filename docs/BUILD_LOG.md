@@ -12675,3 +12675,8 @@ entry changes in the same edit as its code, which the standing rule defers to up
     takes each live token once; the bench's process list names today's executables
     (`t5d-tests-long.exe` is gone). Checks: ruff clean; `test_cache_a5.py` with the new tests and the
     engine test, "65 passed, 1 deselected".
+  - **The candidate tests** (TP-1): the mutation pass's eight candidate tests adopted into
+    `test_cache_a5.py` (S8's circular check replaced; flex's block mask under A5 at three block sizes
+    and three structures; the no-global-register carry; the strict conversion after a relayout; the
+    bench's counts and `_queries`; `_runs`; the FP8 rounding's unit pin); the flex test's docstring
+    corrected. Checks: ruff clean; `test_cache_a5.py` with the engine test, "80 passed, 1 deselected".

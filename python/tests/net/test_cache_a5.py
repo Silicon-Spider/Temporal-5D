@@ -90,9 +90,11 @@ def test_the_transient_tokens_are_the_destinations_on_superseded_boards():
     assert np.all(tok["kind"][t] == 0) and np.all(tok["piece"][t] == 0) and np.all(tok["is_head"][t] == 0)
     head_dest = (tok["kind"] == 0) & (tok["piece"] == 0) & (tok["is_head"] == 1)
     assert head_dest.any() and not np.any(t & head_dest), "a destination on a head board is a head board's token"
-    for b in range(p.n_boards):
-        all_b, own_b = p.board_tokens(b), p.board_tokens(b, frozen=True)
-        assert set(all_b) - set(own_b) == set(np.flatnonzero(t)) & set(all_b)
+    offsets = p.layout.board_offsets
+    for b in range(p.n_boards):  # pinned to the layout's ranges (review TP-1, S8), not to board_tokens itself
+        whole = np.arange(int(offsets[b]), int(offsets[b + 1]))
+        assert np.array_equal(p.board_tokens(b), whole)
+        assert np.array_equal(p.board_tokens(b, frozen=True), whole[~t[whole]])
     assert not s.transient.any() and not collate([s]).transient.any()
 
 
@@ -279,7 +281,9 @@ def test_a5_cached_equals_one_full_pass_at_full_depth():
 def test_every_attention_path_is_one_function_under_a5(impl):
     """A5's block-causal forward through every attention implementation equals the block-sparse
     default (FP32, the summation order apart), with the structure's masks and biases on - the scope's
-    transient slot read by each path's own mask and, for flex, its block mask."""
+    transient slot read by each path's own mask; for flex, by its mask function. Eager flex on the
+    CPU computes every block whatever its block mask says (``flex.py``), so this test cannot see a
+    lossy block mask: ``test_the_flex_block_mask_is_lossless_under_a5`` checks that one."""
     flags = dict(routing_table=True, typed_edge_bias=True, board_pair_smolgen=True)
     base, other = _model(250, **flags), _model(250, attn_impl=impl, **flags)
     states = [_a5(_transient_root(5, n=10, timelines=4)), _a5(_transient_root(9, n=8, timelines=3))]
@@ -609,3 +613,150 @@ def test_the_cost_probe_computes_each_live_token_once():
         carrier = next(b for b in np.flatnonzero(~p.is_head) if p.transient[offsets[b] : offsets[b + 1]].any())
         probe = ev.live_pass(work, query_boards=[*heads, int(carrier)])
     assert probe.shape == full.shape and torch.isfinite(probe).all()
+
+
+# --- the mutation pass's gaps (review TP-1) -----------------------------------------------------------------
+
+
+def _transient_state(seed: int = 0, n: int = 16, timelines: int = 5, **kw):
+    """``_transient_root`` with ``synthetic_state``'s other arguments (register counts)."""
+    for s in range(seed, seed + 60):
+        state = synthetic_state(s, n, n_timelines=timelines, deep_travel_prob=1.0, **kw)
+        if _a5(state).transient.any():
+            return state
+    raise AssertionError("no synthetic position with a destination on a superseded board")
+
+
+def test_transient_tokens_carry_the_global_inputs_with_no_global_registers():
+    """With no global registers the acting colour and the turn state ride on the live board tokens
+    (issue 225's placeholder): a transient token is live, so under intrinsic frozen features its
+    embedding is still the dense scope's, bit for bit; a frozen token's is not. (The cached-against-
+    full tests cannot see this: both sides embed alike.)"""
+    model = _model(1, global_regs=0, regs_per_board=4)
+    p = _a5(_transient_state(3, regs_per_board=4, global_regs=0))
+    batch = collate([p])
+    t = batch.transient[0]
+    with torch.no_grad():
+        bc, dense = model.embed_tokens(batch, "block_causal")[0], model.embed_tokens(batch, "dense")[0]
+    assert t.any() and torch.equal(bc[t], dense[t])
+    frozen = batch.valid[0] & (batch.board[0] >= 0) & (batch.is_head[0] == 0) & ~t
+    assert not torch.allclose(bc[frozen], dense[frozen])
+
+
+def test_the_fp8_forward_rounds_own_tokens_on_their_own_scale():
+    """``model._frozen_kv_rounding`` under A5: every superseded board's own tokens are rounded with a
+    scale over those tokens alone (as ``compute_board``'s entries are stored), and the transient
+    tokens and the heads' tokens pass untouched. The transient tokens are made 100x larger, so a
+    scale that saw them would round the own tokens visibly coarser."""
+    from t5d.net.kvformat import fake_quantise
+    from t5d.net.model import _frozen_kv_rounding
+
+    p = _a5(_transient_root(4))
+    batch = collate([p])
+    t = batch.transient[0]
+    k = torch.randn(1, 4, batch.n_tokens, 8, generator=torch.Generator().manual_seed(0))
+    k[0, :, t] *= 100.0
+    rk, rv = _frozen_kv_rounding(batch, "fp8")(0, k, k.clone())
+    assert torch.equal(rk, rv)
+    assert torch.equal(rk[0, :, t], k[0, :, t]), "a transient token was rounded"
+    for b in range(p.n_boards):
+        own = torch.from_numpy(p.board_tokens(b, frozen=True))
+        if p.is_head[b]:
+            assert torch.equal(rk[:, :, own], k[:, :, own])
+        else:
+            assert torch.equal(rk[:, :, own], fake_quantise(k[:, :, own], "fp8")), b
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        dict(),
+        dict(routing_table=True, masked_head_registers="self"),
+        # No structure at all (no B15, B16 or masked heads): flex's scope-only branch, which reads
+        # ``BlockCausalScope.n_boards``.
+        dict(displacement_bias=False, status_key_bias=False, move_graph_heads=0),
+    ],
+    ids=["dense-heads", "routing-self", "no-structure"],
+)
+@pytest.mark.parametrize("block_size", [2, 8, 32])
+def test_the_flex_block_mask_is_lossless_under_a5(flags, block_size):
+    """``flex.board_block_mask`` under A5's block-causal scope covers the block of every allowed pair
+    - the mask function evaluated everywhere - on every head, at blocks small enough to separate a
+    transient token's block from its board's (``test_displacement.py``'s check runs A1 only). Eager
+    flex on the CPU computes every block, so the forward test above cannot see a lossy block mask."""
+    from t5d.net.attention import _block_mask
+    from t5d.net.flex import ScoreInputs, board_block_mask, make_mask_mod, materialise_mask
+
+    model = _model(250, layers=1, attn_impl="flex", **flags)
+    p = _a5(_transient_root(5, n=10, timelines=4))
+    batch = collate([p])
+    assert batch.transient.any()
+    length = batch.n_tokens
+    with torch.no_grad():
+        ctx = model.make_context(batch).for_layer(None, 0)
+    allowed = materialise_mask(make_mask_mod(ScoreInputs.from_context(ctx, 8)), 1, 8, length, length)
+    assert torch.equal(allowed, _block_mask(ctx, 0, length).expand_as(allowed))
+    dense_blocks = board_block_mask(ctx, 8, block_size).to_dense().bool()
+    n = -(-length // block_size)
+    padded = torch.zeros(1, 8, n * block_size, n * block_size, dtype=torch.bool)
+    padded[..., :length, :length] = allowed
+    needed = padded.reshape(1, 8, n, block_size, n, block_size).any(dim=(3, 5))
+    assert torch.all(dense_blocks | ~needed), "every allowed pair's block is computed"
+
+
+def test_the_engines_cached_evaluator_converts_strictly_after_a_relayout():
+    """``CachedNetworkEvaluator._fit``: a position of other register counts is re-laid out, then
+    converted to A5; the conversion is strict - an edge to a cell that is no A5 token is refused,
+    never silently dropped."""
+    from t5d.engine.evaluator import CachedNetworkEvaluator
+
+    model = _model(0, layers=1, regs_per_board=4)
+    ev = CachedNetworkEvaluator(CachedEvaluator(model))
+    s = synthetic_state(1, 8, n_timelines=3)
+    assert s.regs_per_board != 4
+    none = np.zeros((0, 3), dtype=np.int64)
+    fitted = ev._fit(replace(s, edges=none, opp_moves=none.copy()))
+    assert fitted.piece_centric and fitted.regs_per_board == 4
+    assert to_piece_centric(s, strict=False, return_dropped=True).dropped_edges > 0
+    with pytest.raises(ValueError, match="strict=True"):
+        ev._fit(s)
+
+
+def test_the_bench_counts_every_a5_token_once():
+    """``cache_bench._conditions`` under A5: the live set (the heads' tokens, the transient tokens,
+    the global registers) and the superseded boards' own tokens (pieces and per-board registers -
+    counted here from the boards, not from ``board_tokens``) partition the position's tokens."""
+    from t5d.net.cache_bench import _conditions, _setup
+
+    for seed in range(20):
+        model, state = _setup(16, 5, "fp32", "block_causal", seed, piece_centric=True, n_layers=1)
+        if state.transient.any():
+            break
+    else:
+        raise AssertionError("no bench position with a transient token")
+    cond = _conditions(model, state)
+    frozen = [b for b in range(state.n_boards) if not state.is_head[b]]
+    own = sum(int((state.piece[b] != 0).sum()) + state.regs_per_board for b in frozen)
+    assert cond["frozen_tokens"] == own
+    assert cond["live_tokens"] + cond["frozen_tokens"] == state.n_tokens
+
+
+def test_the_bench_reads_recorded_query_tokens():
+    """``cache_bench._queries``: a job record's exact per-board query tokens win over A1's per-board
+    length; a record without them is A1's."""
+    from t5d.net.cache_bench import _queries
+
+    assert _queries({"supersession_query_tokens": [3, 5], "supersession_key_tokens": [30, 50]}, 66) == [3, 5]
+    assert _queries({"supersession_key_tokens": [30, 50]}, 66) == [66, 66]
+
+
+def test_runs_cap_each_block_at_attn_block_boards():
+    """``cache._runs`` (rewritten for A5's boards of unequal length): runs of consecutive boards, at
+    most ``max_boards`` boards each, split where boards are not adjacent - counted as boards, not
+    tokens."""
+    from t5d.net.cache import _runs
+
+    boards = [(0, 10), (10, 13), (13, 30), (30, 31), (40, 50), (50, 52)]
+    assert _runs(boards, 2) == [(0, 13), (13, 31), (40, 52)]
+    assert _runs(boards, 3) == [(0, 30), (30, 31), (40, 52)]
+    assert _runs(boards, 1) == boards
