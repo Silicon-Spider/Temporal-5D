@@ -135,10 +135,9 @@ def test_cached_equals_one_full_pass_on_random_play():
 
 def test_f1_cached_on_a_real_position():
     """F1 as shipped but block-causal (BF16 trunk): cached against the BF16 full pass, at the
-    BF16 bounds of tests/net/test_cache.py - about 4x the gaps measured here on these positions
-    (3 seeds; re-measured after F5 and F6, before B15's table, F6's Mish in the heads and M20's
-    defaults changed the network - not re-measured since): trunk RMS 2.0e-3 / max 1.4e-2, policy
-    8.0e-3, value 1.1e-3."""
+    BF16 bounds of tests/net/test_cache.py - 3.1-4x the gaps measured on the finished v1 over
+    these positions and MT-04's three variants (``test_cached_variants.py``; model seeds 0-2,
+    2026-11-28): trunk RMS 2.0e-3 / max 1.2e-2, policy 9.5e-3, value 1.4e-3."""
     model = build_model(NetConfig(attn_scope="block_causal"), seed=0).eval()
     cached = CachedEvaluator(model)
     positions = _record_positions("cross_timeline")

@@ -831,7 +831,13 @@ pushed after every commit, taking main by merge, never rebase (re-check with `gi
   the block-causal scope and the cache, never cached; issue 252 settled, readings issue 276, edit
   386); its three-pass review's fix round made (2026-11-28: SN-1 to SN-8, NC-1, NC-2, TP-1; issue
   277; 17 of 17 targeted survivors killed) - **merged 2026-11-28**, with the main loop's battery on
-  the merged tree. For the user: issue 276's readings (a) and (f), issue 277. **C26/C27 merged 2026-11-24** with their review fixes: the root
+  the merged tree. For the user: issue 276's readings (a) and (f), issue 277. **Step 2's re-run, part 2,
+  2026-11-28** (section 15.2's rows 1 and 11 on the finished v1, every geometry, both depths; the F1
+  probe): every bound holds but the FP8 cache at FP32 resolution at 16 layers - attributed to rounding
+  flips; decided by the main loop as (a) and (c): the 2-layer bound kept, the rounding asserted exactly
+  at 16 layers (issue 278, for the user to review); row 16 left (optional) - **merged 2026-11-28**, with
+  the main loop's battery on the merged tree. The lane is idle; A5's cached-node bench run is the
+  quiet-machine block's (issue 266). **C26/C27 merged 2026-11-24** with their review fixes: the root
   refresh anchored at the root leaf's input (issue 259), the phase form behind its flag, refresh
   and supersession inside a turn in the search-tree fixture, the engine path refusing node
   refreshes, the K/V store dropping past root refreshes (issue 273 resolved), the start shortcut
@@ -840,9 +846,7 @@ pushed after every commit, taking main by merge, never rebase (re-check with `gi
   cached path to a carried dense-made node (probed: 3 of 6 searches), against section 7.10's
   "transpositions never mix a dense and a cached evaluation of one state": (a) section 8.7's
   carry covers it, or (b) the strict reading, and the engine drops or re-evaluates the carried
-  nodes' table entries at the crossing. Issue 269 stays the user's question. Next, on the main
-  loop's word (given at decision 7's merge): the v1 re-run of §15.2's network rows (the audit's
-  list), before the quiet-machine block.
+  nodes' table entries at the crossing. Issue 269 stays the user's question.
 - G9, the bounded AMD attempt - done (`lane/gate`, merged 2026-10-23): it partly works -
   the network on the RX 9070 XT (ROCm 10.1.0, torch 2.14.0, `build/venv-rocm`) matches the
   CPU and drives the search through the C API; torch.compile does not run (no Windows
@@ -2479,7 +2483,7 @@ The protocol (section 15.2) asks for:
 
 | # | Row | Register | Verdict | What remains |
 |---|---|---|---|---|
-| 1 | Cached attention = dense under the same mask | C2, C17 | green, short | Re-measure the FP32 and BF16 bounds on the finished v1 network (net lane, step 2's re-run) |
+| 1 | Cached attention = dense under the same mask | C2, C17 | green (re-measured on the finished v1, 2026-11-28) | - |
 | 2 | Windowed = full restricted to W ∪ E | C5 | deferred with the window (M18) | - |
 | 3 | Lazy K/V = eager recompute | C10 | deferred with the window | - |
 | 4 | Supersession recompute = from scratch | C20 | green | - |
@@ -2489,7 +2493,7 @@ The protocol (section 15.2) asks for:
 | 8 | Same state + epoch -> same evaluation; MCGS transposition hits identical | C19-C21 | green | - |
 | 9 | Incremental Zobrist = from scratch, duplicated boards | H18 | green (short of every variant before the audit's test) | - |
 | 10 | ~~NNUE accumulator = recompute~~ | F4 | void: the NNUE is retired (CHECKPOINT 9) | - |
-| 11 | FP8/BF16 cache precision = live precision | G1 | green, short | Adversarial geometries in BF16 and FP8, and bounds re-measured on v1 (net lane) |
+| 11 | FP8/BF16 cache precision = live precision | G1 | green (re-measured on the finished v1, every geometry, 2026-11-28) | - (the FP8 cache at FP32 resolution: bounded at 2 layers, asserted exactly at 16 - issue 278, decided by the main loop, for the user to review) |
 | 12 | Displacement bias through the score function = materialised | B15 | green | - |
 | 13 | Key-side Shaw term, gather = direct per pair | B17 | green | - |
 | 14 | Colour-swapped mirror: identical canonical inputs and outputs | A7 | green (read as issue 304 says) | - |
@@ -2501,9 +2505,9 @@ The protocol (section 15.2) asks for:
 
 **Count.** 19 rows:
 - green: 14 rows (1, 4, 5, 8, 9 and 11-19), and rows 6 and 7 on `lane/net` (2026-11-08/09). Of
-  these, five are short of the protocol as named:
-  1, 5, 11, 15 and 16. That count holds once `lane/audit`'s tests (3364c95) are merged; on main
-  today rows 9, 17 and 19 are short as well, giving 1, 5, 9, 11, 15, 16, 17 and 19.
+  these, three are short of the protocol as named:
+  5, 15 and 16 (rows 1 and 11 were too until step 2's re-run on the finished v1, 2026-11-28; rows
+  9, 17 and 19 until `lane/audit`'s tests, 3364c95, merged on 2026-11-08).
 - deferred: 2 rows (2, 3).
 - void: 1 row (10).
 - waiting: 2 rows (6, 7) - both built on `lane/net` since. Both are low priority by the user's
@@ -2537,10 +2541,14 @@ The protocol (section 15.2) asks for:
      - FP32: 2e-5 on the trunk and 1e-4 on the heads; bitwise where both paths compute in the
        same order.
      - BF16: bounds 2.7-8x the largest gaps measured at 2 layers, seeds 0-2.
-   - **Short:** `test_cache.py`'s docstring says the gaps were last measured after F5 and F6
+   - ~~**Short:** `test_cache.py`'s docstring says the gaps were last measured after F5 and F6
      (2026-10-17), not since B15's table, F6's Mish in the heads and M20's defaults changed
      the network. This is step 2's "section 15.2 re-run on the finished v1 network". The
-     every-switch sets also run on one seed.
+     every-switch sets also run on one seed.~~ **Done 2026-11-28 (step 2's re-run, part 2):**
+     re-measured on the finished v1 at 2 and 16 layers on every geometry (MEASUREMENTS, "Section
+     15.2's network rows on the finished v1"): the FP32 trunk at most 2.4e-6 at 2 layers and
+     3.3e-6 at 16 (bound 2e-5, 6.0x), the heads 2.0e-6 (1e-4); every bound holds. The every-switch
+     sets run three seeds (3, 0, 1; measured over 0-4: trunk 1.9e-6, heads 1.8e-6).
 2. **Windowed (C5)** and 3. **lazy K/V (C10)**: deferred with the window. Section 15.2 marks
    them so (M16, M18). `test_model.py::test_later_stage_flags_raise` pins `history_window` as
    not built.
@@ -2647,7 +2655,8 @@ The protocol (section 15.2) asks for:
 11. **Cache precision (G1).**
     - `test_cache.py`: `test_bf16_cache_is_the_live_precision`, `test_fp8_cache_equals_the_fp8_network`,
       `test_fp8_cache_equals_the_fp8_network_at_fp32_resolution`,
-      `test_the_fp8_network_is_a_bounded_approximation_of_match` and `test_kv_memory_accounting`.
+      `test_the_fp8_network_is_a_bounded_approximation_of_match`, `test_kv_memory_accounting` and,
+      at 16 layers (slow), `test_fp8_cache_rounds_exactly_as_the_fp8_network_at_full_depth` (issue 278).
     - `test_quant.py`: `test_the_cache_with_fp8_frozen_kv_and_fp8_projections` and
       `test_the_cache_takes_linear_only_fp8_and_refuses_quantised_attention`.
     - `test_qat.py::test_qat_forward_is_the_inference_format` (G8: QAT's forward is the served
@@ -2657,15 +2666,35 @@ The protocol (section 15.2) asks for:
         "cross_timeline" game's `positions[2:]`). It is not marked slow, and its frozen boards
         include a duplicated pair.
       - MT-04 covers three variants (slow).
+      - Re-measured on the finished v1 over both, model seeds 0-2 (2026-11-28; MEASUREMENTS, "F1
+        on engine positions under the cached configuration"): trunk RMS 2.0e-3 / max 1.2e-2,
+        policy 9.5e-3, value 1.4e-3 - the bounds 3.1x or more above; with FP8 frozen K/V (no test
+        asserts it on engine positions) RMS 4.5e-3, 1.8x inside `test_cache.py`'s FP8 bound.
     - Mostly seeds 0-2 and 2 layers, BF16 bounds as in row 1. The exceptions:
       `test_the_fp8_network_is_a_bounded_approximation_of_match` and both `test_quant.py`
       cache tests use seeds 0-1, and `test_kv_memory_accounting` runs 3 layers.
-    - **Short** (details corrected 2026-11-02):
-      - Duplicated boards reach BF16, cached against live, through the F1 test above.
-      - Deep travel and many timelines never reach it: the BF16 store test compares cached
-        with cached.
-      - FP8 runs on the "standard" geometry only.
-      - The bounds have not been re-measured on v1 (as row 1).
+    - ~~**Short** (details corrected 2026-11-02):~~
+      - ~~Duplicated boards reach BF16, cached against live, through the F1 test above.~~
+      - ~~Deep travel and many timelines never reach it: the BF16 store test compares cached
+        with cached.~~
+      - ~~FP8 runs on the "standard" geometry only.~~
+      - ~~The bounds have not been re-measured on v1 (as row 1).~~
+    - **Done 2026-11-28 (step 2's re-run, part 2):** `test_bf16_cache_is_the_live_precision`,
+      `test_fp8_cache_equals_the_fp8_network` and `test_the_fp8_network_is_a_bounded_approximation_of_match`
+      run on all seven geometries (duplicated boards, deep travel, many timelines, 5x5, even start,
+      the register arm). Re-measured on the finished v1 at 2 and 16 layers (MEASUREMENTS, "Section
+      15.2's network rows on the finished v1"): every bound holds by 2.0x or more, the BF16 cache
+      as accurate as the live pass at both depths, FP8 under the BF16 trunk (the v1's configuration)
+      2.0x inside at 16 layers.
+    - **Issue 278, decided by the main loop (a) and (c), for the user to review:**
+      `test_fp8_cache_equals_the_fp8_network_at_fp32_resolution` is unchanged and holds at 2 layers
+      on every geometry over 12 seeds; at the v1's 16 layers the FP8 rounding flips compound past its
+      bounds (attributed: flips alone, no defect), and a bound measured on them would sit at mutant
+      M14's own level. So at 16 layers the rounding is asserted exactly instead:
+      `test_fp8_cache_rounds_exactly_as_the_fp8_network_at_full_depth` (slow; small_board and deep
+      travel) - each path's scale its own slice's, each path's rounding exact, the cache's self-read
+      its stored codes, every differing code straddled, FP32 noise bounding the rest. It fails M14
+      (assertion 3) and a cache scale over every head (assertion 1).
     - By design, not missing: the cache refuses a network whose attention is quantised (G2's
       `trunk_quant_attention`; issues 238 and 239, C2 deferred). So the matching rule with an
       FP8 attention trunk waits with C2.
@@ -2963,12 +2992,14 @@ placeholders consolidated for the user".
          position in check.
      - E11, time management, and E8 behind its flag (`lane/search`) are section 15.1 Phase 2
        items, not legality.
-2. **"Every equivalence test green"** - 14 of 19 rows green (1, 5, 11, 15 and 16 short, once
-   `lane/audit`'s tests are merged); 2 deferred, 1 void, 2 waiting (above).
+2. **"Every equivalence test green"** - 14 of 19 rows green (5, 15 and 16 short; 1 and 11 no
+   longer since step 2's re-run, 2026-11-28); 2 deferred, 1 void, 2 waiting (above).
    - What remains:
      - the C26 and C27 rows (low priority, `lane/net`) - *required: decision 16, ruled 2026-11-23, reading (a);
        merged 2026-11-24, with A5's rows since decision 7 (2026-11-28)*;
-     - step 2's re-run of every row on the finished v1 network, with the bounds re-measured;
+     - step 2's re-run of every row on the finished v1 network, with the bounds re-measured -
+       *rows 1 and 11 done 2026-11-28; the FP8 cache at FP32 resolution at 16 layers open (issue
+       278)*;
      - section 15.4's missing clauses, MT-01 to MT-03, merged from `lane/engine`;
      - issue 535's fix (section 15.4's virtual-loss invariant is not green while it is open).
    - Section 15.5 does not name section 15.4. The brief and this audit read it as required
@@ -3058,8 +3089,11 @@ placeholders consolidated for the user".
     2026-11-28);
   - step 2's re-run of every row on the finished v1 network: re-measure the FP32, BF16 and
     FP8 bounds (rows 1 and 11), BF16 and FP8 on the adversarial geometries, and more seeds
-    for the every-switch sets;
-  - optional: D4's constructed travel turns (row 16).
+    for the every-switch sets - *done 2026-11-28 (part 2), with the FP8 cache at FP32 resolution
+    at 16 layers left open (issue 278, the main loop's decision)*;
+  - optional: D4's constructed travel turns (row 16) - *left: not cheap enough for part 2's
+    budget (constructed turns for a move between two present boards, a rewinding branch and J6
+    twins need positions built by hand); still optional*.
 - **Search** (`lane/search`): E11 and E8 built (6bdd838, f974d0c) and reviewed (faaa64e..f974d0c:
   1 HIGH, 8 MEDIUM, 13 LOW); the review's fixes in two phases, as the main loop decided - phase 1
   (M5-M8, L1, L4-L13) on `lane/search` now, phase 2 (merge main once `lane/engine`'s issue 406 is
@@ -5770,6 +5804,81 @@ superseded or made moot says so; nothing is deleted.
     already do across batches (issue 262). Not fixed (the main loop's decision). For the user: whether
     A5's purity row is read to the summation order, or A5's blocks are made board-aligned per position
     (a cost on the block-sparse selection, issue 249).
+278. **Row 11's FP8 cache at FP32 resolution has no discriminating bound at the v1's 16 layers: its
+    rounding flips compound with depth to mutant M14's level** (§15.2's G1 row and its protocol;
+    register G1, C15, C17; step 2's re-run, part 2; MEASUREMENTS, "Row 11's FP8 cache at FP32
+    resolution at the v1's 16 layers"). **Decided by the main loop (2026-11-28): (a) and (c), built;
+    (b) not built. For the user to review.**
+    - **Found:** `test_fp8_cache_equals_the_fp8_network_at_fp32_resolution` (2 layers, standard
+      geometry, seeds 0-2) bounds the FP8 cache against the FP8 network's forward under the FP32
+      trunk at trunk RMS 4e-4, value 5e-5, policy 5e-3 - measured on the flips at 2 layers, as
+      section 15.2's protocol says. At the v1's 16 layers (small_board, seed 0) the gap is trunk
+      RMS 6.1e-4 and value 2.0e-4: over both. The run stopped there and reported (the stop rule).
+    - **Attributed (the main loop's steps 1-2): the flips alone, no defect.** At every quantisation
+      point of the cached path, per layer, both paths round exactly their own inputs, under scales
+      taken from the same slice (relative difference 1.7e-7 at layer 0), and every one of the
+      64,502 differing codes has its two inputs on either side of the codes' midpoint. The first
+      flips (layer 1: 4) come from FP32 differences of at most 2.7e-7; each layer adds 4-85 more
+      tipped by FP32 noise, and the rest are tipped by inputs earlier flips moved - 1.2% of the codes
+      differ in layer 15. With FP8 rounding the identity on both paths and all else equal, the
+      outputs fall to trunk RMS 2.6e-7 / max 2.0e-6, row 1's FP32 level.
+    - **The flip gap at 16 layers** (7 geometries x 12 seeds, 504 nodes): trunk RMS at most 9.7e-4,
+      value 3.3e-4, policy 8.4e-3 - against 1.4e-4, 3.3e-5 and 2.5e-3 at 2 layers on the same
+      cases, where the 2-layer bounds hold (2.8x, 1.5x, 2.0x).
+    - **Not committed: the 16-layer test.** The test's docstring sets its trunk bound 5x above the
+      largest flip gap: about 5e-3 at 16 layers. M14 (a frozen board reading its own K/V unquantised)
+      gives trunk RMS 5.1e-3 at its smallest node and 7.6e-3 at its largest at 16 layers - 1.0-1.5x
+      that bound, where the main loop required about 3x. M14's gap does not grow with depth (5.1-8.0e-3
+      at 2 layers), the flips' grows 7x, and the two are 5.3x apart at 16 layers (36x at 2): no bound
+      can sit 5x above the one and 3x below the other. By the main loop's instruction the 16-layer
+      test is not committed and the 2-layer test and its bounds are unchanged.
+    - **Section 15.2's protocol** reads the flips as rare ("agree up to rare rounding flips"). At 2
+      layers they are; at 16 they are not (1.2% of a layer's codes). Proposed edit 419, after the
+      decision below.
+    - **For the main loop, then the user:** how row 11's FP32-resolution check covers the v1's depth.
+      Options seen here, none measured: (a) keep it at 2 layers, where a flip bound discriminates
+      (13x on M14), and let the 16-layer FP8 configuration the v1 serves - FP8 K/V under the BF16
+      trunk - stand on its BF16-resolution test, which holds at 16 layers by 2.0x; (b) a 16-layer
+      test against a self-calibrated reference - the cache's distance from the forward set against
+      the forward's distance from itself under another summation order (another batch or thread
+      count), as the BF16 test sets the cache against the live pass; (c) compare the cache's stored
+      codes with the forward's layer by layer (the flips' counts per layer are in the MEASUREMENTS
+      entry; M14's are not measured).
+    - **The main loop's decision (2026-11-28): (a) and (c) together; (b) not built.** Why: the
+      attribution shows the arithmetic exact but for midpoint straddles - every differing code
+      straddled, both paths' scales from the same slice, each path rounding exactly its own inputs,
+      0 exceptions each. Those are what row 11 protects, and a test asserting them is exact at any
+      depth, catches M14 by construction (the self-read would differ from the stored codes times
+      their scale) and sets no bound on the flips: it strengthens row 11 rather than loosening it.
+      (a): the 2-layer bound test stays exactly as it is. The figures beside the decision:
+
+      | Trunk RMS, the largest over 504 nodes (7 geometries x 12 seeds) | 2 layers | 16 layers |
+      |---|---|---|
+      | Flips (the cache against the FP8 forward, FP32 trunk) | 1.43e-4 | 9.67e-4 |
+      | M14, its smallest node | 5.11e-3 | 5.14e-3 |
+      | M14's smallest over the flips' largest | 36x | **5.3x** |
+      | The 2-layer test's bound | 4e-4 | - |
+
+    - **Built, (c):** `test_fp8_cache_rounds_exactly_as_the_fp8_network_at_full_depth` in
+      `python/tests/net/test_cache.py` (slow; 16 layers, FP32 trunk, FP8 frozen K/V, block-causal;
+      small_board and deep travel, seed 0, every node of a 6-node tree). At every layer, frozen
+      board, K and V it asserts: (1) each path's scale is its own slice's (the board's own tokens,
+      the layer, K or V, a head), and before the first flip the two agree to FP32 noise; (2) the
+      forward's rounded values are its codes times its scale, and it rounds no live token; (3) the
+      cache's stored codes are the rounding of its inputs, and a board's self-read in
+      `compute_board` (the K/V its queries attend to, taken from its attention calls) is those codes
+      times its scale; (4) every differing code has its two inputs on either side of the codes'
+      midpoint, and up to the first layer with a flip the inputs - those behind each first flip
+      among them - differ by FP32 noise; (5) the control, FP8 rounding the identity: the inputs
+      differ by FP32 noise at every layer. The noise bound, 4e-6 relative (34 FP32 ulps), is 5x the
+      largest noise measured on three geometries (the control's 7.8e-7; before the first flip, the
+      scales 5.1e-7 and the inputs 4.8e-7; behind a first flip 1.5e-7, 2.7e-7 absolute). Given
+      (1)-(3) a differing code straddles by arithmetic, so (4)'s straddle guards the comparison and
+      its noise bound, with (5), is what says the paths differ only in summation order. Run time at
+      12 threads: 7.4 s and 17.3 s. Mutants re-made and reverted: M14 fails (3) - ("the cache's
+      self-read is not its stored codes", ('small_board', 0, 0, 'K'), 1); the cache's stored scale
+      taken over every head (`kvformat.quantise_fp8`) fails (1) - ("the cache's scale is not its own
+      slice's", ('small_board', 0, 0, 'K'), 1). Section 15.2's protocol: proposed edit 419.
 <!-- A new list, so that the numbers from 140 render as written. -->
 
 140. **M22's "optional moves played" is undefined** (§8.2 "Measure first", §15.1's
@@ -11708,6 +11817,34 @@ entry changes in the same edit as its code, which the standing rule defers to up
      register and the code together". Why: the user ruled on 2026-11-23 that the 23 decisions are
      rulings the build builds on, and no edit carried that into the register (found by the main
      loop's consolidation of the user's questions, 2026-11-28).
+418. **Section 15.2's protocol: the tolerances matched to the arithmetic, as measured on the untrained
+     v1** (M4; step 2's re-run, part 2; MEASUREMENTS, "Section 15.2's network rows on the finished
+     v1"). Where: section 15.2, the protocol paragraph, after "numerical tolerance for BF16/FP8".
+     Says now: the kinds of tolerance, and no figure - section 15.2 has no estimate to write over.
+     Should say (added): "(Measured on the untrained v1 with the cached configuration, 2026-11-28,
+     the cached path against the full pass on every adversarial geometry: FP32, at most 3.3e-6 on
+     the unit-scale trunk output at 16 layers; BF16, the BF16 full pass's own distance from FP32,
+     RMS 2.3e-3, the cached and live passes within RMS 2.0e-3 of each other; FP8 frozen K/V under
+     the BF16 trunk, RMS 3.9e-3 from the FP8 network's own forward. The tests' bounds sit 2x or
+     more above these.)" Why: M4 - the protocol names a tolerance matched to the arithmetic, and these
+     are what it is on the finished v1; the bounds the tests assert are measured against them.
+419. **Section 15.2's protocol: FP8 flips are rare at shallow depth only, and at depth row 11's
+     FP32-resolution check is exact** (issue 278, decided by the main loop (a) and (c), for the user
+     to review; register G1, C15; MEASUREMENTS, "Row 11's FP8 cache at FP32 resolution at the v1's 16
+     layers"). Where: section 15.2, the protocol paragraph. Says now: "under FP8, paths that differ
+     only in summation order agree up to rare rounding flips, a last-bit difference across an FP8
+     midpoint being a whole FP8 step, so their tolerance is measured on the flips". Should say:
+     "under FP8, paths that differ only in summation order agree up to rounding flips, a last-bit
+     difference across an FP8 midpoint being a whole FP8 step. The flips are rare at shallow depth
+     only - they compound, each moving the inputs of the layers above it: on the untrained v1, 4
+     codes differ at layer 1 and 1.2% of the codes at layer 15 of 16 - so a tolerance measured on
+     the flips holds at the depth it was measured at (2 layers for row 11). At depth, row 11's
+     FP32-resolution check is exact on the arithmetic instead: each path's FP8 scale its own slice's,
+     each path's rounding exact, every code that differs between the paths straddled by its two
+     inputs, and FP32 noise bounding the inputs up to the first flip - no bound set on the flips."
+     Why: at the v1's 16 layers the flip gap reaches a mutant's (M14, 5.3x apart against 36x at 2
+     layers), so "rare" and a flip tolerance hold at shallow depth only; the exact check is what the
+     build asserts there (`test_fp8_cache_rounds_exactly_as_the_fp8_network_at_full_depth`).
 
 ## Session log
 
@@ -12753,3 +12890,33 @@ entry changes in the same edit as its code, which the standing rule defers to up
     **For the user:** issue 276's open readings (a) and (f), and issue 277, the A5 batch drift.
     **For the main loop:** edit 386 (completed) upstream; the cache bench's A5 run in the
     quiet-machine block (issue 266); part 2, the v1 re-run, on the main loop's word.
+- **2026-11-28 - Step 2's re-run, part 2: section 15.2's network rows on the finished v1**
+  (`lane/net`; main 453ba11 merged first, M23; the main loop's brief: rows 1 and 11 re-measured, BF16
+  and FP8 on the adversarial geometries, more seeds for the every-switch sets, the F1 probe, row 16
+  optional; the stop rule - a result within 10% of its bound, or over it, is reported first).
+  - **The stop, and its attribution** (issue 278). The FP8 cache at FP32 resolution, probed at the
+    v1's 16 layers, was over the 2-layer test's trunk and value bounds; the run stopped and reported.
+    The main loop's decision: attribute it first. Attributed: FP8 rounding flips alone, compounding
+    with depth - both paths round exactly their own inputs under scales from the same slice, every
+    differing code straddles the midpoint of its inputs, and with the rounding the identity the gap
+    falls to row 1's FP32 level. The flip gap measured at 16 layers over 7 geometries x 12 seeds;
+    mutant M14 beside it is only 5.3x above it, so a bound set by the test's own policy would not
+    catch M14 and no 16-layer test is committed (the main loop's instruction). MEASUREMENTS, "Row
+    11's FP8 cache at FP32 resolution at the v1's 16 layers". **For the main loop, then the user:**
+    issue 278.
+  - **Rows 1 and 11 re-measured on the finished v1** (2 and 16 layers, every geometry; MEASUREMENTS,
+    "Section 15.2's network rows on the finished v1"): every bound holds by 1.4x or more but the one
+    above. The tests extended: BF16, FP8 and FP8 against "match" on all seven geometries, the
+    every-switch sets on seeds 3, 0 and 1; no bound changed. The audit's rows 1 and 11 no longer
+    short; row 16's constructed turns left (optional). Edit 418 (M4).
+  - **F1 on engine positions** (MEASUREMENTS, "F1 on engine positions under the cached
+    configuration"): F1 (BF16, 16 layers) cached against the full pass on `test_network.py`'s
+    record and MT-04's three variants, model seeds 0-2 - trunk RMS 2.0e-3, policy 9.5e-3, the bounds
+    3.1x or more above; with FP8 frozen K/V, RMS 4.5e-3 (1.8x inside `test_cache.py`'s FP8 bound).
+    `test_f1_cached_on_a_real_position`'s docstring carries the figures.
+  - **Issue 278 decided by the main loop: (a) and (c), built; (b) not built.** The 2-layer bound test
+    unchanged; at 16 layers a new slow test asserts the FP8 rounding exactly, layer by layer
+    (`test_fp8_cache_rounds_exactly_as_the_fp8_network_at_full_depth`: same-slice scales, exact
+    rounding on both paths, the self-read equal to the stored codes, every differing code straddled,
+    FP32 noise to the first flip, the control). It fails M14 and a cache scale over every head, both
+    re-made and reverted. Edit 419 (section 15.2's protocol). Still for the user to review.

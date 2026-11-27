@@ -2371,3 +2371,206 @@ changes is when a board is computed - at the next evaluated node, once per board
 epoch - and how many: a board superseded inside a turn and never read by an evaluated node (an
 eager entry the turn's next evaluated nodes do not read, as after the present moves under the
 current frozen features) is never computed.
+
+### Row 11's FP8 cache at FP32 resolution at the v1's 16 layers - rounding flips compounding with depth, attributed (numerics; no threshold, no verdict)
+
+**What it is.** `python/tests/net/test_cache.py`'s `test_fp8_cache_equals_the_fp8_network_at_fp32_resolution`
+bounds the FP8 cache against the FP8 network's own forward under the FP32 trunk - section 15.2's "under
+FP8, paths that differ only in summation order agree up to rare rounding flips ... so their tolerance
+is measured on the flips" - at trunk RMS 4e-4, value 5e-5, policy 5e-3, measured at 2 layers. The
+re-run of rows 1 and 11 (the entry below) found it over those bounds at the v1's 16 layers. This entry
+is the attribution the main loop asked for (BUILD_LOG issue 278): whether the gap is flips alone or a
+defect in where the cached path quantises, the flip gap measured at 16 layers, and mutant M14 measured
+beside it.
+
+**Conditions.** 2026-11-28, machine `dev-r` (this run's probes, two at a time), PyTorch 2.13.0+cpu,
+Python 3.14.7, NumPy 2.5.2, `lane/net` at main 453ba11 (the network code of d470681); FP32 trunk, FP8
+frozen K/V, `NetConfig()`'s v1 under the block-causal scope, 16 layers (and 2 for the comparison);
+random weights at initialisation scale. Cases: `test_cache.py`'s seven geometries, model seed = tree
+seed, a random 5-move path from each root (`_trees`), every node's cached evaluation against the
+forward, under `torch.no_grad()`. 12 torch threads, except the 2-layer sweeps (8, run beside the 16-layer ones): the flips
+depend on the summation order and so on the thread count - the same 2-layer case (small_board, seed 0)
+gave a policy gap of at most 1.9e-4 at 12 threads and 2.5e-3 at 8.
+
+**1. The attribution** (16 layers, small_board, seed 0 - the worst case of the re-run - its 6 nodes).
+At every quantisation point of the cached path - a frozen board's stored K/V, which the board itself
+reads in `compute_board`, later boards read, and the live set reads; nothing else is quantised - the
+two paths' FP8 codes, per layer, per frozen board, K and V, with their FP32 inputs (the forward's taken
+by a `kv_hook` before its rounding, the cache's kept beside each entry):
+- Both paths round exactly their own inputs: the forward's rounded values equal its codes times its
+  scale at every element (0 mismatches of 17.5 million), it rounds no live token (0), and the cache's
+  self-read equals its stored codes, which equal the FP8 rounding of its own inputs under the scale of
+  its own inputs (0).
+- The scales come from the same slice on both paths - a board's own tokens, one layer, K or V, one
+  head: at layer 0 they differ by at most 1.7e-7 (relative; FP32 noise). Where a different element
+  attains the absmax (6 slices at layer 0), the absmax itself agrees to that 1.7e-7.
+- 64,502 codes differ over the 16 layers. Every one is explained by its inputs: its two FP32 inputs lie
+  on either side of the midpoint between the two codes (0 exceptions).
+- The flips begin from FP32 noise and compound:
+
+| Layer | Codes that differ (of 1,092,096) | ... from inputs within 8 FP32 ulps of the board's absmax | Largest input difference (relative to the board's absmax) | Control: the same, FP8 rounding the identity |
+|---|---|---|---|---|
+| 0 | 0 | - | 4.0e-7 | 4.0e-7 |
+| 1 | 4 (largest input difference behind them 2.7e-7, 0.02 of an FP8 step) | 4 | 4.9e-7 | 5.0e-7 |
+| 2 | 26 | 20 | 1.1e-5 | 5.4e-7 |
+| 5 | 272 (1 by two steps) | 85 | 2.6e-4 | 5.5e-7 |
+| 8 | 2,447 (230 by two or more) | 30 | 1.2e-3 | 6.6e-7 |
+| 12 | 8,852 (978) | 27 | 2.4e-3 | 6.9e-7 |
+| 15 | 13,038 = 1.2% (1,435) | 20 | 3.5e-3 | 7.5e-7 |
+
+  Every layer from 1 on has 4-85 flips tipped by FP32 noise; the rest are tipped by inputs that earlier
+  flips moved, and those inputs move further layer by layer, until some lie more than an FP8 step apart
+  (codes two or three steps apart, inputs up to 2.4 steps apart).
+- **The control** - FP8 rounding made the identity on both paths, everything else equal: the inputs
+  stay within 4.0-7.8e-7 of each other at every layer, and the outputs at trunk RMS 2.6e-7 / max 2.0e-6,
+  value 6.0e-7, policy 1.7e-6 - row 1's FP32 level (3.3e-6 at 16 layers). The 16-layer gap is FP8's.
+
+So the gap is the flips alone; no defect in where the cached path quantises was found.
+
+**2. The flip gap and M14 at 2 and 16 layers** (7 geometries x model seeds 0-11, 6 nodes each - 504
+nodes per depth). M14 is the mutant of the test's docstring: a frozen board reads its own K/V
+unquantised (`compute_board`'s self-read), its stored entry still FP8.
+
+| Quantity, the largest over the 504 nodes | 2 layers | 16 layers | The 2-layer test's bound |
+|---|---|---|---|
+| Flips: trunk RMS | 1.43e-4 (registers_4_0, seed 7) | 9.67e-4 (small_board, seed 6) | 4e-4 |
+| Flips: value | 3.33e-5 (small_board, seed 1) | 3.26e-4 (small_board, seed 6) | 5e-5 |
+| Flips: policy | 2.47e-3 (small_board, seed 0) | 8.43e-3 (registers_4_0, seed 11) | 5e-3 |
+| Flips: trunk max | 1.28e-2 | 1.91e-2 | - |
+| Flips: each tree's largest trunk RMS - median / 90th percentile | 8.3e-6 / 5.8e-5 | 5.3e-4 / 7.7e-4 | - |
+| M14: trunk RMS, smallest node / largest | 5.11e-3 / 8.01e-3 | 5.14e-3 / 7.56e-3 | - |
+| M14's smallest over the flips' largest (trunk RMS) | 36x | 5.3x | - |
+
+*Read.* At 2 layers the test's bounds hold on every geometry over 12 seeds - trunk RMS 2.8x, value
+1.5x, policy 2.0x - and M14 at its smallest is 13x the trunk bound. At 16 layers the flips' gap is 7x
+larger (trunk RMS) while M14's is the same as at 2 layers, so the two are only 5.3x apart: a trunk bound
+5x above the flips' largest, as the test's docstring sets its own (about 5e-3), would sit at M14's
+smallest node (5.1e-3, 1.0x) and under its largest by 1.5x - it would not catch M14. No 16-layer bound is
+set on the flips (the main loop's instruction; part 3 asserts the rounding exactly instead); the 2-layer
+test is unchanged. The flips are not rare at 16
+layers (1.2% of the last layer's codes), which section 15.2's protocol assumes; BUILD_LOG issue 278
+carries the question.
+
+**3. The exact test** (2026-11-28, the main loop's decision on issue 278: (a) the 2-layer bound kept,
+and (c) the rounding asserted exactly at depth). `test_fp8_cache_rounds_exactly_as_the_fp8_network_at_full_depth`
+(slow; 16 layers, FP32 trunk, FP8 frozen K/V; small_board and deep travel, seed 0, 6 nodes each)
+asserts the attribution's properties at every layer, frozen board, K and V and node - each path's
+scale its own slice's, each path's rounding exact, the cache's self-read its stored codes times its
+scale, every differing code straddled - and bounds by FP32 noise (4e-6, relative) what is not exact:
+the two paths' scales and inputs up to the first layer with a flip, the inputs behind each first flip,
+and, with FP8 rounding the identity, the inputs at every layer. Measured on three geometries (the
+test's two and many timelines, 12 threads), the bounded figures and their margins:
+
+| Figure (relative) | small_board | deep travel | many timelines | Margin under 4e-6 |
+|---|---|---|---|---|
+| The paths' scales, before the first flip | 5.1e-7 | 3.9e-7 | 4.3e-7 | 7.9x |
+| The paths' inputs, before the first flip | 4.8e-7 | 4.7e-7 | 4.0e-7 | 8.3x |
+| The inputs behind a first flip | 6.8e-8 | 1.5e-7 | 9.1e-8 | 27x |
+| The first layer with a flip (every node) | 1 | 1 | 1 | - |
+| Codes that differ, the tree's 6 nodes | 43,693 | 134,156 | 92,846 | - |
+
+The control's inputs measured in part 1: at most 7.8e-7 at any layer (5.1x). The flip count follows
+the FP32 summation order, which PyTorch's grad mode changes: the same case gives 64,502 differing codes
+under `torch.no_grad()` (part 1's probes, layer by layer the same) and 43,693 in grad mode (the test),
+each reproducible; the test asserts no count, only that some code differs. Run time at 12 threads: 7.4 s
+(small_board) and 17.3 s (deep travel), the control included. Two mutants re-made and reverted:
+M14 (`compute_board`'s self-read unquantised) fails assertion 3 at node 0, layer 0, K, board 1 ("the
+cache's self-read is not its stored codes"); the cache's stored scale taken over every head
+(`kvformat.quantise_fp8`) fails assertion 1 at the same place ("the cache's scale is not its own
+slice's").
+
+### Section 15.2's network rows on the finished v1 - rows 1 and 11 re-measured (numerics; no threshold, no verdict)
+
+**What it is.** Step 2's "section 15.2 re-run on the finished v1 network" for rows 1 (cached = dense,
+C2, C17) and 11 (cache precision = live precision, G1, C15): the largest gaps between the cached path
+(`python/t5d/net/cache.py`) and its references, at the tests' 2 layers and at the v1's 16, on every
+geometry of `python/tests/net/test_cache.py`, against the bounds the tests assert. The bounds were
+last measured on 2026-10-17, before B15's table, F6's Mish in the heads and M20's defaults changed the
+network. No threshold applies; the stop rule of the main loop's brief (a result within 10% of its
+bound, or over it) applied to every row, and one row met it - the FP8 cache at FP32 resolution at 16
+layers, the entry above. The tests that assert these bounds were extended with this run: BF16 and FP8
+on every geometry, the every-switch sets on three seeds (BUILD_LOG, the audit's rows 1 and 11).
+
+**Conditions.** 2026-11-28, machine `dev-r` with no other job of the build running (this run's own
+probes ran two at a time), PyTorch 2.13.0+cpu, Python 3.14.7, NumPy 2.5.2, 12 torch threads, `lane/net`
+at main d470681; random weights at initialisation scale. The network: `NetConfig()`'s v1 with
+`attn_scope="block_causal"` - 16 layers, or 2 for the tests' depth - in FP32 or BF16 as each row says,
+FP8 frozen K/V (`frozen_kv_format="fp8"`) where it says so. Measured by a probe beside the tests, on
+the tests' own constructions:
+- FP32 (row 1): 7 geometries x the lineage and creation readings x both C20 readings, model seeds
+  1000 x seed + case and roots of their own; seeds 0-2 at 2 layers (588 nodes), seed 0 at 16 layers
+  (196 nodes); random 6-move paths; cached against `reference_output` (from the root's history under
+  the past-and-epoch-history reading); at each root, the root refresh against the dense pass.
+- The every-switch sets (row 1): `test_cached_equals_one_full_pass_with_every_switch`'s 11 flag sets,
+  standard geometry, model seeds 0-4, 2 layers (385 nodes).
+- BF16 (rows 1 and 11): 7 geometries, model seeds 0-2 at 2 layers and 0-1 at 16, a random 5-move path
+  from each root (`_trees`); cached against the BF16 full pass ("live") and against the FP32 one; the
+  root refresh against the dense BF16 pass.
+- FP8 (row 11): the same trees, seeds 0-2 at 2 layers and 0 at 16; cached against the FP8 network's
+  own forward, under the BF16 trunk (the v1's configuration) and the FP32 trunk; the FP8 network
+  against the "match" one (BF16).
+
+| Quantity | 2 layers | 16 layers | Bound asserted | Margin (2 / 16) |
+|---|---|---|---|---|
+| FP32 cached against the full pass: trunk (max abs) | 2.38e-6 | 3.34e-6 | 2e-5 | 8.4x / 6.0x |
+| ... heads (value, WDL, policy, per-board, submit) | 1.67e-6 | 2.03e-6 | 1e-4 | 60x / 49x |
+| FP32 root refresh against the dense pass: trunk / heads | 1.43e-6 / 1.19e-6 | 2.15e-6 / 1.31e-6 | 2e-5 / 1e-4 | 14x / 9.3x (trunk) |
+| The every-switch sets, seeds 0-4: trunk / heads | 1.91e-6 / 1.79e-6 | - | 2e-5 / 1e-4 | 10x / 56x |
+| BF16 cached against live: trunk RMS / max | 1.64e-3 / 1.42e-2 | 1.96e-3 / 1.20e-2 | 6e-3 / 4e-2 | 3.7x, 2.8x / 3.1x, 3.3x |
+| ... value / policy | 6.95e-4 / 7.85e-3 | 1.44e-3 / 9.73e-3 | 5e-3 / 2.5e-2 | 7.2x, 3.2x / 3.5x, 2.6x |
+| BF16 cached against FP32: trunk RMS / max | 2.33e-3 / 1.44e-2 | 2.33e-3 / 1.37e-2 | 1e-2 / 6e-2 | 4.3x, 4.2x / 4.3x, 4.4x |
+| ... value / policy | 3.95e-3 / 1.24e-2 | 3.81e-3 / 1.12e-2 | 2e-2 / 3e-2 | 5.1x, 2.4x / 5.3x, 2.7x |
+| ... its RMS over `1.3 * live RMS + 3e-4` (live against FP32: 2.34e-3 at both depths) | 0.702 | 0.701 | 1 | 1.4x / 1.4x |
+| BF16 refreshed root against the dense pass: trunk RMS / max | 6.70e-4 / 9.71e-3 | 1.29e-3 / 1.08e-2 | 3e-3 / 4e-2 | 4.5x, 4.1x / 2.3x, 3.7x |
+| ... value / policy | 4.06e-4 / 4.99e-3 | 1.11e-3 / 7.07e-3 | 5e-3 / 2.5e-2 | 12x, 5.0x / 4.5x, 3.5x |
+| FP8 frozen K/V, BF16 trunk, cached against the FP8 forward: trunk RMS / max | 3.00e-3 / 3.81e-2 | 3.94e-3 / 2.64e-2 | 8e-3 / 1e-1 | 2.7x, 2.6x / 2.0x, 3.8x |
+| ... value / policy | 1.01e-3 / 1.88e-2 | 2.00e-3 / 1.90e-2 | 6e-3 / 4e-2 | 5.9x, 2.1x / 3.0x, 2.1x |
+| FP8 frozen K/V, FP32 trunk, cached against the FP8 forward: trunk RMS | 8.01e-5 | 6.12e-4 | 4e-4 (2 layers) | 5.0x / **over** |
+| ... value / policy | 3.58e-5 / 1.89e-4 | 1.97e-4 / 3.53e-3 | 5e-5 / 5e-3 (2 layers) | 1.4x, 26x / **over**, 1.4x |
+| FP8 network against "match" (BF16): trunk RMS / max | 9.06e-3 / 5.59e-2 | 7.79e-3 / 5.40e-2 | 3e-2 / - | 3.3x / 3.9x |
+| ... value / policy | 1.28e-2 / 3.53e-2 | 9.67e-3 / 3.18e-2 | 4e-2 / 1e-1 | 3.1x, 2.8x / 4.1x, 3.1x |
+| ... each tree's largest RMS, the smallest of them (FP8 is in use) | 6.77e-3 | 6.97e-3 | above 1e-3 | 6.8x / 7.0x |
+
+*Read.* Every bound but one holds on the finished v1, on every geometry and at both depths, by 1.4x
+or more. The BF16 and FP8 figures are at most 28% above the 2026-10-17 ones, which were taken on the
+standard geometry alone (the largest rise: the FP8 network's value logit against "match", 1.28e-2
+against 1.0e-2); the FP32 trunk's at 16 layers (3.3e-6) is a little above the 2.4e-6 the tests'
+docstring recorded. The BF16 cache is as accurate as the live BF16 pass at both depths (the cached RMS against
+FP32 equals the live one's, 2.33e-3 against 2.34e-3). FP8 under the BF16 trunk - the v1's own
+configuration - holds its bounds at 16 layers by 2.0x. The exception is the FP8 cache at FP32
+resolution, whose bounds were measured at 2 layers: at 16 layers it is over them, and the entry above
+attributes it. At 2 layers its value logit's margin, 1.4x, is the narrowest of the table (one FP8
+rounding flip, as in the A5 entry above).
+
+### F1 on engine positions under the cached configuration - re-measured on the finished v1 (numerics; no threshold, no verdict)
+
+**What it is.** Rows 1 and 11 on real engine positions at F1's full size: F1 as shipped (`NetConfig()`,
+BF16 trunk, 16 layers) under the block-causal scope, its cached evaluations against the BF16 full pass
+(`reference_output`), on the positions `python/tests/engine/test_network.py`'s
+`test_f1_cached_on_a_real_position` and `test_cached_variants.py`'s `test_f1_bf16_cached_on_three_variants`
+assert on; and the same network with FP8 frozen K/V against the FP8 network's own forward, which no
+test asserts on engine positions (compared here with `test_cache.py`'s FP8 bounds). Part of step 2's
+re-run (the entry above); the figures before it were taken before B15's table, F6's Mish in the heads
+and M20's defaults changed the network.
+
+**Conditions.** 2026-11-28, machine `dev-r` (another probe of this run beside it), PyTorch 2.13.0+cpu,
+Python 3.14.7, NumPy 2.5.2, 12 torch threads, the engine library built Release in `lane/net` at main
+453ba11 (the network code of d470681); random weights at initialisation scale, model seeds 0-2.
+Positions: the "cross_timeline" record's `positions[2:]` (3 states, its frozen boards including a
+duplicated pair; the epoch opened at the first), and seed 3's random play on Standard - Turn Zero,
+Standard - Reversed Royalty and Misc - Timeline Strategos, every second state (the epoch opened a third
+of the way in) - 198 evaluations over both formats and the three seeds.
+
+| Quantity | Largest | Where | Bound | Margin |
+|---|---|---|---|---|
+| F1 ("match"), cached against the BF16 full pass: trunk RMS / max | 1.99e-3 / 1.24e-2 | Timeline Strategos, seed 1 | 8e-3 / 5e-2 | 4.0x / 4.0x |
+| ... policy / value logits | 9.53e-3 / 1.41e-3 | Reversed Royalty / Turn Zero, seed 1 | 3e-2 / 5e-3 | 3.1x / 3.6x |
+| F1 with FP8 frozen K/V, cached against the FP8 network's forward: trunk RMS / max | 4.47e-3 / 3.22e-2 | Timeline Strategos / Reversed Royalty, seed 2 | 8e-3 / 1e-1 (`test_cache.py`'s) | 1.8x / 3.1x |
+| ... policy / value logits | 1.96e-2 / 2.82e-3 | Turn Zero, seed 1 / Reversed Royalty, seed 0 | 4e-2 / 6e-3 | 2.0x / 2.1x |
+
+*Read.* F1's own gaps on engine positions are the synthetic trees' at 16 layers (BF16 cached against
+live, RMS 2.0e-3): the F1 tests' bounds hold by 3.1x or more. Against MT-04's figures of 2026-10-23
+(one seed: RMS 1.97e-3, max 1.15e-2, policy 7.18e-3, value 1.32e-3) the policy logit is a third larger
+over three seeds. With FP8 frozen K/V the engine positions' trunk RMS (4.47e-3) is above the synthetic
+trees' at 16 layers (3.94e-3) and 1.8x inside `test_cache.py`'s FP8 bound; no test asserts FP8 on
+engine positions.
