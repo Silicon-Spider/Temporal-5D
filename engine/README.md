@@ -172,6 +172,40 @@ loads from Python without MSYS2 on PATH: it imports only KERNEL32 and the Univer
 CRT.
 
 The tests use a small in-house framework (`tests/test_framework.hpp`: `TEST`,
+**One code-generation flag: `-fno-assume-sane-operators-new-delete`**, on every
+target, where the compiler knows the option (`CMakeLists.txt` asks it with
+`check_cxx_compiler_flag`; build-log issue 603). A g++ that has
+`-fassume-sane-operators-new-delete` switches it on by default, and under it g++ 16.2
+- the development machine's - merges two stores of `std::deque`'s across the chunk
+allocation that may throw: a deque whose allocation fails right after its map was
+reallocated is left pointing into the freed map, and its destructor walks freed
+memory. The engine promises its invariants under an allocation failure (spec 15.4)
+and holds deques (the prover's tree, `search.cpp`'s move lists, the asset map, the
+ladder's queue), so the assumption is off. What that means for a build:
+
+- g++ 13 and 14 (CI's), clang and MSVC do not know the option and make no such
+  assumption: they build exactly as before.
+- The tools that print their build (`t5d-bench`, `t5d-scan6b`, `t5d-scan6bp`,
+  `t5d-scan6bpp`: the line `build: ..., flags "..."` and the JSON's `build.flags`)
+  print the flag after CMake's own (`-O2 -DNDEBUG -fno-assume-sane-operators-new-delete`
+  on the development machine), so a figure names the code it was measured on. The
+  warning flags are not printed: they change no code.
+- The truth's code signature (`T5D_CODE_SIGNATURE`, `cmake/code_signature.cmake`) is
+  the hash of the truth's source files alone - no flag, no compiler - so it does not
+  move, and `t5d-scan6bpp` still reads `engine/testdata/hunt-truth` as recorded by
+  this code. The flag changes no verdict: it bears only on what a container is left
+  holding when an allocation throws.
+- Its cost was measured before it was adopted (the main loop's A/B, 2026-11-28, the
+  development machine: three clean interleaved pairs, the flag against none). Movegen at
+  240 boards: 98.8k, 99.9k and 100.9k expansions/s with the flag against 101.1k, 100.5k
+  and 100.5k without. Guard, pooled: 1.935M, 1.950M and 1.928M nodes/s against 1.953M,
+  1.949M and 1.944M. Hunt: 1.749M, 1.737M and 1.727M against 1.758M, 1.760M and 1.699M.
+  Within about 1%, inside the run-to-run spread, and no verdict differs (the conditions
+  are with the figures in docs/MEASUREMENTS.md, where the main loop records them).
+
+The fault it guards against is drafted as a report to GCC for the project owner to
+file: `docs/checkpoints/upstream/gcc-deque-assume-sane-operators-new-delete.md`.
+
 `CHECK`, `CHECK_EQ`, `REQUIRE`, `CHECK_THROWS_AS`, ...); there is no third-party test
 library.
 

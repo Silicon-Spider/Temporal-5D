@@ -9489,6 +9489,36 @@ review, which edited them in the repository on the user's instruction.*
      cost model (they assumed no global registers in the query set). Section 10.4.3's "full
      history, 240 boards, ~250/s" is 337/s. Done: corrected in place.
 715. **"44 boards" as the median position** (sections 9.2, 10.2 and the review's first draft).
+    - **Resolved (2026-11-29, `lane/engine`; the main loop's decision of 2026-11-28: adopt the
+      flag).** The A/B the question asked for came first (the main loop's, 2026-11-28, on the
+      development machine):
+      three clean interleaved pairs, the flag against none - movegen at 240 boards 98.8k /
+      99.9k / 100.9k expansions/s against 101.1k / 100.5k / 100.5k; Guard pooled 1.935M /
+      1.950M / 1.928M nodes/s against 1.953M / 1.949M / 1.944M; Hunt 1.749M / 1.737M / 1.727M
+      against 1.758M / 1.760M / 1.699M - within about 1%, inside the run-to-run spread, and no
+      verdict differs (the main loop records the figures with their conditions in
+      `docs/MEASUREMENTS.md` at the merge). `engine/CMakeLists.txt` now asks
+      the compiler (`check_cxx_compiler_flag`) and, where it knows the option, adds
+      `-fno-assume-sane-operators-new-delete` to every target through `t5d_options`; a
+      compiler that does not know it (g++ 13 and 14 as in CI, clang, MSVC) makes no such
+      assumption and builds unchanged. The flag is appended to the flags text the tools print
+      (`T5D_FLAGS_TEXT`: `t5d-bench`, `t5d-scan6b`, `t5d-scan6bp`, `t5d-scan6bpp`, and the new
+      `t5d-turngen-time`), so a figure names the code it was measured on; the truth's code
+      signature (`T5D_CODE_SIGNATURE`) hashes the truth's sources alone and does not move, so
+      `engine/testdata/hunt-truth` still reads as recorded by this code. The test this issue
+      kept out is in (issue 604, below): every allocation of a ladder job's prover failed in
+      turn, the deque's map reallocated among them. The report to GCC is drafted for the user
+      to file (`docs/checkpoints/upstream/gcc-deque-assume-sane-operators-new-delete.md`); the
+      40-line reproducer of 2026-11-09 was not kept, so the draft's was written again from
+      this account and run (2026-11-28, this g++ 16.2.0): at `-O2` and `-O3` the deque's
+      `size()` is garbage after the failed `emplace_back` (639 elements held; a different
+      value each run), and with the flag it is consistent. It took two tries to find what
+      the fault needs, which the draft says: an element type local to the translation unit
+      (so that the deque's `_M_reallocate_map` is inlined beside the allocation - with
+      `std::deque<int>` it is not, and nothing shows), and the elements made in a function
+      with no handler of its own. Both are true of the prover's tree (`Node` is in an unnamed
+      namespace; `Worker::make_node` catches nothing). `engine/README.md`, "Building and
+      testing".
      MEASUREMENTS: "final board count median 44"; the median position of the under-50 phase has 24
      boards, and 54.4% of the dense compute lies under 50. Done: section 9.2 defines the reference
      position; the wording is corrected throughout; register reversal 41.

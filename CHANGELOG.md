@@ -10,6 +10,32 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-29 - The engine builds with `-fno-assume-sane-operators-new-delete` where the compiler has it (issue 603)
+
+g++ 16.2 assumes by default that the replaceable `operator new` has no side effect its caller
+can see, and with it moves a store of `std::deque`'s across the chunk allocation that may throw:
+a deque whose allocation fails right after its map was reallocated points into freed memory. The
+main loop's A/B found no cost outside run-to-run noise and decided to adopt the flag.
+- `engine/CMakeLists.txt`: `check_cxx_compiler_flag`, and the flag on every target through
+  `t5d_options` where the compiler knows it (g++ 13 and 14, clang and MSVC build unchanged). It is
+  appended to the flags text the tools print, so a figure names its build; the truth's code
+  signature is of the sources alone and does not move.
+- `engine/README.md` ("Building and testing"), `docs/BUILD_LOG.md` (issue 603, resolved).
+- `docs/checkpoints/upstream/gcc-deque-assume-sane-operators-new-delete.md` (new) and that
+  folder's README: a report to GCC, drafted for the project owner to file. The reproducer of
+  2026-11-09 was not kept; the draft's was written again and run (2026-11-28): at `-O2` and `-O3`
+  the deque's `size()` is garbage after the failed `emplace_back`, with the flag it is
+  consistent. The fault needs an element type local to the translation unit and the elements
+  made in a function with no handler of its own - both true of the prover's tree, neither of
+  the first programs tried.
+- Checked: all 125 compile commands of the build carry the flag; the tools' line reads `flags
+  "-O2 -DNDEBUG -fno-assume-sane-operators-new-delete"`; the same test binary built without
+  the flag dies of a segmentation fault in the allocation-failure sweep of a ladder job's
+  prover (the next entry's test).
+
+Spec: section 15.4 (the invariants under an allocation failure rest on it under this compiler) -
+no edit: no spec text describes the toolchain's flags.
+
 ### 2026-11-28 - Build log: the quiet-machine block paused for a restart
 
 `docs/BUILD_LOG.md`, the main loop's work items: the quiet-machine block started at main 1d09117

@@ -55,6 +55,31 @@ else()
 endif()
 target_compile_definitions(t5d_options INTERFACE T5D_VERSION_STRING="${PROJECT_VERSION}")
 
+# Build-log issue 603. A g++ that has -fassume-sane-operators-new-delete
+# switches it on by default: the replaceable operator new is assumed to have
+# no side effect its caller can see. Under it g++ 16.2 (the development
+# machine's) merges two stores of std::deque's across the chunk allocation
+# that may throw, so a deque whose allocation fails right after its map was
+# reallocated is left pointing into the freed map, and its destructor walks
+# freed memory. The engine promises its invariants under an allocation
+# failure (spec 15.4), and it holds std::deques (the prover's tree,
+# search.cpp's move lists, the asset map, the ladder's queue) - so the
+# assumption is switched off for every target, wherever the compiler knows the
+# option. A compiler that does not (g++ 13 and 14, as in CI; clang; MSVC)
+# makes no such assumption and builds as before. The flag changes generated
+# code, so the tools print it with the build's other flags (T5D_FLAGS_TEXT,
+# below); the truth's code signature is of the sources alone and does not
+# move.
+include(CheckCXXCompilerFlag)
+set(T5D_CODEGEN_FLAGS "")
+if(NOT MSVC)
+  check_cxx_compiler_flag(-fno-assume-sane-operators-new-delete T5D_HAS_NO_ASSUME_SANE_OPERATORS_NEW_DELETE)
+  if(T5D_HAS_NO_ASSUME_SANE_OPERATORS_NEW_DELETE)
+    target_compile_options(t5d_options INTERFACE -fno-assume-sane-operators-new-delete)
+    string(APPEND T5D_CODEGEN_FLAGS " -fno-assume-sane-operators-new-delete")
+  endif()
+endif()
+
 # ---- the core ----------------------------------------------------------------
 
 add_library(t5d_core STATIC
@@ -200,12 +225,14 @@ target_sources(t5d-tests PRIVATE tests/test_turnwidth.cpp)
 add_dependencies(t5d-tests t5d-measure)
 target_compile_definitions(t5d-tests PRIVATE "T5D_MEASURE_EXE=\"$<TARGET_FILE:t5d-measure>\"")
 
-# The benchmark names its build in its output: the build type and the flags.
+# The benchmark names its build in its output: the build type and the flags -
+# CMake's for the build type, and the code-generation flags added above (the
+# warning flags are not listed: they change no code).
 find_package(Threads REQUIRED)
 add_executable(t5d-bench tools/t5d_bench.cpp)
 target_link_libraries(t5d-bench PRIVATE t5d_tools Threads::Threads)
 string(TOUPPER "${CMAKE_BUILD_TYPE}" T5D_BUILD_TYPE_UPPER)
-string(STRIP "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${T5D_BUILD_TYPE_UPPER}}" T5D_FLAGS_TEXT)
+string(STRIP "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${T5D_BUILD_TYPE_UPPER}}${T5D_CODEGEN_FLAGS}" T5D_FLAGS_TEXT)
 target_compile_definitions(t5d-bench PRIVATE
   "T5D_BUILD_TYPE=\"${CMAKE_BUILD_TYPE}\""
   "T5D_CXX_FLAGS=\"${T5D_FLAGS_TEXT}\"")
