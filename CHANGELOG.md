@@ -10,6 +10,20 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-29 - Build log and README: four paragraphs of today's commits put where they belong
+
+A correction of placement only: no word changes. The three commits before this one were staged
+a part of a file at a time, and four inserted paragraphs landed lines away from their places -
+`docs/BUILD_LOG.md`'s notes under issues 603 and 604 (they sat after issue 605), and
+`engine/README.md`'s paragraph on the build's code-generation flag (one line late, inside the
+paragraph on the test framework) and its paragraph on the tree form under graph search (below
+`t5d-solver-check`'s section instead of above it). Both files hold the same lines as before, in
+the order intended. The cause was the staging, not the text: a zero-context patch's pure
+insertion is placed by its new-side line number, which is wrong when an earlier hunk of the file
+is left out; the rest of this job's commits stage whole files.
+
+Spec: no part of the spec describes the placement of a log's paragraphs.
+
 ### 2026-11-29 - The flat generator's every-variant test names a variant it could not compare
 
 `engine/tests/test_turngen.cpp`: `turngen_equals_the_exhaustive_listing_on_every_variant` (and

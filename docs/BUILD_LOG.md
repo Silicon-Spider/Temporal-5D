@@ -9399,6 +9399,36 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
       allocation-failure guarantees depend on it under g++ 16; its speed effect measured first,
       since `docs/MEASUREMENTS.md` was measured with this compiler), and whether to report it
       to GCC. No spec text describes the toolchain's flags.
+    - **Resolved (2026-11-29, `lane/engine`; the main loop's decision of 2026-11-28: adopt the
+      flag).** The A/B the question asked for came first (the main loop's, 2026-11-28, on the
+      development machine):
+      three clean interleaved pairs, the flag against none - movegen at 240 boards 98.8k /
+      99.9k / 100.9k expansions/s against 101.1k / 100.5k / 100.5k; Guard pooled 1.935M /
+      1.950M / 1.928M nodes/s against 1.953M / 1.949M / 1.944M; Hunt 1.749M / 1.737M / 1.727M
+      against 1.758M / 1.760M / 1.699M - within about 1%, inside the run-to-run spread, and no
+      verdict differs (the main loop records the figures with their conditions in
+      `docs/MEASUREMENTS.md` at the merge). `engine/CMakeLists.txt` now asks
+      the compiler (`check_cxx_compiler_flag`) and, where it knows the option, adds
+      `-fno-assume-sane-operators-new-delete` to every target through `t5d_options`; a
+      compiler that does not know it (g++ 13 and 14 as in CI, clang, MSVC) makes no such
+      assumption and builds unchanged. The flag is appended to the flags text the tools print
+      (`T5D_FLAGS_TEXT`: `t5d-bench`, `t5d-scan6b`, `t5d-scan6bp`, `t5d-scan6bpp`, and the new
+      `t5d-turngen-time`), so a figure names the code it was measured on; the truth's code
+      signature (`T5D_CODE_SIGNATURE`) hashes the truth's sources alone and does not move, so
+      `engine/testdata/hunt-truth` still reads as recorded by this code. The test this issue
+      kept out is in (issue 604, below): every allocation of a ladder job's prover failed in
+      turn, the deque's map reallocated among them. The report to GCC is drafted for the user
+      to file (`docs/checkpoints/upstream/gcc-deque-assume-sane-operators-new-delete.md`); the
+      40-line reproducer of 2026-11-09 was not kept, so the draft's was written again from
+      this account and run (2026-11-28, this g++ 16.2.0): at `-O2` and `-O3` the deque's
+      `size()` is garbage after the failed `emplace_back` (639 elements held; a different
+      value each run), and with the flag it is consistent. It took two tries to find what
+      the fault needs, which the draft says: an element type local to the translation unit
+      (so that the deque's `_M_reallocate_map` is inlined beside the allocation - with
+      `std::deque<int>` it is not, and nothing shows), and the elements made in a function
+      with no handler of its own. Both are true of the prover's tree (`Node` is in an unnamed
+      namespace; `Worker::make_node` catches nothing). `engine/README.md`, "Building and
+      testing".
 604. **A `std::bad_alloc` in a synchronous ladder job is reported as a contradiction in the
     rules code** (`src/ladder.cpp`: `VerificationLadder::ask_for`'s catch, and the worker
     thread's alike; found by `lane/fix535`, 2026-11-09, beside issue 603). The job's exception
@@ -9408,6 +9438,39 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     a job's prover risks the deque corruption). The fix, when it can be tested: let
     `std::bad_alloc` through uncounted and unreported. No spec text describes the ladder's
     counters.
+    - **Fixed (2026-11-29, `lane/engine`, after issue 603's flag).** Both catches let a
+      `std::bad_alloc` through: it is not counted in `contradictions` and nothing is printed.
+      The synchronous ask rethrows it to its caller - the search's gather or deliver, which
+      surface it as any allocation failure (`T5D_ERR_MEMORY` through the C API); the worker
+      thread hands it to `take()`, as it hands a contradiction. Two things the fix needed
+      beyond the issue's sentence, both readings of "the counts add up":
+      - **the issue's "uncounted" became "counted apart"** (the main loop's ruling,
+        2026-11-28): a job that ended this way is not counted as a contradiction, and is
+        counted in a new `VerificationLadder::Stats::out_of_memory`. Why: the ladder's books
+        are a sum - `asked = answered + cancelled + discarded + contradictions` (+ the
+        verdicts not yet taken), which its tests assert - and a job the worker thread took up
+        cannot be un-asked: uncounted altogether, it would have vanished from the sum and
+        every later check of it would fail for a reason that is no fault. With the new term
+        the identity holds: `asked = answered + cancelled + discarded + contradictions +
+        out_of_memory`;
+      - the synchronous path makes the room for its verdict inside the same `try` (a failure
+        there lost the verdict and broke the sum), and the queued path counts a job asked
+        only once it is queued.
+      **The test** (`mcts_fault_an_allocation_failure_inside_a_ladder_job_is_no_contradiction`,
+      `tests/test_mcts_faults.cpp`): the synchronous ladder answers the root's Hunt, or its
+      settling scan, inside a fresh search's first gather, on the search's thread, so the
+      job's allocations take part in the fault countdown; every allocation of that gather is
+      failed in turn on a fresh search, the fault-free job's tree required to be large enough
+      to have reallocated its `std::deque`'s map. At each fault: it comes out of the call; no
+      contradiction is counted and standard error (captured) holds no "a contradiction in the
+      rules code"; a fault inside the job is counted out of memory once and gives no verdict;
+      the search keeps every invariant at once and after searching on; the ladder's counts
+      add up; and the settling scans' prover - the game's, asked again at the principal
+      line's changes after its failure - states no fact its fault-free twin's verdict of the
+      same question contradicts. Deterministic: one thread, node budgets, no clock.
+      What the fix does not claim: a decision whose root job failed is not asked again (the
+      decision stays open without that verdict - a verdict lost, never a proof, as review
+      finding L3 of issue 600 already reads a failed re-root).
 605. **The network job's shard 1 of 4 passed its 90 minutes after decision 7's merge** (CI:
     `.github/workflows/network.yml`, `python/tests/conftest.py`; the main loop, 2026-11-28; run
     46052141668 on d470681, cancelled at the limit while the other three shards passed in 26-52
@@ -9500,36 +9563,6 @@ review, which edited them in the repository on the user's instruction.*
      cost model (they assumed no global registers in the query set). Section 10.4.3's "full
      history, 240 boards, ~250/s" is 337/s. Done: corrected in place.
 715. **"44 boards" as the median position** (sections 9.2, 10.2 and the review's first draft).
-    - **Resolved (2026-11-29, `lane/engine`; the main loop's decision of 2026-11-28: adopt the
-      flag).** The A/B the question asked for came first (the main loop's, 2026-11-28, on the
-      development machine):
-      three clean interleaved pairs, the flag against none - movegen at 240 boards 98.8k /
-      99.9k / 100.9k expansions/s against 101.1k / 100.5k / 100.5k; Guard pooled 1.935M /
-      1.950M / 1.928M nodes/s against 1.953M / 1.949M / 1.944M; Hunt 1.749M / 1.737M / 1.727M
-      against 1.758M / 1.760M / 1.699M - within about 1%, inside the run-to-run spread, and no
-      verdict differs (the main loop records the figures with their conditions in
-      `docs/MEASUREMENTS.md` at the merge). `engine/CMakeLists.txt` now asks
-      the compiler (`check_cxx_compiler_flag`) and, where it knows the option, adds
-      `-fno-assume-sane-operators-new-delete` to every target through `t5d_options`; a
-      compiler that does not know it (g++ 13 and 14 as in CI, clang, MSVC) makes no such
-      assumption and builds unchanged. The flag is appended to the flags text the tools print
-      (`T5D_FLAGS_TEXT`: `t5d-bench`, `t5d-scan6b`, `t5d-scan6bp`, `t5d-scan6bpp`, and the new
-      `t5d-turngen-time`), so a figure names the code it was measured on; the truth's code
-      signature (`T5D_CODE_SIGNATURE`) hashes the truth's sources alone and does not move, so
-      `engine/testdata/hunt-truth` still reads as recorded by this code. The test this issue
-      kept out is in (issue 604, below): every allocation of a ladder job's prover failed in
-      turn, the deque's map reallocated among them. The report to GCC is drafted for the user
-      to file (`docs/checkpoints/upstream/gcc-deque-assume-sane-operators-new-delete.md`); the
-      40-line reproducer of 2026-11-09 was not kept, so the draft's was written again from
-      this account and run (2026-11-28, this g++ 16.2.0): at `-O2` and `-O3` the deque's
-      `size()` is garbage after the failed `emplace_back` (639 elements held; a different
-      value each run), and with the flag it is consistent. It took two tries to find what
-      the fault needs, which the draft says: an element type local to the translation unit
-      (so that the deque's `_M_reallocate_map` is inlined beside the allocation - with
-      `std::deque<int>` it is not, and nothing shows), and the elements made in a function
-      with no handler of its own. Both are true of the prover's tree (`Node` is in an unnamed
-      namespace; `Worker::make_node` catches nothing). `engine/README.md`, "Building and
-      testing".
      MEASUREMENTS: "final board count median 44"; the median position of the under-50 phase has 24
      boards, and 54.4% of the dense compute lies under 50. Done: section 9.2 defines the reference
      position; the wording is corrected throughout; register reversal 41.
@@ -9539,39 +9572,6 @@ review, which edited them in the repository on the user's instruction.*
      query and key features widened past the head width (B8's register exemptions, B15's per-row
      terms). Done: both figures stated; a candidate for section 10.2's kernel work.
 717. **A setext underline at the end of section 11.4**: the `---` before section 12 sat directly
-    - **Fixed (2026-11-29, `lane/engine`, after issue 603's flag).** Both catches let a
-      `std::bad_alloc` through: it is not counted in `contradictions` and nothing is printed.
-      The synchronous ask rethrows it to its caller - the search's gather or deliver, which
-      surface it as any allocation failure (`T5D_ERR_MEMORY` through the C API); the worker
-      thread hands it to `take()`, as it hands a contradiction. Two things the fix needed
-      beyond the issue's sentence, both readings of "the counts add up":
-      - **the issue's "uncounted" became "counted apart"** (the main loop's ruling,
-        2026-11-28): a job that ended this way is not counted as a contradiction, and is
-        counted in a new `VerificationLadder::Stats::out_of_memory`. Why: the ladder's books
-        are a sum - `asked = answered + cancelled + discarded + contradictions` (+ the
-        verdicts not yet taken), which its tests assert - and a job the worker thread took up
-        cannot be un-asked: uncounted altogether, it would have vanished from the sum and
-        every later check of it would fail for a reason that is no fault. With the new term
-        the identity holds: `asked = answered + cancelled + discarded + contradictions +
-        out_of_memory`;
-      - the synchronous path makes the room for its verdict inside the same `try` (a failure
-        there lost the verdict and broke the sum), and the queued path counts a job asked
-        only once it is queued.
-      **The test** (`mcts_fault_an_allocation_failure_inside_a_ladder_job_is_no_contradiction`,
-      `tests/test_mcts_faults.cpp`): the synchronous ladder answers the root's Hunt, or its
-      settling scan, inside a fresh search's first gather, on the search's thread, so the
-      job's allocations take part in the fault countdown; every allocation of that gather is
-      failed in turn on a fresh search, the fault-free job's tree required to be large enough
-      to have reallocated its `std::deque`'s map. At each fault: it comes out of the call; no
-      contradiction is counted and standard error (captured) holds no "a contradiction in the
-      rules code"; a fault inside the job is counted out of memory once and gives no verdict;
-      the search keeps every invariant at once and after searching on; the ladder's counts
-      add up; and the settling scans' prover - the game's, asked again at the principal
-      line's changes after its failure - states no fact its fault-free twin's verdict of the
-      same question contradicts. Deterministic: one thread, node budgets, no clock.
-      What the fix does not claim: a decision whose root job failed is not asked again (the
-      decision stays open without that verdict - a verdict lost, never a proof, as review
-      finding L3 of issue 600 already reads a failed re-root).
      under the 6b'' result's last line, which made that paragraph a heading. It predates the
      review. Done: a blank line.
 718. **The register's v1 and the build's defaults differ on B5 and B11 - for the user.** Both rows

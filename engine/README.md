@@ -171,7 +171,6 @@ Windows every binary is linked statically against the MinGW runtime, so `t5d.dll
 loads from Python without MSYS2 on PATH: it imports only KERNEL32 and the Universal
 CRT.
 
-The tests use a small in-house framework (`tests/test_framework.hpp`: `TEST`,
 **One code-generation flag: `-fno-assume-sane-operators-new-delete`**, on every
 target, where the compiler knows the option (`CMakeLists.txt` asks it with
 `check_cxx_compiler_flag`; build-log issue 603). A g++ that has
@@ -206,6 +205,7 @@ ladder's queue), so the assumption is off. What that means for a build:
 The fault it guards against is drafted as a report to GCC for the project owner to
 file: `docs/checkpoints/upstream/gcc-deque-assume-sane-operators-new-delete.md`.
 
+The tests use a small in-house framework (`tests/test_framework.hpp`: `TEST`,
 `CHECK`, `CHECK_EQ`, `REQUIRE`, `CHECK_THROWS_AS`, ...); there is no third-party test
 library.
 
@@ -4446,6 +4446,44 @@ claims inside the proofs, and ceil the undecided and the inner claims (from each
 baseline, with margin: `DfpnTally`'s per-rule counts, `rules_summary`; the long twin's since
 the review of 2026-11-09, L4 - it alone combines budgeted legality with MCGS arms).
 
+**The tree form under graph search (2026-11-29).** Decision 10 of the 2026-11-15 review let
+the tree form run under MCGS (only evaluated nodes are graph nodes), and `kConfigs` gained
+its two configurations then; `test_solver_refs.hpp`'s arms still left the combination out
+and said it was refused, so no test held a constructed root to its claim under it (the
+done-means re-audit of 2026-11-28). It is an arm now (`arms(Graphs)`, "tree form, graph",
+run last on each position):
+- `mcts_solver_agrees_with_df_pn_on_constructed_mates` runs it as a sixth arm: all fourteen
+  roots under both Q4 readings must be solved with the same claims (28 roots, counted);
+- `mcts_solver_agrees_with_df_pn_under_every_ruleset` runs it beside the three trees on the
+  same positions (the ply split's and the flat form's graphs stay the long twin's), and the
+  long twin beside its five arms;
+- `mcts_solver_proves_a_mate_in_one_and_plays_it` and
+  `mcts_solver_proves_a_loss_when_every_child_is_lost` run every arm as a tree and as a graph
+  (they ran the ply split and the flat form), and
+  `mcts_solver_proves_a_draw_when_every_child_is_drawn` the three trees and the tree form's
+  graph (it ran the ply split and the flat form as trees): the tree form's nodes and edges
+  are the ply split's, so the mating move's node, its bound and its submit edge are checked
+  as the ply split's are.
+In the three df-pn tests its comparisons are counted in a tally of their own
+(`SolverTallies`), so that the other arms' floors and ceilings stay the ones their baselines
+gave - and those baselines came out unchanged, count for count, with the arm beside them
+(constructed: 140 searches, 1,214 decided, 10 unknown, 214 df-pn searches, 684 inner claims;
+every ruleset: 1,629 searches, 3,638 decided, 45 unknown, 1,707 df-pn searches, 2,245 inner
+claims). Asserted of the arm: no contradiction, no certificate failure, a search wherever the
+other arms searched, at least half of what one of the other arms decides on average, and - in
+the two default tests - floors from its own baseline, the same on two runs (2026-11-28 and
+29), with the other arms' margins:
+- constructed: 28 searches, 28 roots solved with their claims, 358 claims (120 win, 130 loss,
+  108 draw), 244 comparisons - 242 decided and agreeing, 2 unknown - 136 inner claims, 10
+  solved losses whose children are at more than one distance; every one of its 250 df-pn
+  questions answered from the memo the five arms before it filled;
+- every ruleset: 543 searches, 209 roots solved, 1,258 claims (537 win, 585 loss, 136 draw),
+  851 comparisons - 846 decided and agreeing, 5 unknown - 445 inner claims; 21 df-pn searches
+  of its own (21 proofs, each certified by E4), the rest from the memo.
+The arm's tally floors no df-pn searches or certified proofs: running last, it has few of its
+own by construction. With the arm the constructed test takes about 5 s and the every-ruleset
+test 64 to 73 s by name (a shared machine).
+
 ### t5d-solver-check (the offline mode)
 
 ```
@@ -4544,44 +4582,6 @@ where it carries weight, below.)
   `prove_only` off, external `MemorySolvedStore` and `DisproofStore`, one thread, by nodes):
   the constructed mates (both Q4 readings, both classes, depth 3) and `sparse_positions`
   under every ruleset with both Q4 readings (the default class at depth 3, the literal at
-**The tree form under graph search (2026-11-29).** Decision 10 of the 2026-11-15 review let
-the tree form run under MCGS (only evaluated nodes are graph nodes), and `kConfigs` gained
-its two configurations then; `test_solver_refs.hpp`'s arms still left the combination out
-and said it was refused, so no test held a constructed root to its claim under it (the
-done-means re-audit of 2026-11-28). It is an arm now (`arms(Graphs)`, "tree form, graph",
-run last on each position):
-- `mcts_solver_agrees_with_df_pn_on_constructed_mates` runs it as a sixth arm: all fourteen
-  roots under both Q4 readings must be solved with the same claims (28 roots, counted);
-- `mcts_solver_agrees_with_df_pn_under_every_ruleset` runs it beside the three trees on the
-  same positions (the ply split's and the flat form's graphs stay the long twin's), and the
-  long twin beside its five arms;
-- `mcts_solver_proves_a_mate_in_one_and_plays_it` and
-  `mcts_solver_proves_a_loss_when_every_child_is_lost` run every arm as a tree and as a graph
-  (they ran the ply split and the flat form), and
-  `mcts_solver_proves_a_draw_when_every_child_is_drawn` the three trees and the tree form's
-  graph (it ran the ply split and the flat form as trees): the tree form's nodes and edges
-  are the ply split's, so the mating move's node, its bound and its submit edge are checked
-  as the ply split's are.
-In the three df-pn tests its comparisons are counted in a tally of their own
-(`SolverTallies`), so that the other arms' floors and ceilings stay the ones their baselines
-gave - and those baselines came out unchanged, count for count, with the arm beside them
-(constructed: 140 searches, 1,214 decided, 10 unknown, 214 df-pn searches, 684 inner claims;
-every ruleset: 1,629 searches, 3,638 decided, 45 unknown, 1,707 df-pn searches, 2,245 inner
-claims). Asserted of the arm: no contradiction, no certificate failure, a search wherever the
-other arms searched, at least half of what one of the other arms decides on average, and - in
-the two default tests - floors from its own baseline, the same on two runs (2026-11-28 and
-29), with the other arms' margins:
-- constructed: 28 searches, 28 roots solved with their claims, 358 claims (120 win, 130 loss,
-  108 draw), 244 comparisons - 242 decided and agreeing, 2 unknown - 136 inner claims, 10
-  solved losses whose children are at more than one distance; every one of its 250 df-pn
-  questions answered from the memo the five arms before it filled;
-- every ruleset: 543 searches, 209 roots solved, 1,258 claims (537 win, 585 loss, 136 draw),
-  851 comparisons - 846 decided and agreeing, 5 unknown - 445 inner claims; 21 df-pn searches
-  of its own (21 proofs, each certified by E4), the rest from the memo.
-The arm's tally floors no df-pn searches or certified proofs: running last, it has few of its
-own by construction. With the arm the constructed test takes about 5 s and the every-ruleset
-test 64 to 73 s by name (a shared machine).
-
   depth 1), each at `tt_entries` 1 and 2 against the default TT: the same answer wherever
   both decide (3,884 roots, no difference); every result held to the references
   (`Tally`: 4,817 confirmed, 10 beyond them); every proven root's Win in the solved store at
