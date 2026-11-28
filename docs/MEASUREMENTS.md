@@ -1014,6 +1014,10 @@ the commit. Then one line per game, then the totals:
 - `by_range`: the network's calls by board-count range (6b″'s ranges), each call filed under its
   largest position, with forwards, positions, seconds and positions/s. §15.6 reads a rate per
   board-count range; the pooled figure is the games' mix of sizes.
+- since 2026-11-29 (`lane/engine`), where an evaluation's time goes - in each game's line, in the
+  totals and in each range of `by_range`: the seconds of the conversion, the fit, the collation,
+  the transfer, the forward and the split, with `assembly_ms_per_position` and `assembly_share`
+  beside `forward_ms_per_position` and `forward_share` ("Input assembly per evaluation", below).
 
 **Command** (from `python/`; the defaults written out):
 
@@ -1032,6 +1036,52 @@ and was stopped. Today's v1 forward costs far more on the CPU than N5's network 
 and M20's register rows came after N5. Budget an hour or more for the two default games, or
 bound the run with `--cap-turns`. The figure is CPU-labelled and informational. §15.6's Phase-3
 re-check stays deferred until a GPU rate exists.
+
+### Input assembly per evaluation, by board-count range (commands; not yet measured on a quiet machine)
+
+**What it will measure.** The CPU half of §15.3's row "Input assembly and host-to-device
+transfer per evaluation" (no estimate; "to measure, by board-count range"; build-log issue
+420, proposed edit 435). Making the network's input from a search leaf is three steps on the
+CPU, whatever the device: the step driver's **conversion** (`CStepDriver`: the leaf's
+expansion copied out of the engine, then `to_position`), the evaluator's **fit**
+(`NetworkEvaluator._fit`: a re-layout, or register A5's conversion at the network's edge;
+nothing for positions made with the network's own layout) and the **collation**
+(`collate`: the padded batch's tensors). The **transfer** - the batch moved to the device -
+is the row's other half: on the CPU there is nothing to move, and the figure waits for a GPU
+(§15.7's Gate 1; M19).
+
+**Two commands** (both from `python/`):
+
+1. *Assembly alone, by range - no model, no forward, minutes.* Positions by seeded random
+   pseudo-legal play from Standard through the binding (for cost only), at 10, 30, 44, 60,
+   80, 120, 160 and 240 boards, three seeds each, filed in 6b″'s ranges; per position the
+   engine's `expand` (the expansion and its copy out - given beside the assembly, not in it:
+   the search pays the expansion in its gather), `to_position` as the step driver calls it,
+   the fit, and `collate` for batches of 1 and 8 of one board count; **assembly =
+   `to_position` + fit + `collate`**, per position: the median and 95th percentile over a
+   range's (position, repeat) samples.
+
+   ```
+   python -m t5d.engine.bench --assembly --assembly-boards 10 30 44 60 80 120 160 240 --batch 1 8 --seeds 3 --repeat 5
+   python -m t5d.engine.bench --assembly --assembly-boards 10 30 44 60 80 120 160 240 --batch 1 8 --seeds 3 --repeat 5 --piece-centric
+   ```
+
+   The second line is register A5's tokens (the fit is then `to_piece_centric`). One torch
+   thread is enough: nothing here is a tensor kernel but `collate`'s copies.
+
+2. *Inside real games, beside the forward.* `python -m t5d.engine.evalrate` (the F1 command
+   above) now prints, in each game's line, in the totals and in each range of `by_range`:
+   `convert_seconds`, `fit_seconds`, `collate_seconds`, `transfer_seconds`, `forward_seconds`,
+   `split_seconds`; `assembly_seconds` (conversion + fit + collation),
+   `assembly_ms_per_position` and `assembly_share` of the six parts' sum; and
+   `forward_ms_per_position` and `forward_share`. A batch's conversion is filed in the range
+   of its largest position, as its call is. This is the mixed-size batch a search makes (its
+   padding is the largest position's); the first command's batches are of one size.
+
+**Conditions to record with a figure.** The machine and its load (the first command does not
+control it and says so), Python, PyTorch and NumPy, the engine library, the register counts
+and the tokenisation - all printed. CPU-labelled; nothing here needs a GPU, and nothing here
+is the transfer.
 
 ## §15.6 verdicts
 

@@ -285,7 +285,18 @@ class NetworkEvaluator:
     (``state.to_piece_centric``, strict: engine data drops no edge) - the policy's row ``i`` stays
     the engine's move ``i``, so the C step API's contract is unchanged.
     ``policy``: the prior delivered (``POLICY_SOURCES``) - ``"optimistic"`` (D9) for match play
-    only, on a network with the optimistic head."""
+    only, on a network with the optimistic head.
+
+    **Where a call's time goes** (seconds, summed over the evaluator's life; section 15.3's row
+    "Input assembly and host-to-device transfer per evaluation"): ``fit_seconds`` (``_fit``: the
+    re-layout and A5's conversion at the network's edge - nothing for positions made with the
+    network's own register counts and tokens), ``collate_seconds`` (``collate``: the padded
+    batch's tensors), ``transfer_seconds`` (the batch moved to the evaluator's device - on the CPU
+    there is nothing to move), ``forward_seconds`` (the model's forward) and ``split_seconds``
+    (the outputs read back, position by position). The five are the whole call but for the loop
+    itself. On a device whose kernels run asynchronously the forward's seconds are its launch and
+    the split's include the wait for it - no synchronisation is added here: these are the CPU's
+    figures, and the transfer and the GPU's own breakdown are the first GPU session's (M19)."""
 
     def __init__(
         self,
@@ -306,6 +317,11 @@ class NetworkEvaluator:
         self.scope = scope
         self.batches = 0
         self.positions = 0
+        self.fit_seconds = 0.0
+        self.collate_seconds = 0.0
+        self.transfer_seconds = 0.0
+        self.forward_seconds = 0.0
+        self.split_seconds = 0.0
 
     def _fit(self, state: PositionState) -> PositionState:
         cfg = self.model.cfg
@@ -317,14 +333,27 @@ class NetworkEvaluator:
 
     def __call__(self, positions: Sequence[PositionLike]) -> list[Evaluation]:
         results: list[Evaluation] = []
+        clock = time.perf_counter
         for start in range(0, len(positions), self.max_batch):
+            t0 = clock()
             states = [self._fit(state_of(p)) for p in positions[start : start + self.max_batch]]
-            batch = collate(states).to(self.device)
+            t1 = clock()
+            batch = collate(states)
+            t2 = clock()
+            batch = batch.to(self.device)
+            t3 = clock()
             with torch.no_grad():
                 out = self.model(batch, scope=self.scope)
+            t4 = clock()
             results.extend(_split(out, states, self.policy))
+            t5 = clock()
             self.batches += 1
             self.positions += len(states)
+            self.fit_seconds += t1 - t0
+            self.collate_seconds += t2 - t1
+            self.transfer_seconds += t3 - t2
+            self.forward_seconds += t4 - t3
+            self.split_seconds += t5 - t4
         return results
 
 
@@ -492,7 +521,9 @@ def check_evaluation(leaf: Leaf, evaluation: Evaluation, value_bins: int | None 
 @dataclass
 class ServeStats:
     """What ``serve`` did: rounds (collect - evaluate - deliver), leaves, and wall time in each
-    phase (seconds)."""
+    phase (seconds). ``convert_seconds`` is the part of ``collect_seconds`` a driver spent making
+    the leaves' positions (``CStepDriver.convert_seconds``: each leaf's expansion copied out of the
+    engine and converted to the network's input; 0 for a driver that keeps no such count)."""
 
     rounds: int = 0
     leaves: int = 0
@@ -500,6 +531,7 @@ class ServeStats:
     collect_seconds: float = 0.0
     evaluate_seconds: float = 0.0
     deliver_seconds: float = 0.0
+    convert_seconds: float = 0.0
     batch_sizes: list[int] = field(default_factory=list)
 
 
@@ -518,23 +550,36 @@ def serve(
     a driver with an ``abandon`` method is told before the exception leaves (the step API's
     virtual loss is released). ``self_play``: the search is self-play's, so an evaluation that
     carries D9's optimistic prior is refused before it is delivered (section 8.1: "kept out of
-    self-play") - whatever wraps the evaluator, since each evaluation names its prior."""
+    self-play") - whatever wraps the evaluator, since each evaluation names its prior.
+
+    **The batch's conversion time** (section 15.3's input-assembly row): a driver that counts the
+    seconds it spends making positions (``convert_seconds``; ``CStepDriver``) has each batch's
+    share added to ``ServeStats.convert_seconds``, and an evaluator with a ``note_conversion``
+    method is told it - ``note_conversion(positions, seconds)``, before it is called with those
+    positions - so that it can file the conversion beside its own collation and forward
+    (``evalrate.RangedEvaluator``: by board-count range). Timing only: nothing else is passed."""
     if batch_size < 1:
         raise ValueError("batch_size must be positive")
     stats = ServeStats()
+    note_conversion = getattr(evaluator, "note_conversion", None)
     while not driver.finished():
         if max_rounds is not None and stats.rounds >= max_rounds:
             break
+        converted = float(getattr(driver, "convert_seconds", 0.0))
         t0 = time.perf_counter()
         leaves = list(driver.collect(batch_size))
         t1 = time.perf_counter()
+        converted = float(getattr(driver, "convert_seconds", 0.0)) - converted
         if not leaves:
             if driver.finished():
                 break
             raise RuntimeError("the driver returned no leaves but is not finished (a synchronous search always has one)")
+        stats.convert_seconds += converted
         try:
             if len(leaves) > batch_size:
                 raise RuntimeError(f"the driver returned {len(leaves)} leaves for a batch of {batch_size}")
+            if callable(note_conversion):
+                note_conversion([leaf.position for leaf in leaves], converted)
             evaluations = evaluator([leaf.position for leaf in leaves])
             if len(evaluations) != len(leaves):
                 raise RuntimeError(f"the evaluator returned {len(evaluations)} evaluations for {len(leaves)} leaves")
@@ -923,6 +968,7 @@ def run_timed_search(
             stats.collect_seconds += st.collect_seconds
             stats.evaluate_seconds += st.evaluate_seconds
             stats.deliver_seconds += st.deliver_seconds
+            stats.convert_seconds += st.convert_seconds
             if driver.stop in ("finished", "exhausted"):
                 out_stop = driver.stop
                 verdict = replace(verdict, stop=T5D_TIME_STOP_SEARCH)

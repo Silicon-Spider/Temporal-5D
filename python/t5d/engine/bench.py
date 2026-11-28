@@ -21,6 +21,27 @@ first reaches each board count - real engine positions, but random play: for cos
 Run from ``python/``: ``py -m t5d.engine.bench`` (defaults: conversion at 1-240 boards,
 forward at 1-60 boards, batches of 1 and 4, F1 as shipped - BF16 trunk, dense). These are
 development-machine CPU figures, not section 15.3's cost measurements.
+
+**Input assembly alone, by board-count range** (``--assembly``; section 15.3's row "Input
+assembly and host-to-device transfer per evaluation", its CPU half - no model is built and no
+forward runs, so it takes minutes): for positions at ``--assembly-boards`` board counts, filed in
+6b''s ranges (< 50, 50-99, 100-199, 200+), what making the network's input from an engine
+position costs per position -
+
+* ``expand``: the engine's expansion and its copy out of the engine's buffers (the search pays
+  the expansion itself in its gather; the copy is the part the step driver's conversion adds -
+  the two cannot be told apart from here, so the figure is given beside the assembly, not in it);
+* ``to_position``: the copy made the network's input, as the step driver makes it
+  (``CStepDriver``: the network's register counts, no W/E scope);
+* ``fit``: the evaluator's ``_fit`` - register A5's conversion with ``--piece-centric``, nothing
+  otherwise (the positions are made with the network's register counts);
+* ``collate``: the padded batch's tensors, per position, for each ``--batch`` size (a batch is
+  positions of one board count: the mixed batches of a search pad more);
+* **assembly** = ``to_position`` + ``fit`` + ``collate``, per position, for each batch size.
+
+Per range: the median and the 95th percentile over every (position, repeat) of the range's board
+counts. The host-to-device transfer is not here: on the CPU there is none to time (the row's
+other half waits for a GPU). ``evalrate`` reports the same parts inside real games.
 """
 
 from __future__ import annotations
@@ -31,6 +52,8 @@ import platform
 import statistics
 import sys
 import time
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 
 import numpy as np
 import torch
@@ -38,9 +61,13 @@ import torch
 from ..net import NetConfig, build_model, collate, to_piece_centric
 from .capi import load_library
 from .convert import to_position
+from .evalrate import RANGES, range_of
 from .evaluator import NetworkEvaluator
 from .game import Game
 from .play import random_game
+
+#: ``--assembly``'s default board counts: two or three in each of 6b''s ranges.
+ASSEMBLY_BOARDS: tuple[int, ...] = (10, 30, 44, 60, 80, 120, 160, 240)
 
 
 def _positions(boards: list[int], seeds: int, travel_prob: float) -> dict[int, list]:
@@ -138,6 +165,80 @@ def forward(games: dict[int, list], batches: list[int], repeat: int, cfg: NetCon
     return rows
 
 
+@dataclass
+class AssemblySample:
+    """One timing of one position's input assembly (seconds per position): the parts the module
+    docstring names. ``collate`` maps a batch size to the batch's collation time divided by it."""
+
+    boards: int
+    expand: float
+    convert: float
+    fit: float
+    collate: dict[int, float] = field(default_factory=dict)
+
+    def assembly(self, batch: int) -> float:
+        """``to_position`` + ``fit`` + ``collate`` at this batch size, per position."""
+        return self.convert + self.fit + self.collate[batch]
+
+
+def assembly_samples(games: dict[int, list], batches: Sequence[int], repeat: int, cfg: NetConfig) -> list[AssemblySample]:
+    """Every (position, repeat)'s timings, with the engine: ``expand``, ``to_position`` as the step
+    driver calls it, the evaluator's fit (A5's conversion for a piece-centric ``cfg``) and
+    ``collate`` over ``b`` copies of the fitted state for each batch size - after one untimed pass
+    per position (the first call pays imports and allocator warm-up)."""
+    out = []
+    for n, gs in games.items():
+        for g in gs:
+            boards = g.info().boards
+            for r in range(repeat + 1):
+                t0 = time.perf_counter()
+                x = g.expand()
+                t1 = time.perf_counter()
+                pos = to_position(x, regs_per_board=cfg.regs_per_board, global_regs=cfg.global_regs, scope=False)
+                t2 = time.perf_counter()
+                state = to_piece_centric(pos.state, strict=True) if cfg.piece_centric else pos.state
+                t3 = time.perf_counter()
+                sample = AssemblySample(boards=boards, expand=t1 - t0, convert=t2 - t1, fit=t3 - t2)
+                for b in batches:
+                    states = [state] * b
+                    c0 = time.perf_counter()
+                    collate(states)
+                    sample.collate[b] = (time.perf_counter() - c0) / b
+                if r > 0:  # the first pass is the warm-up
+                    out.append(sample)
+            if boards < n:
+                raise RuntimeError(f"a position taken for {n} boards has {boards}")
+    return out
+
+
+def assembly_rows(samples: Sequence[AssemblySample], batches: Sequence[int]) -> list[dict]:
+    """The samples by board-count range (6b''s; a range with none gives no row): how many, the
+    board counts met, each part's median in milliseconds per position, and the assembly's median
+    and 95th percentile for each batch size. Each figure is over the range's samples; the
+    assembly's is the median of the samples' sums, not the sum of the parts' medians."""
+    rows = []
+    for name, _ in RANGES:
+        mine = [s for s in samples if range_of(s.boards) == name]
+        if not mine:
+            continue
+        row: dict = {
+            "range": name,
+            "samples": len(mine),
+            "boards": "/".join(str(n) for n in sorted({s.boards for s in mine})),
+            "expand ms": 1e3 * statistics.median(s.expand for s in mine),
+            "to_position ms": 1e3 * statistics.median(s.convert for s in mine),
+            "fit ms": 1e3 * statistics.median(s.fit for s in mine),
+        }
+        for b in batches:
+            row[f"collate ms/pos (B={b})"] = 1e3 * statistics.median(s.collate[b] for s in mine)
+        for b in batches:
+            sums = [s.assembly(b) for s in mine]
+            row[f"assembly ms/pos (B={b})"] = 1e3 * statistics.median(sums)
+            row[f"assembly p95 (B={b})"] = 1e3 * _percentile(sums, 95)
+        rows.append(row)
+    return rows
+
+
 def _table(rows: list[dict]) -> str:
     if not rows:
         return "(none)"
@@ -182,6 +283,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dtype", choices=["bf16", "fp32"], default=None, help="trunk dtype (default: F1's bf16)")
     ap.add_argument("--skip-forward", action="store_true")
     ap.add_argument("--piece-centric", action="store_true", help="register A5's piece-centric tokens (a prototype)")
+    ap.add_argument("--assembly", action="store_true", help="input assembly alone, by board-count range: no model, no forward")
+    ap.add_argument("--assembly-boards", type=int, nargs="+", default=list(ASSEMBLY_BOARDS), help="its board counts")
     args = ap.parse_args(argv)
 
     overrides = {}
@@ -191,6 +294,26 @@ def main(argv: list[str] | None = None) -> int:
         overrides["n_layers"] = args.layers
     if args.dtype is not None:
         overrides["trunk_dtype"] = args.dtype
+    if args.assembly:
+        # The network's input layout alone decides the assembly: its register counts and tokens.
+        layout = NetConfig(**overrides)
+        print(conditions(None))
+        print(
+            f"input layout: {layout.regs_per_board} registers a board, {layout.global_regs} global, tokens "
+            f"{'piece-centric (A5)' if layout.piece_centric else 'one per square (A1)'}; no model built, no forward; host-to-device "
+            "transfer: none on the CPU"
+        )
+        print(f"positions: seeded random pseudo-legal play from Standard (travel probability {args.travel_prob}), {args.seeds} seeds")
+        torch.set_grad_enabled(False)
+        boards = sorted(set(args.assembly_boards))
+        games = _positions(boards, args.seeds, args.travel_prob)
+        samples = assembly_samples(games, args.batch, args.repeat, layout)
+        print(f"\ninput assembly per position, by board-count range (median over positions x {args.repeat} repeats after a warm-up):")
+        print(_table(assembly_rows(samples, args.batch)))
+        for gs in games.values():
+            for g in gs:
+                g.close()
+        return 0
     cfg = None if args.skip_forward else NetConfig(**overrides)
     print(conditions(cfg))
     print(f"positions: seeded random pseudo-legal play from Standard (travel probability {args.travel_prob}), {args.seeds} seeds")

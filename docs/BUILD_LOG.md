@@ -7475,6 +7475,23 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     loop, 2026-11-28: they stand until the user says otherwise). The tool prints (b), (c) and
     (e) in its conditions - where the clock starts, what a widening step is, and that the
     scores are a seeded hash and not a network's.
+420. **§15.3's input-assembly row has two halves, and only one waits for a GPU** ("Input assembly
+    and host-to-device transfer per evaluation | No estimate | 10.2 | to measure, by
+    board-count range"; the re-audit: no figure, no command, and a status that says neither
+    "(GPU)" nor "deferred"). As built, making the network's input from a search leaf is: the
+    step driver's conversion (`CStepDriver`: the leaf's expansion copied out of the engine,
+    `to_position`), the evaluator's fit (a re-layout, or A5's conversion at the network's
+    edge) and `collate` (the padded batch's tensors) - all on the CPU whatever the device - and
+    then the batch's move to the device, which is nothing on the CPU. Built:
+    `NetworkEvaluator` times its fit, collation, transfer, forward and split; the serve loop
+    reports each batch's conversion (`ServeStats.convert_seconds`, and to an evaluator with
+    `note_conversion`); `python -m t5d.engine.evalrate` prints the parts, the assembly's
+    milliseconds per position and its share beside the forward's, per game, in the totals and
+    by board-count range; and `python -m t5d.engine.bench --assembly` times the assembly alone
+    by range, with no model and no forward, in minutes. The commands are in
+    docs/MEASUREMENTS.md, not yet measured on a quiet machine. (The re-audit and the brief call
+    the counter `NetworkEvaluator.convert_seconds`; it is `CStepDriver`'s - the evaluator never
+    saw the conversion, which is why the serve loop now tells it.) Edit 435.
 
 402. **6f's settling scans: their wrapper is not on main** (§13.1 6f "verify the proof-export
     invariant under TT churn for Hunt and the settling scans (§11.3)"; §11.4 "df-pn at the
@@ -12018,6 +12035,18 @@ entry changes in the same edit as its code, which the standing rule defers to up
 *Edits 435-437 are the engine lane's of 2026-11-29 (the done-means re-audit's section 15.3 rows with
 no home; the block 435 onwards the main loop assigned).*
 
+435. **Section 15.3, the row "Input assembly and host-to-device transfer per evaluation": its two
+     halves labelled** (issue 420). Where: section 15.3's table, that row's Estimate and Status
+     cells. Says now: "No estimate | 10.2 | to measure, by board-count range". Should say: Estimate -
+     "No estimate. Assembly is the step driver's conversion of a leaf, the evaluator's fit and the
+     collation of the padded batch - on the CPU whatever the device; the transfer is the batch's
+     move to the device"; Status - "assembly: to measure (CPU), by board-count range
+     (`python -m t5d.engine.bench --assembly`; `t5d.engine.evalrate` inside games); transfer: to
+     measure (GPU)". Why: section 15.5 asks that a figure the build cannot measure be "named as
+     deferred", and the row said neither "(GPU)" nor "deferred" though section 15.7's Gate 1 puts
+     the transfer on GPU time; half of it needs no GPU, and the build now has its command
+     (docs/MEASUREMENTS.md, "Input assembly per evaluation"). When the assembly is measured on a
+     quiet machine its figures replace "No estimate" (M4), CPU-labelled.
 436. **Section 15.3, the row "Tree form: evaluations per complete turn, and inherited expansions per
      evaluation, by board-count range and mandatory count": what is counted** (issue 418). Where:
      that row's Estimate cell, and section 8.2's tree-form bullet where it says what the form buys.

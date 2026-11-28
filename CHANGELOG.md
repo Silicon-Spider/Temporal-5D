@@ -10,6 +10,37 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-29 - Section 15.3's input-assembly row: the conversion and the collation timed apart from the forward (issue 420)
+
+The done-means re-audit found the row "Input assembly and host-to-device transfer per evaluation"
+with no figure, no command and a status that names neither a GPU nor a deferral. Half of it needs
+no GPU: the assembly is the step driver's conversion of a leaf, the evaluator's fit and the
+collation, all on the CPU.
+- `python/t5d/engine/evaluator.py`: `NetworkEvaluator` keeps the seconds of its fit, its
+  collation, the batch's move to its device, the forward and the split (`fit_seconds`,
+  `collate_seconds`, `transfer_seconds`, `forward_seconds`, `split_seconds`; `collate(...).to(...)`
+  is two statements now, the same calls). `serve` adds each batch's conversion - the driver's
+  `convert_seconds`, which is `CStepDriver`'s, not the evaluator's - to a new
+  `ServeStats.convert_seconds`, and tells an evaluator that has a `note_conversion` method.
+- `python/t5d/engine/evalrate.py`: `RangedEvaluator` files each call's parts, and the conversion
+  it is told, by board-count range; `assembly_breakdown` gives the parts' seconds, the assembly's
+  milliseconds per position and its share of the parts' sum, and the forward's - in each game's
+  line, in the totals and in each range of `by_range`.
+- `python/t5d/engine/bench.py --assembly`: the assembly alone by board-count range - `expand`,
+  `to_position` as the step driver calls it, the fit and `collate` per position, the assembly's
+  median and 95th percentile - with no model and no forward, so the row's CPU half can be filled
+  in minutes.
+- `python/tests/engine/test_evalrate.py`: the breakdown's arithmetic (rates of the sums), the
+  evaluator's parts inside its call's time and filed by range, the serve loop's report (a driver
+  that counts, one that does not, an evaluator without the method), the bench's rows by range,
+  the bench run without a model, and the breakdown in the one short F1 game's line, totals and
+  range.
+- `docs/MEASUREMENTS.md`: "Input assembly per evaluation" - the two commands, not yet measured.
+  `docs/BUILD_LOG.md`: issue 420.
+
+Spec: section 15.3 (the input-assembly row), section 15.7's Gate 1 - proposed edit 435 labels the
+row's assembly half "to measure (CPU)" and its transfer half "to measure (GPU)".
+
 ### 2026-11-29 - Section 15.3's two turn rows get their tools: `t5d-tree-count --by-range` and `t5d-turngen-time` (issues 418, 419)
 
 The re-audit found the tree-form row with indicative counts on seven positions and the flat-form

@@ -1,8 +1,10 @@
 """F1's CPU evaluation rate (``t5d.engine.evalrate``): the provers off unless asked, the totals as
-rates of the sums, the network's calls filed by board-count range, and one short game of the F1
-network end to end - its configuration printed in full before the game, its counts consistent. A
-smoke run, never a timing: the machine running the tests is shared, and a test is not a
-measurement.
+rates of the sums, the network's calls filed by board-count range, where an evaluation's time goes
+(section 15.3's input-assembly row: the conversion and the collation apart from the forward - in
+each game's line, in the totals and by range; and ``t5d.engine.bench --assembly``, the same
+without a forward), and one short game of the F1 network end to end - its configuration printed
+in full before the game, its counts consistent. A smoke run and the arithmetic, never a timing:
+the machine running the tests is shared, and a test is not a measurement.
 """
 
 from __future__ import annotations
@@ -10,8 +12,21 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, replace
 
-from t5d.engine import evalrate
-from t5d.engine.evalrate import GameFigures, RangedEvaluator, game_seeds, play_config, range_of, totals
+import pytest
+
+from t5d.engine import bench, evalrate
+from t5d.engine.evalrate import (
+    ASSEMBLY,
+    PARTS,
+    GameFigures,
+    RangedEvaluator,
+    assembly_breakdown,
+    game_seeds,
+    play_config,
+    range_of,
+    totals,
+)
+from t5d.engine.evaluator import Leaf, UniformEvaluator, serve
 from t5d.engine.netplay import GameResult, PlayConfig, network_config
 from t5d.net import build_model
 from t5d.net.config import NetConfig
@@ -78,6 +93,156 @@ def test_each_call_is_filed_by_its_largest_position():
         assert low - 0.01 <= r["positions_per_s"] <= high + 0.01
 
 
+def test_the_breakdown_is_assembly_against_the_forward_from_the_sums():
+    assert PARTS == ("convert", "fit", "collate", "transfer", "forward", "split") and PARTS[:3] == ASSEMBLY
+    seconds = {"convert": 0.2, "fit": 0.05, "collate": 0.25, "transfer": 0.0, "forward": 4.0, "split": 0.5}
+    b = assembly_breakdown(seconds, 10)
+    assert (b["convert_seconds"], b["fit_seconds"], b["collate_seconds"]) == (0.2, 0.05, 0.25)
+    assert (b["transfer_seconds"], b["forward_seconds"], b["split_seconds"]) == (0.0, 4.0, 0.5)
+    assert b["assembly_seconds"] == 0.5  # the conversion, the fit and the collation
+    assert b["assembly_ms_per_position"] == 50.0
+    assert b["assembly_share"] == 0.1  # 0.5 of the six parts' 5.0 s
+    assert b["forward_ms_per_position"] == 400.0 and b["forward_share"] == 0.8
+    empty = assembly_breakdown(dict.fromkeys(PARTS, 0.0), 0)
+    assert empty["assembly_ms_per_position"] == 0.0 and empty["assembly_share"] == 0.0 and empty["forward_share"] == 0.0
+
+    def game(parts, positions):
+        return GameFigures(GameResult(config=PlayConfig(), record="", actions=[], end="turn_cap", winner=None), 1, positions, parts)
+
+    # A game's line and the totals carry it: rates of the summed seconds, never a mean of the games'.
+    one = game({"convert": 0.1, "fit": 0.0, "collate": 0.1, "transfer": 0.0, "forward": 0.8, "split": 0.0}, 4)
+    two = game({"convert": 0.3, "fit": 0.0, "collate": 0.5, "transfer": 0.0, "forward": 8.0, "split": 0.2}, 16)
+    assert one.row()["assembly_share"] == 0.2 and one.row()["assembly_ms_per_position"] == 50.0
+    t = totals([one, two])
+    assert t["assembly_seconds"] == 1.0 and t["forward_seconds"] == 8.8
+    assert t["assembly_ms_per_position"] == 50.0  # 1.0 s over 20 positions
+    assert t["assembly_share"] == 0.1  # 1.0 of 10.0 s - not the games' mean share, 0.144
+    plain = GameFigures(GameResult(config=PlayConfig(), record="", actions=[], end="turn_cap", winner=None), 1, 4)
+    assert plain.row()["assembly_seconds"] == 0.0  # an evaluator that keeps no parts: zeros, not an error
+
+
+def test_the_evaluator_times_its_parts_and_files_the_conversion_by_range():
+    evaluator = RangedEvaluator(build_model(network_config("small"), seed=1).eval(), max_batch=4)
+    assert evaluator.parts() == dict.fromkeys(PARTS, 0.0)
+    small, large = [synthetic_state(0, 3)], [synthetic_state(1, 4), synthetic_state(2, 60)]
+    evaluator.note_conversion(small, 0.25)  # what the serve loop reports before each call
+    evaluator(small)
+    evaluator.note_conversion(large, 0.5)  # filed, as the call will be, at 60 boards
+    evaluator(large)
+    parts = evaluator.parts()
+    assert parts["convert"] == 0.75 and evaluator.convert_seconds == 0.75
+    assert parts["collate"] > 0 and parts["forward"] > 0 and parts["split"] > 0
+    assert parts["fit"] >= 0 and parts["transfer"] >= 0
+    ranges = evaluator.by_range()
+    assert set(ranges) == {"< 50", "50-99"}
+    assert (ranges["< 50"]["convert_seconds"], ranges["50-99"]["convert_seconds"]) == (0.25, 0.5)
+    own = 0.0
+    for name, r in ranges.items():
+        assert set(assembly_breakdown(dict.fromkeys(PARTS, 0.0), 0)) <= set(r)
+        # The evaluator's own five parts lie inside its call's time; the conversion is before it.
+        inside = r["fit_seconds"] + r["collate_seconds"] + r["transfer_seconds"] + r["forward_seconds"] + r["split_seconds"]
+        assert 0 < inside <= r["seconds"] + 5 * 5e-5 + 5e-4, name
+        own += inside
+        assert r["assembly_seconds"] == pytest.approx(r["convert_seconds"] + r["fit_seconds"] + r["collate_seconds"], abs=2e-4)
+        assert 0 < r["assembly_share"] < 1 and 0 < r["forward_share"] < 1
+        assert r["assembly_share"] + r["forward_share"] <= 1 + 1e-3
+        assert r["assembly_ms_per_position"] == pytest.approx(1e3 * r["assembly_seconds"] / r["positions"], rel=1e-2, abs=1e-3)
+    # The ranges' parts are the evaluator's, split by where each call was filed.
+    assert own == pytest.approx(sum(parts[p] for p in PARTS[1:]), abs=1e-3)
+
+
+def test_serve_reports_each_batchs_conversion():
+    class Driver:
+        """Two batches of leaves; ``convert_seconds`` grows by 1/8 s at each collect, as the step
+        driver's does by what the conversion took."""
+
+        def __init__(self, batches, counts=True):
+            self.batches = list(batches)
+            self.delivered = 0
+            if counts:
+                self.convert_seconds = 0.0
+
+        def collect(self, max_leaves):
+            if not self.batches:
+                return []
+            if hasattr(self, "convert_seconds"):
+                self.convert_seconds += 0.125
+            return [Leaf(i, state) for i, state in enumerate(self.batches.pop(0))]
+
+        def deliver(self, results):
+            self.delivered += len(results)
+
+        def finished(self):
+            return not self.batches
+
+    class Noting(UniformEvaluator):
+        def __init__(self):
+            super().__init__()
+            self.notes = []
+            self.calls = []
+
+        def note_conversion(self, positions, seconds):
+            self.notes.append((len(positions), seconds, len(self.calls)))
+
+        def __call__(self, positions):
+            self.calls.append(len(positions))
+            return super().__call__(positions)
+
+    batches = [[synthetic_state(0, 2), synthetic_state(1, 3)], [synthetic_state(2, 4)]]
+    driver, evaluator = Driver(batches), Noting()
+    stats = serve(driver, evaluator, batch_size=2)
+    assert (stats.rounds, stats.leaves, driver.delivered) == (2, 3, 3)
+    assert stats.convert_seconds == 0.25  # each batch's share, summed
+    # Told before the call it belongs to: the batch's positions and its conversion's seconds.
+    assert evaluator.notes == [(2, 0.125, 0), (1, 0.125, 1)] and evaluator.calls == [2, 1]
+    # A driver that keeps no count: nothing to add, and the evaluator is told 0.
+    quiet, evaluator = Driver(batches, counts=False), Noting()
+    assert serve(quiet, evaluator, batch_size=2).convert_seconds == 0.0
+    assert evaluator.notes == [(2, 0.0, 0), (1, 0.0, 1)]
+    # An evaluator without the method is served as before.
+    assert serve(Driver(batches), UniformEvaluator(), batch_size=2).convert_seconds == 0.25
+
+
+def test_the_assembly_rows_are_by_range_and_of_the_samples_sums():
+    sample = bench.AssemblySample
+    samples = [
+        sample(boards=10, expand=5e-3, convert=1e-3, fit=0.0, collate={1: 2e-3, 4: 1e-3}),
+        sample(boards=44, expand=7e-3, convert=3e-3, fit=1e-3, collate={1: 4e-3, 4: 2e-3}),
+        sample(boards=60, expand=9e-3, convert=5e-3, fit=0.0, collate={1: 6e-3, 4: 3e-3}),
+    ]
+    assert samples[1].assembly(1) == pytest.approx(8e-3) and samples[1].assembly(4) == pytest.approx(6e-3)
+    rows = bench.assembly_rows(samples, [1, 4])
+    assert [r["range"] for r in rows] == ["< 50", "50-99"]  # a range with no sample gives no row
+    low, mid = rows
+    assert (low["samples"], low["boards"], mid["samples"], mid["boards"]) == (2, "10/44", 1, "60")
+    assert low["expand ms"] == pytest.approx(6.0) and low["to_position ms"] == pytest.approx(2.0)
+    assert low["fit ms"] == pytest.approx(0.5)
+    assert low["collate ms/pos (B=1)"] == pytest.approx(3.0) and low["collate ms/pos (B=4)"] == pytest.approx(1.5)
+    # The assembly is to_position + fit + collate, sample by sample: 3 and 8 ms at B=1.
+    assert low["assembly ms/pos (B=1)"] == pytest.approx(5.5)
+    assert low["assembly p95 (B=1)"] == pytest.approx(3.0 + 0.95 * 5.0)
+    assert low["assembly ms/pos (B=4)"] == pytest.approx(4.0)  # 2 and 6 ms
+    assert mid["assembly ms/pos (B=1)"] == pytest.approx(11.0) and mid["assembly p95 (B=4)"] == pytest.approx(8.0)
+    assert bench.assembly_rows([], [1]) == []
+
+
+@requires_engine
+def test_the_assembly_bench_runs_without_a_model(capsys, monkeypatch):
+    def no_model(*args, **kwargs):
+        raise AssertionError("--assembly builds no model")
+
+    monkeypatch.setattr(bench, "build_model", no_model)
+    argv = ["--assembly", "--assembly-boards", "2", "5", "--seeds", "1", "--repeat", "1", "--batch", "1", "2"]
+    assert bench.main(argv) == 0
+    out = capsys.readouterr().out
+    assert "no model built, no forward" in out and "input assembly per position, by board-count range" in out
+    lines = out.splitlines()
+    header = next(i for i, line in enumerate(lines) if line.lstrip().startswith("range"))
+    assert "assembly ms/pos (B=2)" in lines[header] and "to_position ms" in lines[header]
+    rows = [line for line in lines[header + 1 :] if line.strip()]
+    assert len(rows) == 1 and rows[0].lstrip().startswith("< 50")  # 2 and 5 boards: one range
+
+
 @requires_engine
 def test_one_short_f1_game_end_to_end(capsys):
     argv = ["--games", "1", "--variant", "Standard", "--cap-turns", "1", "--playouts", "4", "--batch", "4", "--threads", "2"]
@@ -113,6 +278,23 @@ def test_one_short_f1_game_end_to_end(capsys):
     # A one-turn Standard game stays under 50 boards: every call in that range.
     assert set(total["by_range"]) == {"< 50"}
     assert (total["by_range"]["< 50"]["forwards"], total["by_range"]["< 50"]["positions"]) == (game["forwards"], game["positions"])
+
+    # Where the time went (section 15.3's input-assembly row): the step driver's conversion and the
+    # evaluator's collation apart from the forward, in the game's line, the totals and the range -
+    # one game in one range, so the three agree.
+    for row in (game, total, total["by_range"]["< 50"]):
+        assert row["convert_seconds"] > 0 and row["collate_seconds"] > 0 and row["forward_seconds"] > 0
+        assert row["transfer_seconds"] >= 0 and row["fit_seconds"] >= 0
+        assert row["assembly_seconds"] == pytest.approx(row["convert_seconds"] + row["fit_seconds"] + row["collate_seconds"], abs=2e-4)
+        assert 0 < row["assembly_share"] < row["forward_share"] < 1  # F1 on the CPU: the forward dominates
+        assert row["assembly_ms_per_position"] > 0 and row["forward_ms_per_position"] > row["assembly_ms_per_position"]
+    for key in ("convert_seconds", "collate_seconds", "forward_seconds", "assembly_seconds", "assembly_share"):
+        assert game[key] == total[key] == total["by_range"]["< 50"][key], key
+    # The conversion is the driver's, inside the game's collect phase; the evaluator's parts are
+    # inside its network seconds.
+    assert game["convert_seconds"] <= game["collect_seconds"] + 1e-3
+    inside = game["fit_seconds"] + game["collate_seconds"] + game["transfer_seconds"] + game["forward_seconds"] + game["split_seconds"]
+    assert inside <= game["network_seconds"] + 1e-3
 
 
 @requires_engine

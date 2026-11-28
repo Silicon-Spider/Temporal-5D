@@ -22,14 +22,29 @@ Reported, per game (``GameResult.summary``, and the evaluator's counts) and in t
 * ``forwards`` (the network's forward passes: ``NetworkEvaluator`` runs one per batch of at most
   ``--batch`` positions), ``positions`` (the positions they evaluated) and
   ``positions_per_forward``; ``forwards_per_s``;
-* ``network_seconds`` (the evaluator's calls: conversion, collation, the forward, the split),
-  ``network_share`` of the wall time, and ``network_positions_per_s`` - positions over the
-  network's own seconds, the rate with the search and the rules engine taken out;
+* ``network_seconds`` (the evaluator's calls: the fit, the collation, the forward, the split,
+  and the serve loop's check of each evaluation), ``network_share`` of the wall time, and
+  ``network_positions_per_s`` - positions over the network's own seconds, the rate with the
+  search and the rules engine taken out;
+* **where an evaluation's time goes** (``assembly_breakdown``; section 15.3's row "Input assembly
+  and host-to-device transfer per evaluation", its CPU half): the seconds of each part -
+  ``convert_seconds`` (the step driver's: each leaf's expansion copied out of the engine and
+  converted to the network's input, ``CStepDriver.convert_seconds``; it is inside the game's
+  ``collect_seconds``, not its ``network_seconds``), ``fit_seconds``, ``collate_seconds``,
+  ``transfer_seconds`` (nothing on the CPU), ``forward_seconds`` and ``split_seconds``
+  (``NetworkEvaluator``'s counters) - then ``assembly_seconds`` (conversion, fit and collation),
+  ``assembly_ms_per_position`` and ``assembly_share`` of the six parts' sum, and the forward's
+  ``forward_ms_per_position`` and ``forward_share``;
 * ``by_range`` (totals only): the network's calls by board-count range - 6b''s ranges, < 50,
   50-99, 100-199, 200+ - each call counted in the range of its largest position (the padded
   batch's size sets its cost): forwards, positions, seconds, positions per second and per
-  forward. Section 15.6 reads an evaluation rate per board-count range: the pooled figure is
+  forward, and the same breakdown per range (a batch's conversion is filed with its call).
+  Section 15.6 reads an evaluation rate per board-count range: the pooled figure is
   the games' mix of sizes (a 2-turn Standard game stays under 16 boards; the caps allow 80).
+
+**Assembly alone, without a forward**: ``python -m t5d.engine.bench --assembly`` times the
+conversion and the collation of positions in each board-count range in minutes (this module's
+games take an hour or more with F1 on the CPU).
 
 Information, never a verdict: a CPU figure (section 15.6's Phase-3 re-check waits for a GPU rate).
 The first line is the configuration (``{"conditions": ...}``: the network's every field and its
@@ -56,7 +71,7 @@ import sys
 import time
 from collections import Counter
 from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -85,34 +100,98 @@ def range_of(boards: int) -> str:
     return next(name for name, below in RANGES if boards < below)
 
 
+#: The parts of an evaluation's time, in the order they happen (``assembly_breakdown``): the
+#: driver's conversion, then the evaluator's own five (``NetworkEvaluator``'s counters).
+PARTS: tuple[str, ...] = ("convert", "fit", "collate", "transfer", "forward", "split")
+#: Input assembly (section 15.3's row, its CPU half): everything that makes the network's input
+#: from the engine's leaf - the conversion, the fit to the network's layout and the collation.
+ASSEMBLY: tuple[str, ...] = ("convert", "fit", "collate")
+
+
+def assembly_breakdown(seconds: dict[str, float], positions: int) -> dict:
+    """Where an evaluation's time goes, from the summed seconds of each part (``PARTS``) and the
+    positions evaluated: the parts' seconds; ``assembly_seconds`` (conversion, fit and collation
+    - section 15.3's "input assembly"), its milliseconds per position and its share of the parts'
+    sum; the forward's the same; and the transfer's seconds (nothing on the CPU: the batch is
+    already on the evaluator's device - the row's host-to-device half waits for a GPU). Rates of
+    the sums, never means of per-call rates."""
+    total = sum(seconds[p] for p in PARTS)
+    assembly = sum(seconds[p] for p in ASSEMBLY)
+    return {
+        "convert_seconds": round(seconds["convert"], 4),
+        "fit_seconds": round(seconds["fit"], 4),
+        "collate_seconds": round(seconds["collate"], 4),
+        "transfer_seconds": round(seconds["transfer"], 4),
+        "forward_seconds": round(seconds["forward"], 4),
+        "split_seconds": round(seconds["split"], 4),
+        "assembly_seconds": round(assembly, 4),
+        "assembly_ms_per_position": _ratio(1e3 * assembly, positions, 4),
+        "assembly_share": _ratio(assembly, total, 4),
+        "forward_ms_per_position": _ratio(1e3 * seconds["forward"], positions, 4),
+        "forward_share": _ratio(seconds["forward"], total, 4),
+    }
+
+
 class RangedEvaluator(NetworkEvaluator):
     """``NetworkEvaluator`` that also times each call and files it by board-count range - the
-    range of its largest position (the padded batch's size sets the call's cost)."""
+    range of its largest position (the padded batch's size sets the call's cost) - with the call's
+    parts (``PARTS``): the evaluator's own fit, collation, transfer, forward and split, and the
+    conversion of the batch's positions, which the serve loop reports before the call
+    (``note_conversion``; ``evaluator.serve``). ``convert_seconds`` is the conversions' sum over
+    the evaluator's life, beside ``NetworkEvaluator``'s five."""
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.ranges: dict[str, dict] = {name: {"forwards": 0, "positions": 0, "seconds": 0.0} for name, _ in RANGES}
+        self.convert_seconds = 0.0
+        self.ranges: dict[str, dict] = {
+            name: {"forwards": 0, "positions": 0, "seconds": 0.0, "parts": dict.fromkeys(PARTS, 0.0)} for name, _ in RANGES
+        }
+
+    def parts(self) -> dict[str, float]:
+        """The seconds of each part so far (``PARTS``)."""
+        return {
+            "convert": self.convert_seconds,
+            "fit": self.fit_seconds,
+            "collate": self.collate_seconds,
+            "transfer": self.transfer_seconds,
+            "forward": self.forward_seconds,
+            "split": self.split_seconds,
+        }
+
+    def note_conversion(self, positions: Sequence[PositionLike], seconds: float) -> None:
+        """The seconds the driver spent converting ``positions`` (the batch about to be evaluated),
+        filed in the range of its largest position, as the call will be."""
+        boards = max((int(state_of(p).n_boards) for p in positions), default=0)
+        self.convert_seconds += seconds
+        self.ranges[range_of(boards)]["parts"]["convert"] += seconds
 
     def __call__(self, positions: Sequence[PositionLike]) -> list:
         boards = max((int(state_of(p).n_boards) for p in positions), default=0)
         f0 = self.batches
+        before = self.parts()
         start = time.perf_counter()
         out = super().__call__(positions)
         r = self.ranges[range_of(boards)]
         r["seconds"] += time.perf_counter() - start
         r["forwards"] += self.batches - f0
         r["positions"] += len(positions)
+        after = self.parts()
+        for part in PARTS[1:]:  # the conversion is filed when it is reported
+            r["parts"][part] += after[part] - before[part]
         return out
 
     def by_range(self) -> dict:
-        """The ranges with any call: their counts, seconds and rates."""
+        """The ranges with any call: their counts, seconds and rates, and where the time went
+        (``assembly_breakdown``; ``seconds`` is the evaluator's calls, the conversion not in it)."""
         return {
-            name: r
-            | {
+            name: {
+                "forwards": r["forwards"],
+                "positions": r["positions"],
                 "seconds": round(r["seconds"], 3),
                 "positions_per_s": _ratio(r["positions"], r["seconds"], 2),
                 "positions_per_forward": _ratio(r["positions"], r["forwards"], 2),
             }
+            | assembly_breakdown(r["parts"], r["positions"])
             for name, r in self.ranges.items()
             if r["forwards"]
         }
@@ -131,20 +210,40 @@ def play_config(variant: str, split: str, seed: int, *, provers: bool = False, *
 
 @dataclass
 class GameFigures:
-    """One game's figures: its result and what the evaluator counted during it."""
+    """One game's figures: its result and what the evaluator counted during it - its forwards
+    and positions, and the seconds of each part of its evaluations (``PARTS``; all 0 for an
+    evaluator that keeps none)."""
 
     result: GameResult
     forwards: int
     positions: int
+    parts: dict[str, float] = field(default_factory=lambda: dict.fromkeys(PARTS, 0.0))
 
     def row(self) -> dict:
         r = self.result.summary()
         r |= {"forwards": self.forwards, "positions": self.positions, "positions_per_forward": _ratio(self.positions, self.forwards, 2)}
+        r |= assembly_breakdown(self.parts, self.positions)
         return r
 
 
 def _ratio(a: float, b: float, digits: int) -> float:
     return round(a / b, digits) if b else 0.0
+
+
+def _parts(evaluator: NetworkEvaluator) -> dict[str, float]:
+    """The evaluator's seconds by part so far (``PARTS``): ``RangedEvaluator.parts``, or the
+    plain evaluator's five with no conversion (it is told of none)."""
+    parts = getattr(evaluator, "parts", None)
+    if callable(parts):
+        return dict(parts())
+    return {
+        "convert": 0.0,
+        "fit": evaluator.fit_seconds,
+        "collate": evaluator.collate_seconds,
+        "transfer": evaluator.transfer_seconds,
+        "forward": evaluator.forward_seconds,
+        "split": evaluator.split_seconds,
+    }
 
 
 def totals(games: Sequence[GameFigures]) -> dict:
@@ -156,6 +255,7 @@ def totals(games: Sequence[GameFigures]) -> dict:
     evaluations = sum(g.result.evaluations for g in games)
     forwards = sum(g.forwards for g in games)
     positions = sum(g.positions for g in games)
+    parts = {p: sum(g.parts[p] for g in games) for p in PARTS}
     return {
         "games": len(games),
         "ends": dict(Counter(g.result.end for g in games)),
@@ -171,7 +271,7 @@ def totals(games: Sequence[GameFigures]) -> dict:
         "forwards_per_s": _ratio(forwards, seconds, 2),
         "network_positions_per_s": _ratio(positions, network, 2),
         "network_share": _ratio(network, seconds, 3),
-    }
+    } | assembly_breakdown(parts, positions)
 
 
 def play(
@@ -192,10 +292,11 @@ def play(
         for split in splits:
             for s in game_seeds(seed, games):
                 cfg = play_config(variant, split, s, provers=provers, **settings)
-                f0, p0 = evaluator.batches, evaluator.positions
+                f0, p0, parts0 = evaluator.batches, evaluator.positions, _parts(evaluator)
                 with torch.no_grad():
                     result = play_game(evaluator, cfg, net_cfg=net_cfg)
-                game = GameFigures(result, evaluator.batches - f0, evaluator.positions - p0)
+                parts1 = _parts(evaluator)
+                game = GameFigures(result, evaluator.batches - f0, evaluator.positions - p0, {p: parts1[p] - parts0[p] for p in PARTS})
                 out.append(game)
                 if on_game is not None:
                     on_game(game)
