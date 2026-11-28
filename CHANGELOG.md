@@ -10,6 +10,22 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-29 - The flat generator's every-variant test names a variant it could not compare
+
+`engine/tests/test_turngen.cpp`: `turngen_equals_the_exhaustive_listing_on_every_variant` (and
+its long twin) left out, without a word, any turn start whose exhaustive listing passed its caps,
+and asserted only a total - so no variant was guaranteed to be compared (the done-means re-audit,
+section 15.2's row 18). Each variant's compared turn starts are now counted and printed, and a
+variant with none fails the test by name. The seeds, the games and the caps are as they were.
+`engine/README.md` says so.
+
+Found: every one of the 16 named variants is compared. 15 at all three of their turn starts;
+Misc - Timeline Battleground at one of three (its other two listings pass the caps). 46 of 48
+turn starts, 92 comparisons (each turn start under continuous scores and under scores that tie).
+No cap was raised and nothing needed a smaller start.
+
+Spec: section 15.2 (the flat form's generator row) - no edit: the row's claim is unchanged.
+
 ### 2026-11-29 - The solver's constructed roots are held under the tree form with graph search
 
 Since the 2026-11-15 review's decision 10 the tree form runs under MCGS, and `kConfigs` has had

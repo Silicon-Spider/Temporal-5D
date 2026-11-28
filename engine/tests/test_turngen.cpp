@@ -348,19 +348,58 @@ std::optional<std::vector<Move>> random_action(const GameState& s, t5d_test::Rng
   return std::nullopt;
 }
 
-void games_from(const GameState& start, int turns, std::uint64_t seed, Tally& tally, const std::string& name) {
+// What a game's turn starts gave: how many were met, and how many of them
+// were compared - one whose listing is not exhaustive within
+// check_against_listing's caps (5,000 actions here, 3,000,000 nodes) is too
+// large for an exhaustive comparison and is left out, counted in `met` alone.
+struct Compared {
+  int met = 0;
+  int compared = 0;
+};
+
+Compared games_from(const GameState& start, int turns, std::uint64_t seed, Tally& tally, const std::string& name) {
   t5d_test::Rng rng(seed);
   GameState s = start;
+  Compared out;
   for (int turn = 0; turn < turns; ++turn) {
+    ++out.met;
+    bool compared = true;
     for (const int levels : {0, 2}) {
-      check_against_listing(s, HashScorer(seed * 31 + static_cast<std::uint64_t>(turn), levels), tally, 5000,
-                            name + " turn " + std::to_string(turn));
+      compared = check_against_listing(s, HashScorer(seed * 31 + static_cast<std::uint64_t>(turn), levels), tally, 5000,
+                                       name + " turn " + std::to_string(turn)) &&
+                 compared;
     }
+    if (compared) ++out.compared;
     const std::optional<std::vector<Move>> action = random_action(s, rng);
     if (!action) break;
     for (const Move& m : *action) s.apply(m);
     s.submit();
   }
+  return out;
+}
+
+// Every named variant's games, each variant's positions counted: the generator
+// is compared with the exhaustive listing on at least one position of EVERY
+// variant - a variant none of whose turn starts could be listed within the
+// caps is named and fails the test (it was skipped without a word before the
+// done-means re-audit of 2026-11-28, with only the total asserted).
+void every_variant(int games, int turns, std::uint64_t seed, Tally& tally) {
+  std::vector<std::string> none;
+  for (const Variant& v : variants()) {
+    Compared sum;
+    for (int game = 0; game < games; ++game) {
+      const Compared c = games_from(variant_start(v), turns, seed++, tally, std::string(v.name));
+      sum.met += c.met;
+      sum.compared += c.compared;
+    }
+    std::printf("    %-30s %d of %d turn starts compared\n", std::string(v.name).c_str(), sum.compared, sum.met);
+    if (sum.compared == 0) none.emplace_back(v.name);
+  }
+  for (const std::string& name : none) {
+    std::fprintf(stderr, "  %s: no turn start compared - every listing passed the caps (5,000 actions, 3,000,000 nodes)\n",
+                 name.c_str());
+  }
+  CHECK(none.empty());
 }
 
 // Constructed multi-board presents: rooks jumping between two present boards
@@ -427,19 +466,20 @@ TEST(turngen_equals_the_exhaustive_listing_on_constructed_presents) {
 }
 
 TEST(turngen_equals_the_exhaustive_listing_on_every_variant) {
+  // One game of three turns from every named variant's start (seeds 401, 402,
+  // ... in the variants' order, as before): every variant compared at one
+  // turn start at least (every_variant), and more than 60 comparisons in all
+  // (a turn start compared is two: continuous scores, and scores that tie).
   Tally t;
-  std::uint64_t seed = 401;
-  for (const Variant& v : variants()) games_from(variant_start(v), 3, seed++, t, std::string(v.name));
+  every_variant(1, 3, 401, t);
   report("variants", t);
   CHECK(t.positions > 60);
 }
 
 TEST(long_turngen_equals_the_exhaustive_listing_on_every_variant) {
+  // Three games of eight turns from every variant's start (seeds 901, ...).
   Tally t;
-  std::uint64_t seed = 901;
-  for (const Variant& v : variants()) {
-    for (int game = 0; game < 3; ++game) games_from(variant_start(v), 8, seed++, t, std::string(v.name));
-  }
+  every_variant(3, 8, 901, t);
   report("variants, long", t);
 }
 

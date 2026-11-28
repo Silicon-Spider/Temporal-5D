@@ -1779,7 +1779,12 @@ non-increasing score, each score recomputed from the turn's moves alone bit for 
 the sorted scores of every legal action (so equal runs match as multisets), each
 successor's score its best action's, the same on a second run, and, under a budget
 that stops it half-way, stopped and a prefix of the full run. `long_` runs 3,000 tiny
-multiverses and longer games.
+multiverses and longer games. The every-variant test counts what it compares, variant by
+variant (2026-11-29): a turn start whose exhaustive listing passes the caps (5,000 actions,
+3,000,000 nodes) is too large to compare and is left out, and before this a variant none of
+whose turn starts could be listed was skipped without a word - only the total was
+asserted. Each variant's "N of M turn starts compared" is printed, and a variant with none
+fails the test by name.
 
 ### The two detectors compared
 
