@@ -10,6 +10,17 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-28 - Build log: the quiet-machine block paused for a restart
+
+`docs/BUILD_LOG.md`, the main loop's work items: the quiet-machine block started at main 1d09117
+and paused for the machine's restart. Run so far: the pre-flight, 6b″'s re-run, the legality
+profile and M9 with legality, issue 603's flag A/B (no cost outside noise), A5's dense bench at 44
+boards; no result near a STOP band, no verdict changed. Items 1 and 2 are re-run before they are
+recorded: they ran under memory pressure from desktop applications, which slowed the provers by
+about 40% against a clean run of the same build. Nothing is written to MEASUREMENTS yet.
+
+Spec: no part of the spec describes the build log's bookkeeping.
+
 ### 2026-11-28 - The network job's shard weights read from CI's own durations (issue 605)
 
 The first run after the shard fix (46070952187, main 0d81cc3) was green, but one shard took 85

@@ -3115,7 +3115,19 @@ placeholders consolidated for the user".
   - Kairos's full mode and triage after it;
   - MT-02's harness side, when the user allows engine-generated records into the corpus.
 - **Main loop**:
-  - the quiet-machine block's timings;
+  - the quiet-machine block's timings - *started 2026-11-28 at main 1d09117, paused for the
+    machine's restart*. Run: the pre-flight; 6b″'s re-run (item 1), the legality profile and M9
+    with legality (item 2), issue 603's flag A/B (five rounds; the flag costs nothing outside
+    run-to-run noise, within 3%), A5's dense bench at 44 boards. No result came near a STOP band
+    and no verdict changed. **Not recorded yet, to be re-run after the restart:** items 1 and 2
+    ran with the owner's desktop applications open and the commit charge near its limit (48 of
+    50.6 GB); with them closed, the same build ran the provers about 40% faster (Guard 1.95M
+    against 1.39M nodes/s pooled) and movegen 8-10% faster, so those figures understate the
+    engine. Twice the session's own jobs were stopped for low memory. Left: items 1-2 again, two
+    more 603 pairs, the network benches (FFN, A8 with its embedding time, B15/Shaw), F1's rate,
+    N3's `cache_bench` (and A5's cached node), Kairos's parse recording; then the records, the
+    write-backs and the §15.3 table. The block's scripts and the provisional records are kept
+    outside git, in `build/mainloop-scratch/` (git-ignored, on this machine only);
   - MEASUREMENTS' section 15.3 table rebuilt;
   - the write-backs (M4);
   - the placeholders to the user, in the sign-off report (issues 536-538 settled by decisions 16
