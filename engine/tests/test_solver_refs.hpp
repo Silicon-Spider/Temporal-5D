@@ -12,6 +12,7 @@
 #ifndef T5D_TEST_SOLVER_REFS_HPP
 #define T5D_TEST_SOLVER_REFS_HPP
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -91,22 +92,42 @@ inline std::vector<Named> constructed(const RuleOptions& rules) {
 }
 
 /// The search's D2 arms the solver is checked under (SearchParams::split):
-/// the ply split (as a tree and as MCGS's graph), the tree form (a tree only:
-/// refused with graph search) and the flat form.
+/// the ply split, the tree form and the flat form, each as a tree and as
+/// MCGS's graph. The tree form runs under graph search since the 2026-11-15
+/// review's decision 10 (only evaluated nodes are graph nodes: t5d/mcts.hpp;
+/// before it the combination was refused, and these arms had none for it).
 struct Arm {
   const char* name;
   t5d::mcts::TurnSplit split;
   bool graph;
 };
-inline std::vector<Arm> arms(bool with_graphs) {
+
+/// Which graph arms a check runs beside the three trees.
+enum class Graphs : std::uint8_t {
+  None,      ///< the three trees alone
+  TreeForm,  ///< ... and the tree form's graph
+  All,       ///< ... and every split's graph
+};
+
+/// The tree form under graph search: the arm decision 10 added, which the
+/// checks count apart (their baselines are the other arms').
+inline bool tree_form_graph(const Arm& arm) noexcept {
+  return arm.split == t5d::mcts::TurnSplit::Tree && arm.graph;
+}
+
+/// The arms, the trees first and the tree form's graph last - so that on each
+/// position the arms before it meet a df-pn memo no question of its own has
+/// filled.
+inline std::vector<Arm> arms(Graphs graphs) {
   using t5d::mcts::TurnSplit;
   std::vector<Arm> out{{"ply split", TurnSplit::BoardMove, false},
                        {"tree form", TurnSplit::Tree, false},
                        {"flat form", TurnSplit::Flat, false}};
-  if (with_graphs) {
+  if (graphs == Graphs::All) {
     out.push_back({"ply split, graph", TurnSplit::BoardMove, true});
     out.push_back({"flat form, graph", TurnSplit::Flat, true});
   }
+  if (graphs != Graphs::None) out.push_back({"tree form, graph", TurnSplit::Tree, true});
   return out;
 }
 

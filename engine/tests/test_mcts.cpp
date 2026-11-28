@@ -422,49 +422,51 @@ TEST(mcts_solver_proves_a_mate_in_one_and_plays_it) {
     RuleOptions rules;
     rules.moves_after_shift = after_shift;
     const GameState start = game({"[k4/4Q/1K3/5/5:0:1:w]"}, BoardSize{5, 5}, rules);
-    for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
-      for (const bool graph : {false, true}) {
-        const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
-        SearchParams p = fast();
-        p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
-        p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
-        p.split = split;
-        p.graph = graph;
-        Search search(start, p);
-        search.run(*ev, Limits{2000});
-        CHECK(search.root_solved());
-        const NodeView root = search.node(search.root());
-        CHECK_EQ(root.lo, 1);
-        CHECK_EQ(root.hi, 1);
-        CHECK(search.stats().playouts < 2000);  // the search stopped once the root was solved
-        const Choice c = search.choose();
-        CHECK(c.reason == ChoiceReason::ProvenWin);
-        const std::vector<RootChild> children = search.root_children();
-        const RootChild& chosen = children.at(c.index);
-        REQUIRE(chosen.child != kNoNode);
-        // Under the ply split the mating move leaves White's action open (D8):
-        // its node is White's, proven won, and its submit edge reaches the mate.
-        NodeId mate = chosen.child;
-        if (split == TurnSplit::BoardMove) {
-          const NodeView mid = search.node(mate);
-          CHECK(!mid.turn_start);
-          CHECK(mid.mover == Colour::White);
-          CHECK_EQ(mid.lo, 1);
-          mate = kNoNode;
-          for (std::size_t i = 0; i < mid.edge_count; ++i) {
-            const EdgeView e = search.edge(chosen.child, i);
-            if (e.submit) mate = e.child;
-          }
-          REQUIRE(mate != kNoNode);
+    // Every D2 arm, each as a tree and as MCGS's graph - the tree form under
+    // graph search among them (decision 10 of the 2026-11-15 review).
+    for (const t5d_test::solver::Arm& arm : t5d_test::solver::arms(t5d_test::solver::Graphs::All)) {
+      const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+      SearchParams p = fast();
+      p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
+      p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
+      p.split = arm.split;
+      p.graph = arm.graph;
+      Search search(start, p);
+      search.run(*ev, Limits{2000});
+      if (!search.root_solved()) std::fprintf(stderr, "  the mate in one is not solved under the %s\n", arm.name);
+      CHECK(search.root_solved());
+      const NodeView root = search.node(search.root());
+      CHECK_EQ(root.lo, 1);
+      CHECK_EQ(root.hi, 1);
+      CHECK(search.stats().playouts < 2000);  // the search stopped once the root was solved
+      const Choice c = search.choose();
+      CHECK(c.reason == ChoiceReason::ProvenWin);
+      const std::vector<RootChild> children = search.root_children();
+      const RootChild& chosen = children.at(c.index);
+      REQUIRE(chosen.child != kNoNode);
+      // Under the ply split and the tree form (its nodes and edges are the ply
+      // split's) the mating move leaves White's action open (D8): its node is
+      // White's, proven won, and its submit edge reaches the mate.
+      NodeId mate = chosen.child;
+      if (arm.split != TurnSplit::Flat) {
+        const NodeView mid = search.node(mate);
+        CHECK(!mid.turn_start);
+        CHECK(mid.mover == Colour::White);
+        CHECK_EQ(mid.lo, 1);
+        mate = kNoNode;
+        for (std::size_t i = 0; i < mid.edge_count; ++i) {
+          const EdgeView e = search.edge(chosen.child, i);
+          if (e.submit) mate = e.child;
         }
-        CHECK(search.node(mate).terminal == Terminal::Checkmate);
-        CHECK(verdict_of(*search.node(mate).state) == Outcome::Checkmate);
-        CHECK_NOTHROW(search.check_invariants());
-        // Solved: more running consumes no evaluation.
-        const std::uint64_t evaluations = search.stats().evaluations;
-        search.run(*ev, Limits{50});
-        CHECK_EQ(search.stats().evaluations, evaluations);
+        REQUIRE(mate != kNoNode);
       }
+      CHECK(search.node(mate).terminal == Terminal::Checkmate);
+      CHECK(verdict_of(*search.node(mate).state) == Outcome::Checkmate);
+      CHECK_NOTHROW(search.check_invariants());
+      // Solved: more running consumes no evaluation.
+      const std::uint64_t evaluations = search.stats().evaluations;
+      search.run(*ev, Limits{50});
+      CHECK_EQ(search.stats().evaluations, evaluations);
     }
   }
 }
@@ -475,14 +477,19 @@ TEST(mcts_solver_proves_a_draw_when_every_child_is_drawn) {
   REQUIRE(acts.stats.exhaustive);
   REQUIRE(!acts.actions.empty());
   for (const LegalAction& a : acts.actions) REQUIRE(verdict_of(a.result) == Outcome::Stalemate);
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
+  // The three arms as trees, and the tree form under graph search (decision 10
+  // of the 2026-11-15 review; the ply split's and the flat form's graphs prove
+  // their draws in mcts_solver_agrees_with_df_pn_on_constructed_mates).
+  for (const t5d_test::solver::Arm& arm : t5d_test::solver::arms(t5d_test::solver::Graphs::TreeForm)) {
     const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Random, 5);
     SearchParams p = fast();
     p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
     p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
-    p.split = split;
+    p.split = arm.split;
+    p.graph = arm.graph;
     Search search(s, p);
     search.run(*ev, Limits{200});
+    if (!search.root_solved()) std::fprintf(stderr, "  the forced draw is not solved under the %s\n", arm.name);
     CHECK(search.root_solved());
     CHECK_EQ(search.node(search.root()).lo, 0);
     CHECK_EQ(search.node(search.root()).hi, 0);
@@ -495,25 +502,26 @@ TEST(mcts_solver_proves_a_draw_when_every_child_is_drawn) {
 TEST(mcts_solver_proves_a_loss_when_every_child_is_lost) {
   const GameState s = forced_loss();
   REQUIRE(every_action_allows_mate(s));
-  for (const TurnSplit split : {TurnSplit::BoardMove, TurnSplit::Flat}) {
-    for (const bool graph : {false, true}) {
-      const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
-      SearchParams p = fast();
-      p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
-      p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
-      p.split = split;
-      p.graph = graph;
-      Search search(s, p);
-      search.run(*ev, Limits{20000});
-      CHECK(search.root_solved());
-      CHECK_EQ(search.node(search.root()).lo, -1);
-      CHECK_EQ(search.node(search.root()).hi, -1);
-      // Every root child is proven lost: final selection says so.
-      const Choice c = search.choose();
-      CHECK(c.reason == ChoiceReason::AllLost);
-      for (const RootChild& child : search.root_children()) CHECK_EQ(child.hi, -1);
-      CHECK_NOTHROW(search.check_invariants());
-    }
+  // Every D2 arm, each as a tree and as MCGS's graph - the tree form under
+  // graph search among them (decision 10 of the 2026-11-15 review).
+  for (const t5d_test::solver::Arm& arm : t5d_test::solver::arms(t5d_test::solver::Graphs::All)) {
+    const std::unique_ptr<Evaluator> ev = make_evaluator(BuiltinEvaluator::Uniform);
+    SearchParams p = fast();
+    p.proof_channel = true;  // the in-tree solver under test (off by rule, H41)
+    p.hunt = p.settling = false;  // the ladder's proofs (E10) are test_ladder.cpp's
+    p.split = arm.split;
+    p.graph = arm.graph;
+    Search search(s, p);
+    search.run(*ev, Limits{20000});
+    if (!search.root_solved()) std::fprintf(stderr, "  the forced loss is not solved under the %s\n", arm.name);
+    CHECK(search.root_solved());
+    CHECK_EQ(search.node(search.root()).lo, -1);
+    CHECK_EQ(search.node(search.root()).hi, -1);
+    // Every root child is proven lost: final selection says so.
+    const Choice c = search.choose();
+    CHECK(c.reason == ChoiceReason::AllLost);
+    for (const RootChild& child : search.root_children()) CHECK_EQ(child.hi, -1);
+    CHECK_NOTHROW(search.check_invariants());
   }
 }
 
@@ -791,6 +799,23 @@ std::optional<SolverClaim> solver_against_dfpn(const GameState& s, const t5d_tes
   return t5d::tools::solver_claim(search, search.root());
 }
 
+// What the arms' searches are counted in: the tree form under graph search
+// (decision 10 of the 2026-11-15 review; test_solver_refs.hpp) in a tally of
+// its own - held to the same claims and rules, with floors of its own - so
+// that the other arms' counts stay the ones their baselines were taken from.
+struct SolverTallies {
+  DfpnTally tally;
+  SolverRuns runs;
+  DfpnTally tree_graph;
+  SolverRuns tree_graph_runs;
+  DfpnTally& tally_of(const t5d_test::solver::Arm& arm) {
+    return t5d_test::solver::tree_form_graph(arm) ? tree_graph : tally;
+  }
+  SolverRuns& runs_of(const t5d_test::solver::Arm& arm) {
+    return t5d_test::solver::tree_form_graph(arm) ? tree_graph_runs : runs;
+  }
+};
+
 void report(const char* what, const DfpnTally& t, const SolverRuns& runs) {
   std::fprintf(stderr,
                "  %s: %zu searches, %zu roots solved; %s\n  %s; solved nodes with children at more than one "
@@ -802,9 +827,11 @@ void report(const char* what, const DfpnTally& t, const SolverRuns& runs) {
 }
 
 // Random positions under every ruleset: two_board_positions under both Q4
-// readings, and sparse_positions (test_play.hpp) under every ruleset.
+// readings, and sparse_positions (test_play.hpp) under every ruleset; under
+// the three trees and the graph arms `graphs` names, the tree form's graph
+// counted apart (SolverTallies).
 void every_ruleset_against_dfpn(int two_board, int turns, int games, std::uint64_t playouts,
-                                const DfpnCheckOptions& options, bool graphs, DfpnTally& tally, SolverRuns& runs,
+                                const DfpnCheckOptions& options, t5d_test::solver::Graphs graphs, SolverTallies& out,
                                 bool progress = false,
                                 const LegalityOptions& legality = LegalityOptions::exact()) {
   std::uint64_t seed = 5100;
@@ -814,7 +841,7 @@ void every_ruleset_against_dfpn(int two_board, int turns, int games, std::uint64
     DfpnChecker checker(options);
     for (const GameState& s : two_board_positions(rules, two_board, seed++)) {
       for (const t5d_test::solver::Arm& arm : t5d_test::solver::arms(graphs)) {
-        solver_against_dfpn(s, arm, playouts, checker, tally, runs, legality);
+        solver_against_dfpn(s, arm, playouts, checker, out.tally_of(arm), out.runs_of(arm), legality);
       }
     }
   }
@@ -823,14 +850,57 @@ void every_ruleset_against_dfpn(int two_board, int turns, int games, std::uint64
     DfpnChecker checker(options);
     for (const GameState& s : t5d_test::playable(t5d_test::sparse_positions(rules, games, turns, seed++))) {
       for (const t5d_test::solver::Arm& arm : t5d_test::solver::arms(graphs)) {
-        solver_against_dfpn(s, arm, playouts, checker, tally, runs, legality);
+        solver_against_dfpn(s, arm, playouts, checker, out.tally_of(arm), out.runs_of(arm), legality);
       }
     }
     if (progress) {  // a long test, so that a run can be followed
-      std::fprintf(stderr, "  %s done at %.0f s: %zu searches, %zu decided\n", describe(rules).c_str(),
-                   std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(), runs.searches,
-                   tally.decided);
+      std::fprintf(stderr, "  %s done at %.0f s: %zu searches, %zu decided (the tree form's graph: %zu, %zu)\n",
+                   describe(rules).c_str(),
+                   std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(), out.runs.searches,
+                   out.tally.decided, out.tree_graph_runs.searches, out.tree_graph.decided);
     }
+  }
+}
+
+// The tree form under graph search, on its own tally (SolverTallies): no
+// contradiction and no certificate failure; searched wherever the other arms
+// were (`others` of them share out.runs); and not vacuous - it decides at
+// least half of what one of the other arms decides on average. (Its arm runs
+// last on each position, so most of its df-pn questions are answered from
+// the checker's memo: its tally's distinct searches and certified proofs are
+// few by construction and are not floored - the proofs it is held to were
+// certified when the arms before it asked.)
+//
+// `floors`: the arm's own baseline where one was taken (the default tests:
+// deterministic - one thread, node budgets - and the same counts on two runs,
+// 2026-11-28), with the margins the other arms' floors have; none for the
+// long twin, whose relative floor stands.
+struct TreeGraphFloors {
+  std::size_t min_decided = 0;
+  std::size_t max_unknown = std::numeric_limits<std::size_t>::max();
+  std::size_t min_inner_claims = 0;
+  std::size_t max_inner_claims = std::numeric_limits<std::size_t>::max();
+  /// No solved Win node with winning children at two distances - the other
+  /// arms' regression guard under exact legality (not held where legality is
+  /// budgeted: MCGS with an unknown edge can leave one).
+  bool no_win_spread = false;
+};
+
+void check_tree_form_graph(const char* what, const SolverTallies& out, std::size_t others,
+                           const TreeGraphFloors& floors = {}) {
+  report(what, out.tree_graph, out.tree_graph_runs);
+  CHECK(out.tree_graph.contradictions.empty());
+  CHECK(out.tree_graph.certificate_failures.empty());
+  CHECK(out.tree_graph_runs.searches > 0);
+  CHECK_EQ(out.tree_graph_runs.searches * others, out.runs.searches);
+  CHECK(out.tree_graph.decided > 0);
+  CHECK(out.tree_graph.decided * others * 2 >= out.tally.decided);
+  CHECK(out.tree_graph.decided >= floors.min_decided);
+  CHECK(out.tree_graph.unknown <= floors.max_unknown);
+  CHECK(out.tree_graph.inner_claims >= floors.min_inner_claims);
+  CHECK(out.tree_graph.inner_claims <= floors.max_inner_claims);
+  if (floors.no_win_spread) {
+    CHECK_EQ(out.tree_graph_runs.win_spread, std::size_t{0});
   }
 }
 
@@ -838,34 +908,60 @@ void every_ruleset_against_dfpn(int two_board, int turns, int games, std::uint64
 
 TEST(mcts_solver_agrees_with_df_pn_on_constructed_mates) {
   // The fourteen constructed positions under both Q4 readings, under every
-  // arm (the ply split and the flat form as MCGS graphs too). Every root is
+  // arm (each as an MCGS graph too). Every root is
   // solved and held to its claim (test_solver_refs.hpp): the mates Win(1) and
   // Win(3), the four draws, the forced loss Loss(2), and the four losses whose
   // defences lose at different speeds - Loss(4) and Loss(6), the longest
   // defence's, which the derivation's greatest decides (M4 of MT-01's review,
   // 2026-11-01; before it three roots were held, and every solved node's
-  // children were at one distance).
-  DfpnTally tally;
-  SolverRuns runs;
+  // children were at one distance). The tree form under graph search (decision
+  // 10 of the 2026-11-15 review) is the sixth arm: every root solved and held
+  // to the same claim, its comparisons with df-pn counted apart
+  // (SolverTallies) so that the five arms' baselines below stay theirs.
+  SolverTallies all;
+  DfpnTally& tally = all.tally;
+  SolverRuns& runs = all.runs;
   DfpnCheckOptions options;
   options.nodes = 500'000;
+  std::size_t tree_graph_roots = 0;
   for (const bool after_shift : {true, false}) {
     RuleOptions rules;
     rules.moves_after_shift = after_shift;
     DfpnChecker checker(options);
     for (const t5d_test::solver::Named& n : t5d_test::solver::constructed(rules)) {
-      for (const t5d_test::solver::Arm& arm : t5d_test::solver::arms(true)) {
-        const std::optional<SolverClaim> root = solver_against_dfpn(n.state, arm, 20000, checker, tally, runs);
+      for (const t5d_test::solver::Arm& arm : t5d_test::solver::arms(t5d_test::solver::Graphs::All)) {
+        const std::optional<SolverClaim> root =
+            solver_against_dfpn(n.state, arm, 20000, checker, all.tally_of(arm), all.runs_of(arm));
         if (std::string(n.claim).empty()) continue;
+        if (!root.has_value()) std::fprintf(stderr, "  %s under the %s: the root is not solved\n", n.name, arm.name);
         REQUIRE(root.has_value());
         if (t5d::tools::to_string(*root) != n.claim) {
           std::fprintf(stderr, "  %s under the %s: the root's claim %s, not %s\n", n.name, arm.name,
                        t5d::tools::to_string(*root).c_str(), n.claim);
           CHECK(false);
+        } else if (t5d_test::solver::tree_form_graph(arm)) {
+          ++tree_graph_roots;
         }
       }
     }
   }
+  // The tree form under graph search: all fourteen roots under both Q4
+  // readings solved with their claims, every kind of claim among its
+  // comparisons.
+  CHECK_EQ(tree_graph_roots, std::size_t{28});
+  // Its baseline (2026-11-28, the same on two runs: 28 searches, 242 decided,
+  // 2 unknown, 136 inner claims, 10 losses whose children are at more than one
+  // distance; every df-pn question answered from the memo the five arms
+  // filled), with the margins of the five arms' floors below.
+  TreeGraphFloors floors;
+  floors.min_decided = 180;
+  floors.max_unknown = 8;
+  floors.min_inner_claims = 100;
+  floors.max_inner_claims = 177;  // 1.3x the 136 measured
+  floors.no_win_spread = true;
+  check_tree_form_graph("constructed, the tree form under graph search", all, 5, floors);
+  CHECK(all.tree_graph.wins > 0 && all.tree_graph.losses > 0 && all.tree_graph.draws > 0);
+  CHECK(all.tree_graph_runs.loss_spread >= 6u);
   report("constructed", tally, runs);
   CHECK(tally.contradictions.empty());
   CHECK(tally.certificate_failures.empty());
@@ -898,11 +994,26 @@ TEST(mcts_solver_agrees_with_df_pn_on_constructed_mates) {
 }
 
 TEST(mcts_solver_agrees_with_df_pn_under_every_ruleset) {
-  DfpnTally tally;
-  SolverRuns runs;
+  // The three arms as trees, and the tree form under graph search (decision 10
+  // of the 2026-11-15 review) on the same positions, counted apart; the ply
+  // split's and the flat form's graphs are the long twin's.
+  SolverTallies all;
+  DfpnTally& tally = all.tally;
+  SolverRuns& runs = all.runs;
   DfpnCheckOptions options;
   options.nodes = 50'000;
-  every_ruleset_against_dfpn(6, 2, 1, 250, options, false, tally, runs);
+  every_ruleset_against_dfpn(6, 2, 1, 250, options, t5d_test::solver::Graphs::TreeForm, all);
+  // Its baseline (2026-11-28, the same on two runs: 543 searches, 209 roots
+  // solved, 846 decided, 5 unknown, 445 inner claims; 21 df-pn searches of its
+  // own, the rest from the memo the three trees filled), with the margins of
+  // the three arms' floors below.
+  TreeGraphFloors floors;
+  floors.min_decided = 630;
+  floors.max_unknown = 15;
+  floors.min_inner_claims = 330;
+  floors.max_inner_claims = 580;  // 1.3x the 445 measured
+  floors.no_win_spread = true;
+  check_tree_form_graph("every ruleset, the tree form under graph search", all, 3, floors);
   report("every ruleset", tally, runs);
   CHECK(tally.contradictions.empty());
   CHECK(tally.certificate_failures.empty());
@@ -989,8 +1100,12 @@ TEST(mcts_df_pn_checker_memo_keys_on_depth) {
 }
 
 TEST(long_mcts_solver_agrees_with_df_pn) {
-  DfpnTally tally;
-  SolverRuns runs;
+  // Every arm as a tree and as MCGS's graph; the tree form under graph search
+  // (decision 10 of the 2026-11-15 review) counted apart, as in the default
+  // tests - the five arms' baseline below stays theirs.
+  SolverTallies all;
+  DfpnTally& tally = all.tally;
+  SolverRuns& runs = all.runs;
   DfpnCheckOptions options;
   options.nodes = 200'000;
   options.certificate.max_positions = 20000;
@@ -998,7 +1113,9 @@ TEST(long_mcts_solver_agrees_with_df_pn) {
   // classification can run for many minutes (the flat form on a 5-board 4x4
   // position: over 10 minutes for one search; build-log issue 406). A move the
   // budget leaves unknown proves nothing (the solver's rule (e)).
-  every_ruleset_against_dfpn(12, 3, 1, 800, options, true, tally, runs, true, LegalityOptions::nodes(2'000'000));
+  every_ruleset_against_dfpn(12, 3, 1, 800, options, t5d_test::solver::Graphs::All, all, true,
+                             LegalityOptions::nodes(2'000'000));
+  check_tree_form_graph("every ruleset (long), the tree form under graph search", all, 5);
   report("every ruleset (long)", tally, runs);
   CHECK(tally.contradictions.empty());
   CHECK(tally.certificate_failures.empty());

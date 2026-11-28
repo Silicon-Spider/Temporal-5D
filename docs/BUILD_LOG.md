@@ -6609,6 +6609,17 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     `t5d-proof-records`; `tests/test_solver_refs.hpp` holds the positions and arms. Found: no
     contradiction and no certificate failure (counts in `engine/README.md`, "Step 2: H41's
     cross-checks"). Edit 300.
+    *2026-11-29, (e) corrected (`lane/engine`; the done-means re-audit's finding on §15.4's
+    "solved bounds"): the tree form has run under graph search since the 2026-11-15 review's
+    decision 10 (issue 301 settled; `kConfigs` gained its two configurations on 2026-11-23),
+    but `test_solver_refs.hpp`'s arms still left the combination out and its comment still
+    called it refused, so no test held a constructed root to its claim under it. It is the
+    sixth arm now ("tree form, graph"): the fourteen constructed roots under both Q4 readings
+    solved with the same claims; beside the three trees under every ruleset, and beside the
+    five arms in the long twin; and in the three "proves" tests (the mate in one played, the
+    forced loss, the forced draw). Its df-pn comparisons are counted in a tally of their own
+    (`SolverTallies`), the other arms' baselines untouched. `engine/README.md`, "Step 2: H41's
+    cross-checks".*
 401. **The offline cross-check over 6b's 805 roots is not run: their records are only under
     `oracles/`** (§11.4's "above 100 boards, proofs come only from the search's solver";
     the brief's MT-01 item 4). `t5d-solver-check` reads records from its command line, as

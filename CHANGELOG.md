@@ -10,6 +10,32 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-29 - The solver's constructed roots are held under the tree form with graph search
+
+Since the 2026-11-15 review's decision 10 the tree form runs under MCGS, and `kConfigs` has had
+its two configurations since 2026-11-23; `engine/tests/test_solver_refs.hpp`'s arms still left the
+combination out and its comment still called it refused, so no test held a constructed root to
+its claim under it (the re-audit's caveat on section 15.4's "solved bounds").
+- `test_solver_refs.hpp`: `arms(Graphs)` with the arm "tree form, graph" (last on each position);
+  the comment corrected.
+- `engine/tests/test_mcts.cpp`: `mcts_solver_agrees_with_df_pn_on_constructed_mates` runs it as a
+  sixth arm - all fourteen roots under both Q4 readings solved with the same claims;
+  `mcts_solver_agrees_with_df_pn_under_every_ruleset` beside the three trees, the long twin
+  beside its five arms; its comparisons in a tally of their own (`SolverTallies`), the other
+  arms' floors and ceilings untouched. `mcts_solver_proves_a_mate_in_one_and_plays_it` and
+  `..._a_loss_when_every_child_is_lost` run every arm as a tree and a graph, and
+  `..._a_draw_when_every_child_is_drawn` the three trees and the tree form's graph.
+- Found: nothing fails. Under the new arm all 28 constructed roots are solved with their claims
+  (242 comparisons decided and agreeing, 2 unknown, 136 inner claims); under every ruleset 543
+  searches, 209 roots solved, 846 decided and agreeing, 5 unknown; no contradiction, no
+  certificate failure. The other arms' counts are their baselines' to the unit. The arm's own
+  counts were the same on two runs, so the two default tests floor them (the long twin keeps
+  the relative floor: at least half of an average arm's decided comparisons).
+- `engine/README.md` ("Step 2: H41's cross-checks"), `docs/BUILD_LOG.md` (issue 400 (e)).
+
+Spec: section 15.4 ("solved bounds propagating and never contradicting"; "under every
+turn-construction arm"), register C11, D2, H41 - no edit: the spec already allows the combination.
+
 ### 2026-11-29 - An allocation failure in a ladder job is no contradiction (issue 604)
 
 `engine/src/ladder.cpp`: a `std::bad_alloc` thrown by a job - synchronous, or on the worker
