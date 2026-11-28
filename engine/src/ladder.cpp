@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -111,14 +112,17 @@ void VerificationLadder::end_decision(std::uint64_t decision) {
   // Finished but never taken (a job may finish while this waits for it).
   stats_.discarded += done_.size();
   done_.clear();
-  error_ = nullptr;  // reported, and counted, when it was thrown
+  error_ = nullptr;  // counted when it was thrown (and reported, where it was a contradiction)
   ++decision_;
 }
 
 namespace {
 
-// A job that threw: a contradiction in the rules code (a prover's
-// std::logic_error included) - said loudly, whatever its decision.
+// A job that threw anything but an allocation failure: a contradiction in the
+// rules code (a prover's std::logic_error included) - said loudly, whatever
+// its decision. A std::bad_alloc is no contradiction and is never reported
+// here (build-log issue 604): it is counted apart (Stats::out_of_memory) and
+// reaches the caller as it is.
 void report_contradiction(LadderJob job, std::uint64_t decision, const std::exception_ptr& e) {
   std::string what = "an exception that is not a std::exception";
   try {
@@ -161,9 +165,22 @@ bool VerificationLadder::ask_for(std::uint64_t decision, LadderJob kind, const G
       job.decision = decision_;
       ++stats_.asked;
     }
-    std::optional<LadderVerdict> v;
     try {
-      v.emplace(run(job));  // inline: the search's thread, no clock (H15)
+      LadderVerdict v = run(job);  // inline: the search's thread, no clock (H15)
+      const double seconds = v.seconds;
+      std::lock_guard<std::mutex> lock(m_);
+      done_.push_back(std::move(v));  // its room may fail too: the job then ends as below
+      stats_.seconds += seconds;
+    } catch (const std::bad_alloc&) {
+      // An allocation failure - in the prover, or in the room for its verdict
+      // - is no contradiction in the rules code (build-log issue 604): not
+      // counted as one, nothing printed. The job is counted out of memory, so
+      // that the counts still add up, and the failure reaches the caller.
+      {
+        std::lock_guard<std::mutex> lock(m_);
+        ++stats_.out_of_memory;
+      }
+      throw;
     } catch (...) {
       {
         std::lock_guard<std::mutex> lock(m_);
@@ -172,17 +189,14 @@ bool VerificationLadder::ask_for(std::uint64_t decision, LadderJob kind, const G
       report_contradiction(job.kind, job.decision, std::current_exception());
       throw;
     }
-    std::lock_guard<std::mutex> lock(m_);
-    stats_.seconds += v->seconds;
-    done_.push_back(std::move(*v));
     return true;
   }
   {
     std::lock_guard<std::mutex> lock(m_);
     if (decision != decision_) return false;
     job.decision = decision_;
+    queue_.push_back(std::move(job));  // before it is counted: a failure here asked nothing
     ++stats_.asked;
-    queue_.push_back(std::move(job));
     if (!thread_.joinable()) {
       thread_ = std::thread([this] { worker(); });
       ++stats_.threads_started;
@@ -266,17 +280,21 @@ void VerificationLadder::worker() {
     lock.unlock();
     std::optional<LadderVerdict> v;
     std::exception_ptr error;
+    bool out_of_memory = false;  // an allocation failure: no contradiction (build-log issue 604)
     try {
       v.emplace(run(job));
+    } catch (const std::bad_alloc&) {
+      error = std::current_exception();
+      out_of_memory = true;
     } catch (...) {
       error = std::current_exception();
     }
-    if (error) report_contradiction(job.kind, job.decision, error);
+    if (error && !out_of_memory) report_contradiction(job.kind, job.decision, error);
     lock.lock();
     running_ = false;
     const bool current = job.decision == decision_ && !quit_;
     if (error) {
-      ++stats_.contradictions;
+      ++(out_of_memory ? stats_.out_of_memory : stats_.contradictions);
       if (current) error_ = error;  // take() rethrows it
     } else if (v->stats.stopped_by_cancel) {
       ++stats_.cancelled;

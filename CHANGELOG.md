@@ -10,6 +10,34 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-29 - An allocation failure in a ladder job is no contradiction (issue 604)
+
+`engine/src/ladder.cpp`: a `std::bad_alloc` thrown by a job - synchronous, or on the worker
+thread - was counted in `Stats::contradictions` and printed as "a contradiction in the rules
+code". It is let through now: not counted as one, nothing printed, rethrown to the caller (out of
+the ask, or out of `take()`). The issue's "uncounted" became "counted apart": a job that ends so
+is counted in a new `Stats::out_of_memory`, because the ladder's books are a sum its tests
+assert and a job the worker took up cannot be un-asked. The synchronous path makes the room for
+its verdict inside the same `try`, and the queued path counts a job only once it is queued.
+- `engine/tests/test_mcts_faults.cpp`:
+  `mcts_fault_an_allocation_failure_inside_a_ladder_job_is_no_contradiction` - every allocation
+  of a fresh search's first gather failed in turn with the synchronous ladder's Hunt, or its
+  settling scan, running inside it: the fault surfaces, no contradiction is counted or printed
+  (standard error captured), the invariants hold at once and after searching on, the counts add
+  up, and the game's settling prover states no fact its fault-free twin contradicts. The test
+  issue 603 kept out: the prover's tree is a `std::deque`.
+- Checked: Hunt's gather makes 4,779 allocations and the settling scan's 4,780; every one failed
+  in turn, 4,674 and 4,675 of them inside the job, each counted out of memory and none a
+  contradiction; 4,675 searches asked the game's prover again after its failure, no fact
+  flipped; 9 s. With the old catch put back the test fails (18,703 checks: the count, and the
+  reports on standard error); built without issue 603's flag the same test dies of a
+  segmentation fault. The provers needed no change: they are exception-safe under the sweep.
+- `engine/include/t5d/ladder.hpp`, `engine/tests/test_ladder.cpp` (the sums name the new count),
+  `engine/README.md`, `docs/BUILD_LOG.md` (issue 604).
+
+Spec: section 15.4 ("virtual loss always released - under a failed evaluation and under an
+allocation failure alike") - no edit: no spec text describes the ladder's counters.
+
 ### 2026-11-29 - The engine builds with `-fno-assume-sane-operators-new-delete` where the compiler has it (issue 603)
 
 g++ 16.2 assumes by default that the replaceable `operator new` has no side effect its caller

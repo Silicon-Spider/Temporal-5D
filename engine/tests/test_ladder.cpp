@@ -628,8 +628,9 @@ TEST(ladder_jobs_keep_their_budgets_and_end_with_their_decision) {
     }
     CHECK_EQ(ladder->pending(), std::size_t{0});
     const VerificationLadder::Stats st = ladder->stats();
-    CHECK_EQ(st.asked, st.answered + st.cancelled + st.discarded + st.contradictions);
+    CHECK_EQ(st.asked, st.answered + st.cancelled + st.discarded + st.contradictions + st.out_of_memory);
     CHECK_EQ(st.contradictions, std::uint64_t{0});
+    CHECK_EQ(st.out_of_memory, std::uint64_t{0});
     CHECK_EQ(st.threads_started, std::uint64_t{1});  // one worker for the ladder's life
   }
 }
@@ -1581,7 +1582,7 @@ TEST(ladder_a_decisions_end_cancels_its_running_job) {
   CHECK_EQ(ladder.pending(), std::size_t{0});
   const VerificationLadder::Stats st = ladder.stats();
   CHECK_EQ(st.cancelled, std::uint64_t{1});
-  CHECK_EQ(st.answered + st.discarded + st.contradictions, std::uint64_t{0});
+  CHECK_EQ(st.answered + st.discarded + st.contradictions + st.out_of_memory, std::uint64_t{0});
   CHECK(ladder.take().empty());
 }
 

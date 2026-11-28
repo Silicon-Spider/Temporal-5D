@@ -9528,6 +9528,39 @@ review, which edited them in the repository on the user's instruction.*
      query and key features widened past the head width (B8's register exemptions, B15's per-row
      terms). Done: both figures stated; a candidate for section 10.2's kernel work.
 717. **A setext underline at the end of section 11.4**: the `---` before section 12 sat directly
+    - **Fixed (2026-11-29, `lane/engine`, after issue 603's flag).** Both catches let a
+      `std::bad_alloc` through: it is not counted in `contradictions` and nothing is printed.
+      The synchronous ask rethrows it to its caller - the search's gather or deliver, which
+      surface it as any allocation failure (`T5D_ERR_MEMORY` through the C API); the worker
+      thread hands it to `take()`, as it hands a contradiction. Two things the fix needed
+      beyond the issue's sentence, both readings of "the counts add up":
+      - **the issue's "uncounted" became "counted apart"** (the main loop's ruling,
+        2026-11-28): a job that ended this way is not counted as a contradiction, and is
+        counted in a new `VerificationLadder::Stats::out_of_memory`. Why: the ladder's books
+        are a sum - `asked = answered + cancelled + discarded + contradictions` (+ the
+        verdicts not yet taken), which its tests assert - and a job the worker thread took up
+        cannot be un-asked: uncounted altogether, it would have vanished from the sum and
+        every later check of it would fail for a reason that is no fault. With the new term
+        the identity holds: `asked = answered + cancelled + discarded + contradictions +
+        out_of_memory`;
+      - the synchronous path makes the room for its verdict inside the same `try` (a failure
+        there lost the verdict and broke the sum), and the queued path counts a job asked
+        only once it is queued.
+      **The test** (`mcts_fault_an_allocation_failure_inside_a_ladder_job_is_no_contradiction`,
+      `tests/test_mcts_faults.cpp`): the synchronous ladder answers the root's Hunt, or its
+      settling scan, inside a fresh search's first gather, on the search's thread, so the
+      job's allocations take part in the fault countdown; every allocation of that gather is
+      failed in turn on a fresh search, the fault-free job's tree required to be large enough
+      to have reallocated its `std::deque`'s map. At each fault: it comes out of the call; no
+      contradiction is counted and standard error (captured) holds no "a contradiction in the
+      rules code"; a fault inside the job is counted out of memory once and gives no verdict;
+      the search keeps every invariant at once and after searching on; the ladder's counts
+      add up; and the settling scans' prover - the game's, asked again at the principal
+      line's changes after its failure - states no fact its fault-free twin's verdict of the
+      same question contradicts. Deterministic: one thread, node budgets, no clock.
+      What the fix does not claim: a decision whose root job failed is not asked again (the
+      decision stays open without that verdict - a verdict lost, never a proof, as review
+      finding L3 of issue 600 already reads a failed re-root).
      under the 6b'' result's last line, which made that paragraph a heading. It predates the
      review. Done: a blank line.
 718. **The register's v1 and the build's defaults differ on B5 and B11 - for the user.** Both rows

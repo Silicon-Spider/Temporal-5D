@@ -185,7 +185,9 @@ class VerificationLadder {
   bool ask_for(std::uint64_t decision, LadderJob job, const GameState& position, std::vector<PathStep> path,
                int depth, double ms, std::uint64_t nodes, bool suggest = false);
   /// The current decision's verdicts finished since the last take. Rethrows a
-  /// job's exception (a contradiction in the rules code: std::logic_error).
+  /// job's exception: a contradiction in the rules code (std::logic_error), or
+  /// an allocation failure inside the job (std::bad_alloc - no contradiction:
+  /// Stats::out_of_memory).
   std::vector<LadderVerdict> take();
   /// The same for decision `decision`: nothing (and no exception) unless it is
   /// the current one - a search takes its own decision's verdicts only.
@@ -213,7 +215,8 @@ class VerificationLadder {
   const std::optional<Carried>& carried() const noexcept { return carried_; }
 
   /// Over the ladder's life. Once nothing is pending, asked = answered +
-  /// cancelled + discarded + contradictions + the verdicts not yet taken.
+  /// cancelled + discarded + contradictions + out_of_memory + the verdicts not
+  /// yet taken.
   struct Stats {
     std::uint64_t asked = 0;
     std::uint64_t answered = 0;   ///< verdicts taken by their decision
@@ -221,10 +224,19 @@ class VerificationLadder {
     /// Finished, but their decision ended before it took them (a job finishing
     /// while end_decision waits for it, or after the decision moved on).
     std::uint64_t discarded = 0;
-    /// Jobs that threw - a contradiction in the rules code (a prover's
-    /// std::logic_error included): reported on stderr whatever their decision,
-    /// and rethrown by take() where their decision is the current one.
+    /// Jobs that threw anything but an allocation failure - a contradiction in
+    /// the rules code (a prover's std::logic_error included): reported on
+    /// stderr whatever their decision, and rethrown - synchronous: out of the
+    /// ask; otherwise by take(), where their decision is the current one.
     std::uint64_t contradictions = 0;
+    /// Jobs an allocation failure ended (std::bad_alloc, from the prover or
+    /// from the room for its verdict): NOT a contradiction - never counted as
+    /// one and never reported (build-log issue 604). The failure reaches the
+    /// caller by the same two routes; the job gives no verdict, and a later
+    /// question starts afresh (Hunt: a new prover; the settling scans: the
+    /// game's prover, whose stores hold facts only and whose tree is rebuilt
+    /// at each question).
+    std::uint64_t out_of_memory = 0;
     std::uint64_t threads_started = 0;  ///< worker threads made (one per ladder, lazily)
     double seconds = 0;           ///< in the provers
   };

@@ -9,6 +9,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <new>
@@ -19,6 +22,12 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 #include "t5d/assets.hpp"
 #include "t5d/ladder.hpp"
@@ -825,8 +834,11 @@ TEST(mcts_fault_boosted_turns_and_suggestions_count_once) {
   // and of its deliver, each on a fresh search after 15 playouts - and with
   // Hunt's suggestions, the deliver that expands the root as well, though not
   // a fresh search's first gather: Hunt runs inside it (begin_decision), and a
-  // fault in its prover's tree is build-log issue 603's (this toolchain's
-  // std::deque, not the search's rollback).
+  // fault in its prover's tree was build-log issue 603's (this toolchain's
+  // std::deque, not the search's rollback) when this test was written. That
+  // gather is swept, every allocation of it, by
+  // mcts_fault_an_allocation_failure_inside_a_ladder_job_is_no_contradiction
+  // (below), since the build switched the compiler's assumption off.
   const GameState s0 = asset_position();
   const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
   for (const bool suggest : {false, true}) {
@@ -1559,4 +1571,198 @@ TEST(mcts_fault_a_failed_relisting_leaves_the_root_to_be_listed) {
   CHECK_EQ(wrong, std::size_t{0});
   CHECK(unlisted > 0);
   CHECK(faults > 0);
+}
+
+// ---- Build-log issues 603 and 604: an allocation failure inside a ladder job's prover -----------
+
+#ifndef T5D_TEST_SCRATCH
+#error "T5D_TEST_SCRATCH: a directory the tests may write"
+#endif
+
+namespace {
+
+#if defined(_WIN32)
+int fd_of(std::FILE* f) { return _fileno(f); }
+int fd_dup(int fd) { return _dup(fd); }
+int fd_dup2(int from, int to) { return _dup2(from, to); }
+void fd_close(int fd) { (void)_close(fd); }
+#else
+int fd_of(std::FILE* f) { return fileno(f); }
+int fd_dup(int fd) { return dup(fd); }
+int fd_dup2(int from, int to) { return dup2(from, to); }
+void fd_close(int fd) { (void)close(fd); }
+#endif
+
+// Standard error into a file while it lives - the ladder reports a
+// contradiction there and nowhere else. end() puts standard error back, passes
+// on what was written (a failing check's message is not lost) and returns it.
+class CapturedStderr {
+ public:
+  explicit CapturedStderr(std::filesystem::path file) : file_(std::move(file)) {
+    std::fflush(stderr);
+    std::FILE* f = std::fopen(file_.string().c_str(), "wb");
+    if (f == nullptr) throw std::runtime_error("cannot write " + file_.string());
+    saved_ = fd_dup(fd_of(stderr));
+    const bool ok = saved_ >= 0 && fd_dup2(fd_of(f), fd_of(stderr)) >= 0;
+    std::fclose(f);
+    if (!ok) {
+      if (saved_ >= 0) fd_close(saved_);
+      saved_ = -1;
+      throw std::runtime_error("cannot redirect standard error");
+    }
+  }
+  ~CapturedStderr() {
+    try {
+      (void)end();
+    } catch (...) {
+    }
+  }
+  CapturedStderr(const CapturedStderr&) = delete;
+  CapturedStderr& operator=(const CapturedStderr&) = delete;
+
+  std::string end() {
+    if (saved_ < 0) return text_;
+    std::fflush(stderr);
+    (void)fd_dup2(saved_, fd_of(stderr));
+    fd_close(saved_);
+    saved_ = -1;
+    std::ifstream in(file_, std::ios::binary);
+    text_.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    std::fputs(text_.c_str(), stderr);
+    return text_;
+  }
+
+ private:
+  std::filesystem::path file_;
+  int saved_ = -1;
+  std::string text_;
+};
+
+// A ladder job's node budget in the test below: small, so that every
+// allocation of the job can be failed in turn, and large enough for its
+// prover's tree to outgrow a std::deque's first map (the test requires it).
+constexpr std::uint64_t kFaultedJobNodes = 400;
+
+// The synchronous ladder answers each job where it is asked, on the search's
+// thread - inside a fresh search's first gather, the root's Hunt or its
+// settling scan - so the job's allocations take part in this thread's fault
+// countdown. The gather's allocations are failed in turn, each on a fresh
+// search with a ladder of its own - every one of them (`most` 0), or about
+// `most` of them evenly spread with the first and the last 64 all taken. The
+// prover's tree is a std::deque, and the fault-free job's tree is required to
+// hold enough nodes to have reallocated the deque's map, so a sweep of every
+// allocation includes the one right after a map reallocation (build-log issue
+// 603: with g++ 16.2's default -fassume-sane-operators-new-delete a failure
+// there left the deque pointing into freed memory; the engine now builds with
+// the assumption off, and this test could not run on that compiler before).
+// What must hold at every fault (issue 604):
+//  * the fault comes out of the call (faulted's check);
+//  * the ladder counts no contradiction and prints none - a std::bad_alloc
+//    was counted and reported as "a contradiction in the rules code" - and a
+//    fault inside the job is counted out of memory, once;
+//  * the search keeps every invariant, at once and after searching on, and
+//    the ladder's counts add up (asked = answered + cancelled + discarded +
+//    contradictions + out of memory once nothing waits);
+//  * the prover the fault left behind states no false fact: the settling
+//    scans share the game's prover, which is asked again at the principal
+//    line's changes, and no verdict of the search that faulted says proven
+//    where the fault-free twin's verdict of the same question says disproven,
+//    or the reverse.
+void sweep_ladder_job_faults(long long most) {
+  const std::unique_ptr<Evaluator> uniform = make_evaluator(BuiltinEvaluator::Uniform);
+  const GameState root = asset_position();
+  std::filesystem::create_directories(T5D_TEST_SCRATCH);
+  const std::filesystem::path capture_file = std::filesystem::path(T5D_TEST_SCRATCH) / "ladder-fault-stderr.txt";
+  constexpr std::uint64_t kOn = 12;  // playouts searched on after each fault
+  struct Arm {
+    const char* name;
+    bool hunt;
+    bool settling;
+  };
+  for (const Arm& arm : {Arm{"Hunt", true, false}, Arm{"the root's settling scan", false, true}}) {
+    SearchParams p;
+    p.expand.square_features = SquareFeatures::None;
+    p.synchronous = true;
+    p.asset_map = false;
+    p.hunt = arm.hunt;
+    p.settling = arm.settling;
+    p.sync_job_nodes = kFaultedJobNodes;
+    p.settling_debounce = 1;  // the game's prover asked again soon after the fault
+    // Fault-free: the gather's allocations, the job's answer inside it, the
+    // size of its prover's tree - and the twin's verdicts after searching on.
+    long long total = 0;
+    std::vector<LadderVerdict> twin;
+    {
+      Search s(root, p);
+      total = allocations_of([&] { (void)s.gather(1); });
+      REQUIRE_EQ(s.verdicts().size(), std::size_t{1});  // the root's question, answered inside the gather
+      REQUIRE(s.verdicts().front().job == (arm.hunt ? LadderJob::Hunt : LadderJob::RootSettling));
+      REQUIRE(s.verdicts().front().stats.tree_nodes >= 64);  // the deque's map was reallocated
+      s.abandon();
+      s.run(*uniform, Limits{kOn});
+      twin = s.verdicts();
+      const VerificationLadder::Stats st = s.shared_ladder()->stats();
+      REQUIRE_EQ(st.contradictions + st.out_of_memory, std::uint64_t{0});
+    }
+    std::size_t faults = 0;
+    std::size_t in_jobs = 0;
+    std::size_t asked_again = 0;
+    std::size_t flips = 0;
+    std::string printed;
+    const long long stride = most <= 0 || total <= most ? 1 : 1 + total / most;
+    {
+      CapturedStderr capture(capture_file);
+      for (long long k = 0; k < total; k += k < 64 || k + 64 >= total ? 1 : stride) {
+        Search s(root, p);
+        const bool threw = faulted(k, [&] { (void)s.gather(1); });
+        if (!threw) s.abandon();
+        faults += threw ? 1u : 0u;
+        const VerificationLadder::Stats st = s.shared_ladder()->stats();
+        CHECK_EQ(st.contradictions, std::uint64_t{0});  // an allocation failure is none
+        CHECK(st.out_of_memory <= 1);
+        if (st.out_of_memory != 0) {
+          ++in_jobs;
+          CHECK(threw);                 // the job's failure reached the caller
+          CHECK(s.verdicts().empty());  // and gave no verdict
+        }
+        CHECK_NOTHROW(s.check_invariants());
+        s.run(*uniform, Limits{kOn});
+        CHECK_NOTHROW(s.check_invariants());
+        const VerificationLadder::Stats after = s.shared_ladder()->stats();
+        CHECK_EQ(after.contradictions, std::uint64_t{0});
+        CHECK_EQ(after.out_of_memory, st.out_of_memory);
+        CHECK_EQ(after.asked,
+                 after.answered + after.cancelled + after.discarded + after.contradictions + after.out_of_memory);
+        if (st.out_of_memory != 0 && after.asked > st.asked) ++asked_again;
+        for (const LadderVerdict& v : s.verdicts()) {
+          for (const LadderVerdict& t : twin) {
+            if (v.job != t.job || v.depth != t.depth || !(v.position == t.position)) continue;
+            const bool decided = v.status != ProofStatus::Unknown && t.status != ProofStatus::Unknown;
+            if (decided && v.status != t.status) ++flips;
+          }
+        }
+      }
+      printed = capture.end();
+    }
+    std::printf("  %s: %lld allocations in the gather (every %lld%s failed), %zu faults, %zu of them inside the job "
+                "(each counted out of memory, none a contradiction), %zu searches asked the ladder again after one, "
+                "%zu facts flipped\n",
+                arm.name, total, stride, stride == 1 ? "" : " between the first and the last 64", faults, in_jobs,
+                asked_again, flips);
+    CHECK(printed.find("a contradiction in the rules code") == std::string::npos);  // nothing reported
+    CHECK(in_jobs > (stride == 1 ? 100u : 20u));  // not vacuous: the faults fell in the prover
+    CHECK(faults >= in_jobs);
+    CHECK_EQ(flips, std::size_t{0});
+    if (arm.settling) {
+      CHECK(asked_again > 0);  // the game's prover, asked again after its failure
+    }
+  }
+}
+
+}  // namespace
+
+TEST(mcts_fault_an_allocation_failure_inside_a_ladder_job_is_no_contradiction) {
+  // Every allocation of the gather, Hunt's and the root settling scan's alike
+  // (sweep_ladder_job_faults).
+  sweep_ladder_job_faults(0);
 }

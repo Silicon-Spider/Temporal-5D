@@ -4621,7 +4621,14 @@ game's next search sharing the ladder begins its decision, the one before - a do
 searching - gets nothing more (the E10 review found a live donor taking its successor's
 verdicts); and a verdict whose path does not reach its position from the root is refused
 (`ProofUse::Foreign`). A job that throws is a contradiction in the rules code: reported on
-stderr and counted (`Stats::contradictions`) whatever its decision; a job that finishes
+stderr and counted (`Stats::contradictions`) whatever its decision - unless what it threw is
+an allocation failure, which is none: a `std::bad_alloc` is counted apart
+(`Stats::out_of_memory`), nothing is printed, and it reaches the caller as it is - out of the
+ask in the synchronous mode, out of `take()` otherwise - while the job gives no verdict
+(build-log issue 604; `mcts_fault_an_allocation_failure_inside_a_ladder_job_is_no_contradiction`
+fails every allocation of a root job's prover in turn: no contradiction counted or printed,
+the search's invariants kept, the counts adding up, and the game's settling prover, asked
+again after its failure, stating no fact its fault-free twin contradicts). A job that finishes
 after its decision ended is `discarded`, not answered. Every job is bounded (a whole-search solver is held
 open, H21; `hunt_ms`/`hunt_nodes` both 0 is refused). The ladder has the **game's
 lifetime** and is shared by a game's fresh searches like the evaluation cache
@@ -4722,7 +4729,7 @@ the asset map's boosts, unsteered priors and steered visits (both rules, tree an
 each board assessed once across a game's searches; the synchronous mode bit-reproducible
 with the wiring on (channel off and on, both splits); §15.4's invariants with verdicts
 arriving asynchronously; the budgets, and no job outliving its decision (one worker per
-ladder, asked = answered + cancelled + discarded + contradictions); the settling prover's proofs under TT churn (6f);
+ladder, asked = answered + cancelled + discarded + contradictions + out of memory); the settling prover's proofs under TT churn (6f);
 Guard's hook off by default, refused without the channel, and rejecting a refuted action
 when on. The C API's layout, defaults and ladder sharing (`test_capi_search.cpp`), and
 the steered visits end to end through Python's generator, records and targets
