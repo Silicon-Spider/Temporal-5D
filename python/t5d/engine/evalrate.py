@@ -46,6 +46,16 @@ Reported, per game (``GameResult.summary``, and the evaluator's counts) and in t
 conversion and the collation of positions in each board-count range in minutes (this module's
 games take an hour or more with F1 on the CPU).
 
+**A run with a budget** (``--max-seconds S``): a default F1 game has run past an hour without
+ending, and a run that is killed prints no game line and no totals. With the option, once the
+run's wall time - counted from its first game's start - passes S, the game in play stops after
+the decision in flight (``netplay.play_game``'s ``should_stop``) and is reported like any other,
+its ``end`` ``"cut"``; no game starts after that, and the totals say how many games were planned,
+cut and never played (``games_planned``, ``games_cut``, ``games_not_played``). The cut game's
+figures count: each is a count or a sum of seconds over what the game did play, and every rate
+here is a rate of sums. What a cut changes is the mix - a game cut early never reached its
+larger positions - which ``by_range`` shows. The conditions line records the budget.
+
 Information, never a verdict: a CPU figure (section 15.6's Phase-3 re-check waits for a GPU rate).
 The first line is the configuration (``{"conditions": ...}``: the network's every field and its
 parameter count, the game settings, the seeds, PyTorch's threads, the machine, the engine
@@ -284,17 +294,33 @@ def play(
     seed: int = SEED,
     provers: bool = False,
     on_game: Callable[[GameFigures], None] | None = None,
+    max_seconds: float = 0.0,
+    clock: Callable[[], float] = time.perf_counter,
     **settings,
 ) -> list[GameFigures]:
-    """Every game, in order: for each variant, each split, each seed (``game_seeds``)."""
+    """The games, in order: for each variant, each split, each seed (``game_seeds``).
+
+    ``max_seconds`` (0: none) bounds the run's wall time, counted from this call by ``clock``: the
+    game in play when it passes stops after the decision in flight and is reported like any other,
+    its ``end`` ``"cut"`` (``netplay.play_game``'s ``should_stop``); no game is started after it.
+    The first game always starts. Every figure of a cut game is a count or a sum of seconds over
+    what it did play, so the rates stay rates of sums; what the cut changes is the mix of position
+    sizes - a cut game never reached its later, larger positions."""
     out = []
+    t0 = clock()
+
+    def spent() -> bool:
+        return max_seconds > 0 and clock() - t0 >= max_seconds
+
     for variant in variants:
         for split in splits:
             for s in game_seeds(seed, games):
+                if out and (out[-1].result.end == "cut" or spent()):
+                    return out
                 cfg = play_config(variant, split, s, provers=provers, **settings)
                 f0, p0, parts0 = evaluator.batches, evaluator.positions, _parts(evaluator)
                 with torch.no_grad():
-                    result = play_game(evaluator, cfg, net_cfg=net_cfg)
+                    result = play_game(evaluator, cfg, net_cfg=net_cfg, should_stop=spent if max_seconds > 0 else None)
                 parts1 = _parts(evaluator)
                 game = GameFigures(result, evaluator.batches - f0, evaluator.positions - p0, {p: parts1[p] - parts0[p] for p in PARTS})
                 out.append(game)
@@ -345,9 +371,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--terminal-nodes", type=int, default=TERMINAL_NODES, help="H22: the game loop's node budget")
     parser.add_argument("--threads", type=int, default=THREADS, help=f"PyTorch's CPU threads ({THREADS})")
     parser.add_argument("--provers", action="store_true", help="Hunt, the settling scans and the asset map on (off by default)")
+    parser.add_argument(
+        "--max-seconds",
+        type=float,
+        default=0.0,
+        help="the run's wall-time budget: the game in play when it passes is cut after the decision in flight and reported, "
+        "and no game starts after it (0: none)",
+    )
     args = parser.parse_args(argv)
     if args.games < 1 or args.threads < 1:
         parser.error("--games and --threads must be at least 1")
+    if args.max_seconds < 0:
+        parser.error("--max-seconds must not be negative")
     variants = args.variant or list(VARIANTS)
     splits = args.split or list(SPLIT_NAMES)
     settings = dict(
@@ -377,6 +412,8 @@ def main(argv: list[str] | None = None) -> int:
         "variants": variants,
         "splits": splits,
         "games_per_variant_split": args.games,
+        "games_planned": len(variants) * len(splits) * args.games,
+        "max_seconds": args.max_seconds if args.max_seconds > 0 else None,
         "seeds": game_seeds(args.seed, args.games),
         "play": {k: v for k, v in asdict(template).items() if k not in ("variant", "split", "seed")},
         "torch_threads": torch.get_num_threads(),
@@ -400,9 +437,16 @@ def main(argv: list[str] | None = None) -> int:
         seed=args.seed,
         provers=args.provers,
         on_game=lambda g: print(json.dumps(g.row()), flush=True),
+        max_seconds=args.max_seconds,
         **settings,
     )
-    print(json.dumps({"totals": totals(games) | {"by_range": evaluator.by_range()}}), flush=True)
+    # A run its budget ended says so: the games cut (at most one) and those never started.
+    partial = {
+        "games_planned": conditions["games_planned"],
+        "games_cut": sum(g.result.end == "cut" for g in games),
+        "games_not_played": conditions["games_planned"] - len(games),
+    }
+    print(json.dumps({"totals": totals(games) | partial | {"by_range": evaluator.by_range()}}), flush=True)
     return 0
 
 

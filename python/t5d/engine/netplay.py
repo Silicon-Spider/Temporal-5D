@@ -92,7 +92,7 @@ import re
 import subprocess
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from functools import partial
 from pathlib import Path
@@ -274,7 +274,7 @@ class GameResult:
     config: PlayConfig
     record: str
     actions: list[list[Move]]
-    end: str  # "checkmate", "stalemate", "turn_cap", "unknown", "action_limit", "flag" (E11: lost on time)
+    end: str  # "checkmate", "stalemate", "turn_cap", "unknown", "action_limit", "flag" (E11: lost on time), "cut" (the caller's)
     winner: int | None  # 0 white, 1 black (checkmate; or a flag: the side whose clock still ran)
     #: An "unknown" end's question (H22): "verdict" (a turn start the budget could not settle),
     #: "choice" (no move shown legal within it) or - stage E11, the E11 review's S1 - "search" (a
@@ -621,10 +621,22 @@ def off_tree_child(index: int, moves: tuple[Move, ...], *, submit: bool) -> Root
     )
 
 
-def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, net_cfg: NetConfig | None = None) -> GameResult:
+def play_game(
+    evaluators: Evaluator | Sequence[Evaluator],
+    cfg: PlayConfig,
+    *,
+    net_cfg: NetConfig | None = None,
+    should_stop: Callable[[], bool] | None = None,
+) -> GameResult:
     """Play one game (see the module docstring). ``evaluators``: one (self-play) or White's and
     Black's (match play; one is used for both sides if a single one is given). ``net_cfg``: the
-    network's configuration - its register counts and the typed relations it reads."""
+    network's configuration - its register counts and the typed relations it reads.
+
+    ``should_stop`` (None: never): the caller's cut - asked after every decision, never inside
+    one. Once it answers true the game ends there with ``end`` ``"cut"``: unscored (result
+    ``*``), an action under way not recorded (the game goes back to its turn start, as at an
+    unsettled choice), its record's Termination naming the cut. A measurement's time budget
+    (``evalrate --max-seconds``), not a rule of play: nothing in the game loop sets it."""
     cfg.validate()
     net_cfg = NetConfig() if net_cfg is None else net_cfg
     evs = list(evaluators) if isinstance(evaluators, (list, tuple)) else [evaluators]
@@ -785,9 +797,12 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
                     search.advance(pick)
                 if submitted:
                     break
+                if should_stop is not None and should_stop():
+                    res.end = "cut"  # the caller's cut, mid-action: the action under way goes (below)
+                    break
             if flagged or res.end:
-                # A flag, or an unsettled choice: the action under way is not recorded - the game
-                # handle goes back to its turn start.
+                # A flag, an unsettled choice, or the caller's cut: the action under way is not
+                # recorded - the game handle goes back to its turn start.
                 if turn_start is not None:
                     game.close()
                     game, turn_start = turn_start, None
@@ -801,6 +816,9 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
             if turn_start is not None:
                 turn_start.close()
                 turn_start = None
+            if should_stop is not None and should_stop():
+                res.end = "cut"  # the caller's cut, between actions
+                break
         snap = game.snapshot()
         res.final_boards = len(snap.boards)
         res.final_fingerprint = snap.fingerprint
@@ -813,6 +831,7 @@ def play_game(evaluators: Evaluator | Sequence[Evaluator], cfg: PlayConfig, *, n
             else f"{cfg.playouts} playouts per decision"
         )
         termination = res.end + (" (self-play's convention, I11: scored as a draw; not a game rule)" if res.end == "turn_cap" else "")
+        termination += " (the caller stopped the game after a decision: unscored; not a game rule)" if res.end == "cut" else ""
         termination += UNSETTLED_NOTES.get(res.unsettled, "")
         extra = [
             ("White", "t5d netplay"),

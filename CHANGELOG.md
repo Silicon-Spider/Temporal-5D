@@ -10,6 +10,29 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-29 - `evalrate --max-seconds`: a run past its budget reports the game it cut
+
+A default F1 game ran past an hour without ending, and a killed run prints no game line and no
+totals - so F1's CPU rate had a command that could not be relied on to give a figure.
+- `python/t5d/engine/netplay.py`: `play_game` takes `should_stop` (none by default: nothing
+  changes for any other caller). It is asked after every decision, never inside one; once it
+  says stop the game ends there with `end` `"cut"` - unscored, an action under way not recorded
+  (the game goes back to its turn start), its record's Termination naming the cut.
+- `python/t5d/engine/evalrate.py`: `--max-seconds S` (0: none). Once the run's wall time, counted
+  from its first game's start, passes S, the game in play is cut after the decision in flight
+  and reported like any other; no game starts after it. The totals and `by_range` include the cut
+  game and say what was planned (`games_planned`, `games_cut`, `games_not_played`); the
+  conditions line records the budget. Every rate is a rate of sums, so a cut game's figures are
+  valid.
+- `python/tests/engine/test_evalrate.py`: the cut asked after each decision and between actions
+  (the record replays to the game's last turn start); a run of two games with a budget already
+  spent - one game line marked cut, one decision, the second game never started, the totals and
+  the range the cut game's; a budget the run stays inside, and none.
+- `docs/MEASUREMENTS.md`: F1's rate command carries `--max-seconds 5400`.
+
+Spec: section 15.6 (the CPU evaluation rate it cites) - no edit: no spec text describes the
+measurement's command.
+
 ### 2026-11-29 - Section 15.3's input-assembly row: the conversion and the collation timed apart from the forward (issue 420)
 
 The done-means re-audit found the row "Input assembly and host-to-device transfer per evaluation"

@@ -1019,22 +1019,34 @@ the commit. Then one line per game, then the totals:
   the transfer, the forward and the split, with `assembly_ms_per_position` and `assembly_share`
   beside `forward_ms_per_position` and `forward_share` ("Input assembly per evaluation", below).
 
-**Command** (from `python/`; the defaults written out):
+**Command** (from `python/`; the defaults written out, and a budget of 90 minutes):
 
 ```
-python -m t5d.engine.evalrate --net F1 --games 1 --variant Standard --variant "Standard - Two Timelines" --split ply --threads 4 --seed 1
+python -m t5d.engine.evalrate --net F1 --games 1 --variant Standard --variant "Standard - Two Timelines" --split ply --threads 4 --seed 1 --max-seconds 5400
 ```
 
 That is 2 games: Standard and Standard - Two Timelines, the ply split, 16 playouts and batches of
 8 per decision, I11's caps at 6 turns or 80 boards (netplay's settings, as at N5), seeds 1 + 101
 g, and 4 PyTorch threads (netplay's default and the runbook's candidate).
 
-**Run time: not known.** On the shared machine (2026-11-28, load about 50% beside it), a 2-turn
-Standard game (`--cap-turns 2`) took 70 s: 16 decisions, 178 evaluations at 2.5/s, 99.9% of the
-time in the network, 15 boards at its end. A default 6-turn Standard game ran past 50 minutes
-and was stopped. Today's v1 forward costs far more on the CPU than N5's network did: B15's bias
-and M20's register rows came after N5. Budget an hour or more for the two default games, or
-bound the run with `--cap-turns`. The figure is CPU-labelled and informational. §15.6's Phase-3
+**`--max-seconds`** (since 2026-11-29, `lane/engine`): a default F1 game ran past an hour without
+ending, and a run that is killed prints no game line and no totals. With the option, once the
+run's wall time - counted from its first game's start - passes the budget, the game in play
+stops after the decision in flight and is reported like any other, its `end` `"cut"`; no game
+starts after that. The totals and `by_range` include the cut game, and say what was planned
+(`games_planned`, `games_cut`, `games_not_played`); the conditions line records the budget.
+Every figure of a cut game is a count or a sum of seconds over what it played, and every rate is
+a rate of sums, so the figures are valid. What a cut changes is the mix of sizes: a game cut
+early never reached its larger positions, which `by_range` shows. With 5400 the command above
+ends within 90 minutes plus one decision, with at least the Standard game's figures; record what
+it says it played.
+
+**Run time: at most the budget, plus the decision in flight.** On the shared machine
+(2026-11-28, load about 50% beside it), a 2-turn Standard game (`--cap-turns 2`) took 70 s: 16
+decisions, 178 evaluations at 2.5/s, 99.9% of the time in the network, 15 boards at its end. A
+default 6-turn Standard game ran past 50 minutes and was stopped, and another past an hour.
+Today's v1 forward costs far more on the CPU than N5's network did: B15's bias and M20's
+register rows came after N5. The figure is CPU-labelled and informational. §15.6's Phase-3
 re-check stays deferred until a GPU rate exists.
 
 ### Input assembly per evaluation, by board-count range (commands; not yet measured on a quiet machine)

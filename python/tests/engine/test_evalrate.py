@@ -27,7 +27,8 @@ from t5d.engine.evalrate import (
     totals,
 )
 from t5d.engine.evaluator import Leaf, UniformEvaluator, serve
-from t5d.engine.netplay import GameResult, PlayConfig, network_config
+from t5d.engine.game import Game
+from t5d.engine.netplay import GameResult, PlayConfig, network_config, play_game
 from t5d.net import build_model
 from t5d.net.config import NetConfig
 from t5d.net.synthetic import synthetic_state
@@ -295,6 +296,65 @@ def test_one_short_f1_game_end_to_end(capsys):
     assert game["convert_seconds"] <= game["collect_seconds"] + 1e-3
     inside = game["fit_seconds"] + game["collate_seconds"] + game["transfer_seconds"] + game["forward_seconds"] + game["split_seconds"]
     assert inside <= game["network_seconds"] + 1e-3
+
+
+@requires_engine
+def test_the_callers_cut_ends_a_game_after_the_decision_in_flight():
+    """``netplay.play_game``'s ``should_stop`` (``evalrate --max-seconds``): asked after each
+    decision; the game ends there unscored, an action under way not recorded, its record whole."""
+    net_cfg = network_config("small")
+    evaluator = RangedEvaluator(build_model(net_cfg, seed=1).eval(), max_batch=2)
+    for stop_at in (1, 2, 3):
+        calls = []
+
+        def should_stop(calls=calls, stop_at=stop_at):
+            calls.append(len(calls))
+            return len(calls) >= stop_at
+
+        cfg = play_config("Standard", "ply", 1, playouts=2, batch_size=2, cap_turns=6)
+        res = play_game(evaluator, cfg, net_cfg=net_cfg, should_stop=should_stop)
+        assert (res.end, res.result, res.winner, res.unsettled) == ("cut", "*", None, "")
+        assert len(calls) == stop_at  # asked once after each decision or action, and not again once it said stop
+        assert 1 <= res.decisions <= stop_at and len(res.actions) < res.decisions
+        if stop_at == 1:
+            assert (res.decisions, res.actions) == (1, [])  # cut mid-action: the move made is not recorded
+        # The record is a whole game so far: the engine's reader replays it to the game's last turn start.
+        assert "cut (the caller stopped the game after a decision" in res.record
+        with Game.from_pgn(res.record) as g:
+            g.replay_all()
+            assert len(g.snapshot().boards) == res.final_boards == len(res.actions) + 1
+    # Without it nothing changes: the same game runs to its cap.
+    whole = play_game(evaluator, play_config("Standard", "ply", 1, playouts=2, batch_size=2, cap_turns=1), net_cfg=net_cfg)
+    assert whole.end == "turn_cap"
+
+
+@requires_engine
+def test_a_run_past_its_budget_reports_the_cut_game_and_starts_no_other(capsys):
+    """``--max-seconds``: two games asked and a budget that is spent before the first decision
+    returns - the first game is cut after that decision and reported, the second never starts, and
+    the totals and the ranges are the cut game's."""
+    base = ["--net", "small", "--variant", "Standard", "--playouts", "2"]
+    assert evalrate.main([*base, "--games", "2", "--cap-turns", "6", "--max-seconds", "0.000001"]) == 0
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert len(lines) == 3  # the conditions, the one game that started, the totals
+    conditions, game, total = lines[0]["conditions"], lines[1], lines[2]["totals"]
+    assert conditions["max_seconds"] == 1e-6 and conditions["games_planned"] == 2
+    assert (game["end"], game["result"], game["decisions"], game["actions"]) == ("cut", "*", 1, 0)
+    assert game["evaluations"] > 0 and game["positions"] == game["evaluations"] and game["forwards"] >= 1
+    assert total["ends"] == {"cut": 1}
+    assert (total["games"], total["games_planned"], total["games_cut"], total["games_not_played"]) == (1, 2, 1, 1)
+    # A cut game's figures are valid: counts and sums over what it played, rates of those sums.
+    assert (total["decisions"], total["evaluations"], total["positions"]) == (1, game["evaluations"], game["positions"])
+    assert total["evaluations_per_s"] > 0 and total["decisions_per_s"] > 0 and total["assembly_seconds"] > 0
+    assert total["by_range"]["< 50"]["positions"] == game["positions"]
+    # A budget the run stays inside changes nothing, and is recorded.
+    assert evalrate.main([*base, "--games", "1", "--cap-turns", "1", "--max-seconds", "86400"]) == 0
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert lines[0]["conditions"]["max_seconds"] == 86400.0 and lines[1]["end"] != "cut"
+    assert (lines[2]["totals"]["games_cut"], lines[2]["totals"]["games_not_played"]) == (0, 0)
+    # No budget: recorded as none.
+    assert evalrate.main([*base, "--games", "1", "--cap-turns", "1"]) == 0
+    assert json.loads(capsys.readouterr().out.splitlines()[0])["conditions"]["max_seconds"] is None
 
 
 @requires_engine
