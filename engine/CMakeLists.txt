@@ -411,11 +411,37 @@ target_sources(t5d-tests PRIVATE tests/test_gumbel.cpp)
 
 # D2's tree form against the ply split on recorded games' turn starts:
 # evaluation counts (docs/MEASUREMENTS.md). Not one of the truth's sources.
+# Its --by-range mode is spec 15.3's tree-form row; the cells, the turn starts
+# taken and the ratios are tools/turn_cells.* (test_turn_cells.cpp).
+target_sources(t5d_tools PRIVATE tools/turn_cells.cpp)
 add_executable(t5d-tree-count tools/t5d_tree_count.cpp)
-target_link_libraries(t5d-tree-count PRIVATE t5d_tools)
+target_link_libraries(t5d-tree-count PRIVATE t5d_tools Threads::Threads)
 if(MINGW)
   target_link_options(t5d-tree-count PRIVATE -static)
 endif()
+
+# Spec 15.3's flat-form row: the turn generator's time to its first k turns and
+# per widening step (tools/turngen_time.*: what is timed and how it is summed
+# up; test_turn_cells.cpp holds the arithmetic and runs both tools on records
+# written there). A timing tool: it names its build. Not one of the truth's
+# sources.
+target_sources(t5d_tools PRIVATE tools/turngen_time.cpp)
+add_executable(t5d-turngen-time tools/t5d_turngen_time.cpp)
+target_link_libraries(t5d-turngen-time PRIVATE t5d_tools Threads::Threads)
+target_compile_definitions(t5d-turngen-time PRIVATE
+  "T5D_BUILD_TYPE=\"${CMAKE_BUILD_TYPE}\""
+  "T5D_CXX_FLAGS=\"${T5D_FLAGS_TEXT}\"")
+if(WIN32)
+  target_link_libraries(t5d-turngen-time PRIVATE advapi32)  # RegGetValueA: the CPU's name
+endif()
+if(MINGW)
+  target_link_options(t5d-turngen-time PRIVATE -static)
+endif()
+target_sources(t5d-tests PRIVATE tests/test_turn_cells.cpp)
+add_dependencies(t5d-tests t5d-tree-count t5d-turngen-time)
+target_compile_definitions(t5d-tests PRIVATE
+  "T5D_TREE_COUNT_EXE=\"$<TARGET_FILE:t5d-tree-count>\""
+  "T5D_TURNGEN_TIME_EXE=\"$<TARGET_FILE:t5d-turngen-time>\"")
 
 # Build-log issue 406: what exact move legality costs, position by position
 # (engine/testdata/legality-cost), and the deadlines that reach it.

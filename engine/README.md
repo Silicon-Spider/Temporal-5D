@@ -160,7 +160,8 @@ Targets (all in `build/engine`):
 | `t5d-bench` | expansion throughput (see "t5d-bench") |
 | `t5d-scan6b` | experiment 6b: the scanner's horizon per node budget (see "Stage E5b") |
 | `t5d-play` | the engine plays itself and prints the 5dpgn record (see "Stage E6a") |
-| `t5d-tree-count` | D2's tree form against the ply split on recorded games' turn starts: evaluation counts (`tools/t5d_tree_count.cpp`; docs/MEASUREMENTS.md) |
+| `t5d-tree-count` | D2's tree form against the ply split on recorded games' turn starts: evaluation counts (`tools/t5d_tree_count.cpp`; docs/MEASUREMENTS.md); `--by-range`: spec 15.3's row, evaluations per complete turn and inherited expansions per evaluation by board-count range and mandatory count (see "The two turn rows of spec 15.3") |
+| `t5d-turngen-time` | the flat form's turn generator timed: to its first 1, 8 and 32 turns and per widening step, by board-count range and mandatory count (spec 15.3's row; see "The two turn rows of spec 15.3") |
 | `t5d-solver-check` | the search's solver against df-pn at the turn starts of records, per board-count range (register H41; see "Step 2: H41's cross-checks") |
 | `t5d-proof-records` | the solver's proof lines as 5dpgn records, one per root-to-mate line, for the gate (register H41; see "Step 2: H41's cross-checks") |
 | `t5d-legality-cost` | the legality classification's and E4's cost position by position, and a search's time split (build-log issues 406-408; see "Stage E5a") |
@@ -1370,6 +1371,98 @@ each timed on one thread, interleaved, the levels of a configuration back to bac
 `--json` writes the machine-readable summary (positions with their seeds and
 fingerprints, every measurement's statistics, the flatness series), `--emit` each
 synthetic position's record; `--quick` is a smoke test, not a measurement.
+
+### The two turn rows of spec 15.3 (`t5d-tree-count --by-range`, `t5d-turngen-time`)
+
+Design spec 15.3 has two rows for D2's turn-construction arms, both "by board-count range and
+mandatory count" and both without an estimate. Each has a tool; what they share is
+`tools/turn_cells.hpp`: the **cell** of a turn start (6b″'s ranges - < 50, 50-99, 100-199,
+200+ boards - by 1, 2, 3 and 4 or more mandatory boards at the turn's start), a cell's
+**summary** of a figure (median and 95th percentile, linear interpolation between the order
+statistics), and **which turn starts of the records are taken** (`select_turn_starts`): a
+turn start is eligible when its record plays a further action from it - so it is no game
+end, and no detector is asked - and its action index is `--min-action` or more and a multiple
+of `--every`; it is taken while its cell has room (`--max-per-cell`) and its record's share
+of the cell has (`--per-record`), so a cell's turn starts come from different games. The
+choice is a function of the records' order and those four numbers. The records come on the
+command line (directly, or `--record-list`): no code names a corpus. The readings each row
+needed are build-log issues 418 and 419 - the build's, for the user to confirm; each tool
+prints the definitions with its figures (a "definitions:" line, and the JSON's
+`definition_*` fields), so a figure cannot be read under another. The commands, and what is
+not yet run, are in docs/MEASUREMENTS.md.
+
+**`t5d-tree-count --by-range`** - "Tree form: evaluations per complete turn, and inherited
+expansions per evaluation". Counts, never timings: deterministic, the same on any machine.
+
+```
+t5d-tree-count --by-range [--record-list FILE] [--record-root DIR] [--every K] [--min-action A]
+    [--max-per-cell N] [--per-record N] [--evaluations E] [--arms LIST] [--threads T]
+    [--json FILE] [RECORD ...]
+```
+
+At each turn start taken, every arm asked for (`ply`, `tree`, `tree-rewind`, `tree-none`,
+`flat`; the first four by default) searches once to `--evaluations` evaluations (400), as the
+tool's first mode does - the random evaluator, synchronous, no evaluation cache. A
+**complete turn** is an evaluated turn start below the root. **Evaluations per complete
+turn** = (evaluated turn starts below the root + evaluated mid-turn nodes) / evaluated turn
+starts below the root: 1 exactly where no mid-turn node is evaluated; the root's own
+evaluation is left out on both sides. **Inherited expansions per evaluation** =
+`SearchStats::inherited_nodes` / evaluations. Per arm and cell, and per range over every
+mandatory count: the turn starts counted, how many searches ended short of the budget or
+evaluated no complete turn (left out of the first ratio), and each ratio's median and 95th
+percentile. `--threads` shares the searches out (each is its own, one thread, its ladder
+synchronous): the standard output is the same bytes whatever T, and the wall time goes to
+standard error. Without `--by-range` the tool is what it was: seven turn starts, every arm.
+
+**`t5d-turngen-time`** - "Turn generation (flat form): time to the first k legal turns, and
+per widening step". A timing: it needs a quiet machine, and prints how busy the machine was.
+
+```
+t5d-turngen-time [--record-list FILE] [--record-root DIR] [--every K] [--min-action A]
+    [--max-per-cell N] [--per-record N] [--synthetic] [--games G] [--seed S]
+    [--unit successors|actions] [--generator-nodes N] [--k0 N] [--widen N]
+    [--score-scale S] [--score-seed N] [--flat-scores] [--rounds R] [--pin CPU]
+    [--per-position] [--json FILE] [RECORD ...]
+```
+
+What is timed (`tools/turngen_time.hpp`): one `TurnGenerator` a position a round, as the
+search's flat form makes one at a node (successors, a node budget of 200,000) -
+
+- **the time to the first k turns**, k = 1, 8, 32: from just before the generator's
+  construction to the return of the `next()` that gives turn k;
+- **a widening step**: one `next()` after the first `--k0` turns (16, the search's cap on
+  what an expansion generates), `--widen` of them (16).
+
+A position with fewer than k legal turns, or stopped by its budget first, is counted and not
+timed at k. The scores are a stand-in for the policy's - a seeded function of each option's
+coordinates, uniform in [-S, S] (a J6 twin scores as its jump), or every option 0 with
+`--flat-scores` - and the output says so: what best-first generation costs depends on them.
+Positions: the records' turn starts, and with `--synthetic` t5d-bench's classes (the same
+seeds, so the same class positions) - random play, reported apart from the records', never in
+one figure. **Method** (t5d-bench's): one thread; every position timed once a round, round
+after round over all of them, after a warm-up round that is not counted; a position's figure
+is the median over its rounds, a cell's the median and 95th percentile over its positions
+(the times to k) or over their every widening step - with the steps' mean, because a
+generator records up to 32 realisations of one point in a step, so many a `next()` returns a
+turn already found: the median step can be near zero while the cost sits in the tail. The
+machine's busy fraction is read around every round, and over the counted rounds together
+(a round shorter than the system's clock tick has no reading of its own), and printed, with
+the compiler, the flags and the CPU.
+
+It is a tool of its own and not a mode of `t5d-bench`: the bench is one translation unit
+around a pool of pinned workers counting expansions to a deadline, and nothing in it can be
+reached by a test; here the timed run and the sums are a library
+(`turngen_time.{hpp,cpp}`) that tests hold.
+
+**Tests** (`tests/test_turn_cells.cpp`): the cells to the boundary; the median and the 95th
+percentile; the tree form's two ratios on hand-worked counts; which turn starts are taken
+from three records written there (every second, one a record, a cap, a late start, a record
+that stops at an illegal action, a missing one); a position's figures as the medians over
+its rounds and a cell's over its positions and their steps, a turn no position reached
+counted and untimed; a generator timed on the Very Small start against a plain generator's
+turns; and both executables run on those records - the JSON's cell figures recomputed from
+the counts and times it lists, `tree-none`'s every complete turn costing exactly one
+evaluation, the same standard output on one thread and on three. Arithmetic, never a speed.
 
 ## Stage E4: check, legality, legal actions, mate
 

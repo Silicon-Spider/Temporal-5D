@@ -1933,6 +1933,116 @@ generators were stopped by their budget before their first turn and took E4's li
 (issue 171). No timings here: the generator's cost per node is not measured on a quiet
 machine (proposed edit 131).
 
+### D2's tree form: evaluations per complete turn and inherited expansions per evaluation, by board-count range and mandatory count (command; not yet run)
+
+**What it will count.** §15.3's row "Tree form: evaluations per complete turn, and inherited
+expansions per evaluation, by board-count range and mandatory count" (no estimate; "to
+measure (CPU)"). The seven turn starts above are indicative and of one range; this is the
+row's own count. `t5d-tree-count --by-range` (`engine/tools/t5d_tree_count.cpp`; the cells,
+the turn starts taken and the ratios in `engine/tools/turn_cells.hpp`; build-log issue 418
+for the readings - the build's, for the user to confirm; the tool prints them with its
+figures):
+
+- **evaluations per complete turn** = (evaluated turn starts below the root + evaluated
+  mid-turn nodes) / evaluated turn starts below the root. A complete turn is a submission
+  reached and the position after it evaluated; the root's own evaluation is left out on both
+  sides. Exactly 1 where no mid-turn node is evaluated (no gate); the ply split's is its
+  moves per turn plus one, over the paths searched.
+- **inherited expansions per evaluation** = mid-turn nodes expanded without the network
+  (`SearchStats::inherited_nodes`) / evaluations: what the tree form still pays in legality
+  classifications for each evaluation it makes.
+- **cells**: 6b″'s ranges (< 50, 50-99, 100-199, 200+ boards) by 1, 2, 3 and 4 or more
+  mandatory boards at the turn's start; per arm and cell the turn starts counted and each
+  ratio's median and 95th percentile over them, and each range over every mandatory count.
+
+**Conditions (as the command gives them).** Counts, not timings: deterministic, the same on
+any machine and under any load - no quiet machine is needed. Data: t0database, converted by
+`py data/t0database/to_5dpgn.py build/t0db` (761 records), listed in the glob's order.
+Turn starts: those a record plays a further action from (so none is a game end), at action
+indices that are multiples of 4, at most 25 in a cell and one of a record in a cell - a
+function of the records' order and those numbers. The human games have no turn start at 200
+boards or more, so that range will be empty. Arms: the ply split; the tree form with §8.2's
+four gates at their placeholder readings; with the present gate read as rewinds only; with
+no gate. Each a fresh search to 400 evaluations (playouts unbounded): the random evaluator
+(seed 1), synchronous, no evaluation cache, square features off, every other parameter the
+search's default - the seven-position table's search.
+
+**Command** (from the repository's root; the defaults written out):
+
+```
+py data/t0database/to_5dpgn.py build/t0db
+ls build/t0db/*.5dpgn > build/t0db.txt
+build/engine/t5d-tree-count --by-range --record-list build/t0db.txt --every 4 --max-per-cell 25 --per-record 1 --evaluations 400 --arms ply,tree,tree-rewind,tree-none --threads 8 --json build/tree-count-by-range.json > build/tree-count-by-range.txt
+```
+
+`--threads` shares the turn starts' searches out; each search is its own, so the counts do
+not depend on it (the tool's standard output is the same bytes on one thread and on three:
+`tree_count_exe_by_range_counts_what_it_lists`).
+
+**Expected run time: about 12 minutes on one thread, 2 to 3 minutes with `--threads 8`.**
+From a timed sample (2026-11-29, `dev-r`, a shared machine - the network lane's tests beside
+it; a time, not a figure of the row): the same command with `--max-per-cell 2 --threads 1`
+counted 23 turn starts by 4 arms in 55.9 s - 2.4 s a turn start, 0.6 s a search - after
+reading the 761 records in a third of a second (35 of them refused or not read to their
+end; 29,282 turn starts played on from, 7,617 eligible at every fourth action). The full
+command counts at most 300 turn starts (12 cells the human games can fill, 25 each; the
+sample found one cell, 100-199 boards with three mandatory boards, short of two at one a
+record). The wall time is printed on standard error. The sample's own counts are not
+recorded here: two turn starts a cell are not the row's figure.
+
+### D2's flat form: the turn generator's time to its first k turns and per widening step, by board-count range and mandatory count (command; not yet measured on a quiet machine)
+
+**What it will measure.** §15.3's row "Turn generation (flat form): time to the first k
+legal turns, and per widening step, by board-count range and mandatory count" (no estimate;
+"to measure (CPU)"). `t5d-turngen-time` (`engine/tools/t5d_turngen_time.cpp`; what is timed
+and how it is summed up in `engine/tools/turngen_time.hpp`; build-log issue 419 for the
+readings - the build's, for the user to confirm; the tool prints them with its figures)
+times one generator a position, made and asked as the search's flat form makes one at a
+node:
+
+- **the time to the first k turns**, k = 1, 8, 32: from just before the generator's
+  construction (the state's copy, its axes, the scores) to the return of the `next()` that
+  gives turn k;
+- **a widening step**: one `next()` after the first 16 turns (the search's cap on what an
+  expansion generates), 16 of them.
+
+A position with fewer than k legal turns, or whose generator its node budget stopped first,
+is counted and not timed at k.
+
+**Conditions (as the command gives them; the tool prints them all).** One thread, pinned.
+t5d-bench's method: every position timed once a round, 7 rounds interleaved over all of them
+after a warm-up round; a position's figure the median over its rounds; a cell's the median
+and 95th percentile over its positions (the times to k) or over their every widening step;
+the machine's busy fraction read around every round and printed, with the compiler, the
+flags and the CPU. The generator as the search runs it: successors, a node budget of 200,000
+(placeholders there). **The scores are not a network's**: a seeded function of each option's
+coordinates, uniform in [-3, 3] - what best-first generation costs depends on the scores,
+and a trained policy's are the pilot run's to time (`--flat-scores` gives the all-ties
+case). Positions: the human games' turn starts chosen as above (every 4th action a record
+plays on from, at most 20 in a cell, one of a record in a cell), and - reported apart, never
+in one figure - t5d-bench's synthetic classes (100, 160, 240, 400 and 600 boards; random
+play, for cost only), two games a class.
+
+**Command** (from the repository's root, on a quiet machine; `build/t0db.txt` as above):
+
+```
+build/engine/t5d-turngen-time --record-list build/t0db.txt --every 4 --max-per-cell 20 --per-record 1 --synthetic --games 2 --seed 1 --rounds 7 --k0 16 --widen 16 --generator-nodes 200000 --score-scale 3 --score-seed 1 --pin 2 --per-position --json build/turngen-time.json > build/turngen-time.txt
+```
+
+**Expected run time: seconds.** A smoke run on the shared machine (2026-11-29; two turn
+starts a cell and one synthetic game a class, 2 rounds - 28 positions by 3 rounds) took 0.4 s
+in all, the timed rounds 0.1 s of it; the full command is about ten times the positions and
+three times the rounds. It is bounded by the node budget: a generator that spends all 200,000
+nodes takes under a second. That run is not a measurement (the machine was 60-70% busy) and
+its times are not recorded. What it showed about the figures' shape, which the tool's output
+now carries: a generator records up to 32 realisations of one point in a step, so many a
+`next()` returns a turn already found - the **median** widening step can be near zero while
+the cost sits in the tail - and the tool prints the steps' **mean** beside their median and
+95th percentile; and two of the three synthetic positions at 200 boards or more had no legal
+turn at all (random pseudo-legal play), which the "exhausted" column counts. The arithmetic
+is tested (`engine/tests/test_turn_cells.cpp`: the medians, percentiles and means, a turn no
+position reached, and the tool run on records written there); no figure is recorded yet.
+
 ### D2's flat form: a point's realisations, and the memory a flat node holds (counts and heap; no threshold, no verdict)
 
 **What it is.** (a) The turn generator's cost on one point of many realisations: k kings,

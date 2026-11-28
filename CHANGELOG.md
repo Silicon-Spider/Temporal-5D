@@ -10,6 +10,45 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-29 - Section 15.3's two turn rows get their tools: `t5d-tree-count --by-range` and `t5d-turngen-time` (issues 418, 419)
+
+The re-audit found the tree-form row with indicative counts on seven positions and the flat-form
+row with no timing and no tool. Both ask for figures "by board-count range and mandatory count".
+- `engine/tools/turn_cells.{hpp,cpp}` (new, in `t5d_tools`): the cells (6b″'s ranges by 1, 2, 3
+  and 4 or more mandatory boards), a cell's summary (median, 95th percentile), which turn starts
+  of the records are taken (those a record plays on from; every K-th action; a cap per cell and
+  per record in a cell), and the tree form's two ratios.
+- `engine/tools/t5d_tree_count.cpp`: a `--by-range` mode - at each turn start taken, each arm
+  searched once to 400 evaluations; per arm and cell the turn starts counted and the median and
+  95th percentile of evaluations per complete turn and of inherited expansions per evaluation;
+  `--threads`, `--json`. Counts, deterministic. The first mode is unchanged.
+- `engine/tools/turngen_time.{hpp,cpp}` and `engine/tools/t5d_turngen_time.cpp` (new;
+  `t5d-turngen-time`): one generator a position a round, timed to its turns 1, 8 and 32 and at
+  each of 16 widening steps after the first 16 turns; the records' turn starts and, apart,
+  t5d-bench's synthetic classes; the bench's method - one thread, interleaved rounds after a
+  warm-up, the machine's load printed. Scores: a seeded stand-in for the policy's, said in the
+  output. A tool of its own, so that its arithmetic is a library tests can hold.
+- `engine/tests/test_turn_cells.cpp` (new): the cells, the summaries, the ratios, the selection
+  on records written there, a position's and a cell's figures, the timed run against a plain
+  generator, and both executables - their cell figures recomputed from what they list.
+- Each tool prints, in its conditions, the definitions its figures were taken under - what a
+  complete turn is; where the clock starts and what a widening step is; that the scores are a
+  seeded hash and not a network's. They are the build's readings of rows that define none, for
+  the user to confirm (issues 418, 419).
+- Run times, from samples on a shared machine (times, not figures of the rows): the tree-form
+  command with two turn starts a cell counted 23 turn starts by 4 arms in 55.9 s on one thread,
+  so the full command (at most 300) is about 12 minutes on one thread and 2 to 3 with
+  `--threads 8`; the timing tool's full command is seconds. The timing sample showed that many a
+  widening step returns a turn already found (a generator records up to 32 realisations of a
+  point at once), so the tool prints the steps' mean beside their median and 95th percentile,
+  and the machine's load over the counted rounds together as well as round by round.
+- `engine/CMakeLists.txt`, `engine/README.md` ("The two turn rows of spec 15.3"),
+  `docs/MEASUREMENTS.md` (both commands: the counts not yet run, the timing not yet measured on a
+  quiet machine), `docs/BUILD_LOG.md` (issues 418, 419).
+
+Spec: section 15.3 (the tree-form and flat-form rows), section 8.2 - proposed edits 436 and 437
+say what is counted and what is timed; no figure is written back yet.
+
 ### 2026-11-29 - Build log and README: four paragraphs of today's commits put where they belong
 
 A correction of placement only: no word changes. The three commits before this one were staged

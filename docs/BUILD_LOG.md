@@ -7417,6 +7417,64 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     `root_key` and the candidate index by the formula pinned in `gumbel.hpp` (issue 415 (k)); if a
     format bump comes first for another reason, a per-child g column goes in the same bump.
     Proposed edit 315 records both in register part K.
+418. **§15.3's tree-form row: the readings its tool needed - for the user to confirm** ("Tree
+    form: evaluations per complete turn, and inherited expansions per evaluation, by
+    board-count range and mandatory count";
+    proposed edit 130, applied by the review; the re-audit: indicative counts on seven
+    positions, not by range, and no command). The row names two ratios and two axes and
+    defines none. Built (`t5d-tree-count --by-range`; `engine/tools/turn_cells.hpp`), each a
+    reading:
+    (a) **a complete turn** is an evaluated turn start below the root - a submission reached
+    and the position after it evaluated; a turn that ends the game is no evaluation and is not
+    counted;
+    (b) **evaluations per complete turn** = (evaluated turn starts below the root + evaluated
+    mid-turn nodes) / evaluated turn starts below the root - the root's own evaluation left out
+    on both sides; exactly 1 with no gate, the ply split's moves per turn plus one;
+    (c) **inherited expansions per evaluation** = `SearchStats::inherited_nodes` / evaluations;
+    (d) **the search** is the seven-position table's (docs/MEASUREMENTS.md): a fresh search to
+    400 evaluations, the built-in random evaluator, synchronous, no evaluation cache, every
+    other parameter the default - so the gates are §8.2's at their placeholder readings, and the
+    tool gives the other two readings (present = rewind only; no gate) and the ply split beside
+    it;
+    (e) **the cells**: 6b″'s ranges by 1, 2, 3 and 4 or more mandatory boards at the turn's
+    start; a figure is the median and 95th percentile over a cell's turn starts;
+    (f) **which turn starts**: those a record plays on from (so no game end, and no detector
+    asked), every 4th action, at most 25 in a cell and one of a record in a cell - a function
+    of the records' order and those numbers. The human games have no turn start at 200 boards
+    or more (§8.2), so that range is empty on them. Counts, deterministic: no quiet machine
+    needed. The command is in docs/MEASUREMENTS.md, not yet run. Edit 436.
+    **For the user to confirm:** (a) to (f) are the build's readings, none a ruling (the main
+    loop, 2026-11-28: they stand until the user says otherwise). The tool prints (a) to (c) in
+    its conditions, so a figure carries the definition it was counted under.
+419. **§15.3's flat-form row: the readings its tool needed - for the user to confirm** ("Turn
+    generation (flat form): time to the first k legal turns, and per widening step, by
+    board-count range and mandatory count"; proposed edit 131, applied by the review; the
+    re-audit: no timing and no tool).
+    Built (`t5d-turngen-time`; `engine/tools/turngen_time.hpp`), each a reading, each a
+    parameter:
+    (a) **k** is 1, 8 and 32;
+    (b) **the time to the first k turns** runs from just before the generator's construction
+    (the state's copy, its axes, the scores - what a node pays before its first turn) to the
+    return of the `next()` that gives turn k;
+    (c) **a widening step** is one `next()` after the first k0 turns, k0 = 16 (the search's cap
+    on the turns an expansion generates), 16 steps timed;
+    (d) **the generator** is the search's: successors, a node budget of 200,000 (both
+    placeholders there); a position with fewer than k turns, or stopped by its budget first, is
+    counted and not timed at k;
+    (e) **the scores** are not a network's: a seeded function of each option's coordinates,
+    uniform in [-3, 3] (a J6 twin scores as its jump), or all 0 (every turn ties) - what the
+    order costs depends on them, and a trained policy's sharper scores are the pilot run's to
+    time;
+    (f) **the positions**: records' turn starts chosen as issue 418 (f) (20 a cell), and
+    t5d-bench's synthetic classes (random play, 100-600 boards), reported apart;
+    (g) **the method** is t5d-bench's: one thread, interleaved rounds after a warm-up, a
+    position's figure the median over its rounds, the machine's load read around every round.
+    A timing: the quiet-machine block's. The command is in docs/MEASUREMENTS.md, not yet
+    measured. Edit 437.
+    **For the user to confirm:** (a) to (g) are the build's readings, none a ruling (the main
+    loop, 2026-11-28: they stand until the user says otherwise). The tool prints (b), (c) and
+    (e) in its conditions - where the clock starts, what a widening step is, and that the
+    scores are a seeded hash and not a network's.
 
 402. **6f's settling scans: their wrapper is not on main** (§13.1 6f "verify the proof-export
     invariant under TT churn for Hunt and the settling scans (§11.3)"; §11.4 "df-pn at the
@@ -11954,6 +12012,36 @@ entry changes in the same edit as its code, which the standing rule defers to up
      Why: at the v1's 16 layers the flip gap reaches a mutant's (M14, 5.3x apart against 36x at 2
      layers), so "rare" and a flip tolerance hold at shallow depth only; the exact check is what the
      build asserts there (`test_fp8_cache_rounds_exactly_as_the_fp8_network_at_full_depth`).
+
+<!-- A new list, so that the numbers from 435 render as written. -->
+
+*Edits 435-437 are the engine lane's of 2026-11-29 (the done-means re-audit's section 15.3 rows with
+no home; the block 435 onwards the main loop assigned).*
+
+436. **Section 15.3, the row "Tree form: evaluations per complete turn, and inherited expansions per
+     evaluation, by board-count range and mandatory count": what is counted** (issue 418). Where:
+     that row's Estimate cell, and section 8.2's tree-form bullet where it says what the form buys.
+     Says now: "No estimate | 8.2 | to measure (CPU)". Should say (the Estimate cell): "No estimate.
+     Counted by `t5d-tree-count --by-range` on recorded games' turn starts: a complete turn is an
+     evaluated turn start below the root; evaluations per complete turn are the evaluations below
+     the root over the complete turns among them (1 with no gate; the ply split's moves per turn
+     plus one); inherited expansions per evaluation are the mid-turn nodes expanded without the
+     network over the evaluations - a fresh search to 400 evaluations, the random evaluator, each
+     gate at its placeholder reading, the median and 95th percentile per cell"; Status unchanged
+     until the command is run, then "measured (counts)" with the figures (M4). Why: the row names
+     two ratios and defines neither, and the build's indicative table counted something else
+     (evaluated turn starts of 400, on seven positions); the counts are deterministic and need no
+     quiet machine.
+437. **Section 15.3, the row "Turn generation (flat form): time to the first k legal turns, and per
+     widening step, by board-count range and mandatory count": what is timed** (issue 419). Where:
+     that row's Estimate cell. Says now: "No estimate | 8.2 | to measure (CPU)". Should say: "No
+     estimate. Timed by `t5d-turngen-time`: from just before the generator's construction to its
+     turns 1, 8 and 32, and each `next()` after the first 16 (the widening steps), one thread, the
+     search's generator settings (successors, 200,000 nodes); the scores a seeded stand-in for the
+     policy's, so a trained network's figure is the pilot run's"; Status unchanged until measured on
+     a quiet machine, then "measured (CPU)" (M4). Why: the row names k and a widening step and fixes
+     neither, and what best-first generation costs depends on the scores - a figure taken with
+     random scores must say so.
 
 ## Session log
 
