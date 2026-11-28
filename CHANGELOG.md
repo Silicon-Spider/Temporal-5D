@@ -10,6 +10,18 @@ the spec describes the change.
 
 ## Unreleased
 
+### 2026-11-28 - The network job's shard weights read from CI's own durations (issue 605)
+
+The first run after the shard fix (46070952187, main 0d81cc3) was green, but one shard took 85
+of its 90 minutes: `tests/engine/test_phase_form.py` (1,915 s on the runner) had no weight, and
+the development machine's timings proved no guide to a runner's (0.6x to 1.9x for the same
+files). `python/tests/conftest.py`'s `_FILE_SECONDS` now holds each heavy file's seconds among its
+shard's 40 slowest tests on that run (13 files; lower bounds), 1.5 s a test for the rest.
+Collection gives six shards estimated at 31-32 minutes each, 2,793 tests, disjoint, their union
+the whole.
+
+Spec: no part of the spec describes the CI job.
+
 ### 2026-11-28 - The network job: C27's full matrix in files of its own, shards weighed by cost, six shards (issue 605)
 
 CI's network job timed out on decision 7's merge (d470681): shard 1 of 4 passed its 90 minutes

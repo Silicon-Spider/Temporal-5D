@@ -9401,6 +9401,13 @@ edits 303-304; the MT-01/02/03 review fixes (2026-11-02) issue 409 (edit 301 cor
     the weights can be re-measured when a shard nears the limit. Checked by collection at the fix:
     2,793 tests in six disjoint shards whose union is the whole, each estimated at about 1,216 s
     on the development machine (about 39 minutes on a runner). No spec text describes the CI job.
+    *2026-11-28, the first run (46070952187, 0d81cc3): green, the shards at 16, 20, 38, 37, 23 and
+    85 minutes - the last near its limit, carrying `tests/engine/test_phase_form.py` (1,915 s on the
+    runner among its shard's 40 slowest), a file the local measurement had not reached; and the
+    development machine proved no guide to a runner (the same files 0.6x to 1.9x). The weights are
+    now each file's seconds among its shard's 40 slowest on that run (13 files; lower bounds), 1.5 s
+    a test for the rest; collection gives six shards estimated at 31-32 minutes each, 2,793 tests,
+    disjoint, their union the whole.*
 
 <!-- A new list, so that the numbers from 700 render as written. -->
 

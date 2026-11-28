@@ -61,19 +61,27 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "slow: a long test (the full 16-layer network); deselect with -m 'not slow'")
 
 
-#: Measured seconds of the files whose tests cost far more than the suite's typical test, for the
-#: shard split below (development machine, one process, the whole file with its slow tests;
-#: 2026-11-28, main 0281c70 - CI's runners took about 1.9x these). A file not listed weighs
-#: ``_SECONDS_PER_TEST`` per collected test. Re-measure with ``--durations=0`` when a CI shard
-#: nears its time limit; CI prints each shard's slowest tests (``--durations`` in network.yml).
+#: Seconds on a CI runner of the files whose tests cost far more than the suite's typical test, for
+#: the shard split below: each file's share of its shard's 40 slowest tests (``--durations=40`` in
+#: network.yml) on run 46070952187 (main 0d81cc3, 2026-11-28) - a lower bound for a file with
+#: slow tests outside its shard's 40. A file not listed weighs ``_SECONDS_PER_TEST`` per collected
+#: test (that run: about 1.3 s a test outside the files listed). Re-read them from the latest run
+#: when a shard nears its 90 minutes. (The development machine is no guide: the same files took
+#: from 0.6x to 1.9x these.)
 _FILE_SECONDS: dict[str, float] = {
-    "tests/net/test_turn_refresh.py": 1026.0,
-    "tests/net/test_turn_refresh_matrix.py": 1203.0,
-    "tests/net/test_turn_refresh_matrix_a5.py": 812.0,
-    "tests/engine/test_cached_tree_form.py": 241.0,
-    "tests/net/test_piece_centric.py": 211.0,
-    "tests/net/test_layout.py": 160.0,
-    "tests/net/test_displacement.py": 146.0,
+    "tests/engine/test_phase_form.py": 1915.0,
+    "tests/net/test_turn_refresh_matrix_a5.py": 1500.0,
+    "tests/net/test_turn_refresh.py": 924.0,
+    "tests/net/test_turn_refresh_matrix.py": 909.0,
+    "tests/net/test_chunked.py": 807.0,
+    "tests/engine/test_cached_tree_form.py": 362.0,
+    "tests/net/test_n2_model.py": 333.0,
+    "tests/engine/test_cached_variants.py": 322.0,
+    "tests/net/test_cache.py": 291.0,
+    "tests/net/test_phase_form.py": 246.0,
+    "tests/net/test_invariance.py": 197.0,
+    "tests/train/test_smoke.py": 181.0,
+    "tests/net/test_fork_protocol.py": 168.0,
 }
 _SECONDS_PER_TEST = 1.5
 
